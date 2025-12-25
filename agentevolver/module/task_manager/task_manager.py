@@ -255,15 +255,13 @@ class TaskManager(object):
         """
         API Driven 策略：两阶段池化生成模式。
         a, b 来源于 config.task_manager.exploration_strategy_args
-        第一阶段：单域池 (active_apps) 扩大 n * a 倍。
+        第一阶段：单域池 (active_apis) 扩大 n * a 倍。
         第二阶段：跨域池 (seed_tasks) 扩大 n * b 倍。
         """
         # 1. 从配置中读取超参 a 和 b
-        # 假设配置路径为 task_manager.exploration_strategy_args
         strategy_args = self._config.task_manager.get('exploration_strategy_args', {})
-        a = strategy_args.get('a', 1)  # 单域倍数，默认1
-        b = strategy_args.get('b', 1)  # 跨域倍数，默认1
-        n = self._n # 基础膨胀系数
+        a = strategy_args.get('a', 1)  # 单域倍数
+        b = strategy_args.get('b', 1)  # 跨域倍数
         
         if resume_file is None:
             resume_file = '.generate_task_api'
@@ -273,10 +271,29 @@ class TaskManager(object):
         current_tasks_hash = self._compute_tasks_hash(tasks)
         
         # --- 阶段 1: 单域探索 (Intra-Domain) ---
-        ## 这里的active_apps应该改为active_apis，以所有active_apps的api数量*a作为单域任务池，后面的代码也以api进行统计。
-        active_apps = list(self._exploration_strategy.active_apps)
-        # 定义单域任务池：扩大 n * a 倍
-        intra_pool = active_apps * a
+        # 获取所有活跃 App 的 API 列表并进行统计
+        # 优先从策略已加载的知识库中获取，确保路径一致性
+        api_knowledge = getattr(self._exploration_strategy, 'api_knowledge', {})
+        if not api_knowledge:
+            # 如果策略未加载，则手动读取
+            manual_path = "./agentevolver/preprocess/output/appworld_tool_manual.json"
+            if os.path.exists(manual_path):
+                with open(manual_path, 'r', encoding='utf-8') as f:
+                    api_knowledge = json.load(f)
+        
+        active_apps = self._exploration_strategy.active_apps
+        active_apis = []
+        for app_name in sorted(active_apps): # 排序以保证断点恢复时的顺序一致
+            if app_name in api_knowledge:
+                apis = api_knowledge[app_name].get("apis", {})
+                for api_name in sorted(apis.keys()):
+                    active_apis.append({
+                        "app_name": app_name,
+                        "api_name": api_name
+                    })
+        
+        # 定义单域任务池：每个 API 扩大 a 倍
+        intra_pool = active_apis * a
         intra_res = []
         intra_processed_idx = set()
         
@@ -294,15 +311,18 @@ class TaskManager(object):
 
         # 单域生成循环
         if len(intra_processed_idx) < len(intra_pool):
-            pbar = tqdm(total=len(intra_pool), desc="Stage 1: Intra-Domain (a)", disable=not show_progress)
+            pbar = tqdm(total=len(intra_pool), desc="Stage 1: Intra-Domain (API-level)", disable=not show_progress)
             pbar.update(len(intra_processed_idx))
             
-            for idx, app_name in enumerate(intra_pool):
+            for idx, api_info in enumerate(intra_pool):
                 if idx in intra_processed_idx:
                     continue
                 
-                # 传入指定的 app_name
-                task = self._exploration_strategy.generate_intra_task(app_name=app_name)
+                # 传入指定的 app_name 和 target_api_name
+                task = self._exploration_strategy.generate_intra_task(
+                    app_name=api_info["app_name"], 
+                    target_api_name=api_info["api_name"]
+                )
                 if task:
                     new_obj = self._explore_and_summarize_intra(task)
                     if new_obj:
@@ -351,19 +371,16 @@ class TaskManager(object):
                 cross_processed_idx.add(idx)
                 pbar.update(1)
                 
-                # 实时过滤与检索库更新（混合两部分结果去重）
+                # 实时过滤与检索库更新
                 current_batch_all = intra_res + cross_res
                 current_batch_all = functools.reduce(lambda x, f: f.filter(x), self._realtime_filters, current_batch_all)
                 
-                # 这里的 cross_res 应该是过滤后剔除 intra 部分的增量
-                # 简单处理：更新检索库
                 self._old_retrival.reset()
                 for j in current_batch_all: self._old_retrival.add_objective(j)
                 
                 self._save_checkpoint(cross_ckpt_path, cross_res, cross_processed_idx, len(cross_pool), current_tasks_hash)
             pbar.close()
         
-        # 合并结果并应用最终的后置质量过滤
         return self._apply_post_filter(intra_res + cross_res)
 
     def _save_checkpoint(self, path, results, processed_indices, total, hash_val):
