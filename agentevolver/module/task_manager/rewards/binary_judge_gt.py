@@ -3,7 +3,7 @@ import threading
 from typing import Any, Optional, cast
 from loguru import logger
 from agentevolver.client.env_client import EnvClient
-from AgentEvolver.agentevolver.client.llm_client_backup import DashScopeClient
+from agentevolver.client.llm_client import DashScopeClient
 from agentevolver.module.agent_flow.reward_calculator import GraderResult, RewardCalculator
 from agentevolver.schema.task import Task
 from agentevolver.schema.trajectory import Trajectory

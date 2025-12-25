@@ -6,7 +6,7 @@
 
 import hydra
 
-from AgentEvolver.agentevolver.client.llm_client_backup import DashScopeClient
+from agentevolver.client.llm_client import DashScopeClient
 from agentevolver.module.task_manager import NaiveTaskObjectiveRetrieval, TaskManager
 from agentevolver.schema.task import Task
 from agentevolver.client.env_client import EnvClient

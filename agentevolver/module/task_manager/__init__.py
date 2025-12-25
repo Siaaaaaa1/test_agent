@@ -20,7 +20,7 @@ def run_task_manager(config):
     Returns:
         None
     """
-    from AgentEvolver.agentevolver.client.llm_client_backup import DashScopeClient
+    from agentevolver.client.llm_client import DashScopeClient
     from agentevolver.module.task_manager.data_mixture import UnifiedMixtureStrategy
     from verl.utils.fs import copy_to_local
     from verl.utils.tokenizer import hf_tokenizer

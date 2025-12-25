@@ -6,7 +6,7 @@ import re
 import time
 from tqdm import tqdm
 from appworld import AppWorld, load_task_ids
-from AgentEvolver.agentevolver.client.llm_client_backup import DashScopeClient
+from agentevolver.client.llm_client import DashScopeClient
 from agentevolver.preprocess.prompts import APP_SELECTION_SYSTEM_PROMPT, APP_SELECTION_USER_TEMPLATE
 
 # ... (保留 extract_json_from_str 和 ToolManualGenerator 类不变) ...
