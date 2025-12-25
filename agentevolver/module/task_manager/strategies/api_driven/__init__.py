@@ -38,8 +38,17 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         self.tokenizer = tokenizer
         self.config = config
         
-        # 配置路径与参数
-        self.api_knowledge_path = kwargs.get("api_knowledge_path", "data/knowledge/api_quadruplets.json")
+        # --- 路径配置 (使用预处理生成的相对路径) ---
+        # 1. API 知识手册 (由 ToolManualGenerator 生成)
+        self.api_knowledge_path = kwargs.get(
+            "api_knowledge_path", 
+            "agentevolver/preprocess/output/appworld_tool_manual.json"
+        )
+        # 2. 任务标签数据 (由 TaskAppLabeler 生成，用于获取合法的 Sandbox Task ID)
+        self.task_labels_path = kwargs.get(
+            "task_labels_path", 
+            "agentevolver/preprocess/output/task_app_labels.json"
+        )
         self.strategy_memory_path = kwargs.get("strategy_memory_path", "data/memory/api_explore_strategy.json")
         self.active_apps = set(kwargs.get("active_apps", []))
         
@@ -52,11 +61,16 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         if not self.api_knowledge:
             logger.warning(f"API Knowledge not found at {self.api_knowledge_path}. Exploration might fail.")
 
-        # 2. 加载策略记忆 (已探索过的 APP)
+        # 2. 获取 Sandbox Task ID (环境锚点)
+        # 这里会调用修改后的严格加载函数
+        self.sandbox_task_id = self._load_sandbox_task_id(self.task_labels_path)
+        logger.info(f"[ApiDriven] Using Sandbox Task ID: {self.sandbox_task_id}")
+
+        # 3. 加载策略记忆 (已探索过的 APP)
         self.memory_data = self._load_json(self.strategy_memory_path) or {"explored_apps": []}
         self.explored_apps = set(self.memory_data.get("explored_apps", []))
 
-        # 3. 模式判定逻辑
+        # 4. 模式判定逻辑
         self.new_apps = self.active_apps - self.explored_apps
         
         if not self.explored_apps and self.active_apps:
@@ -68,24 +82,51 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             self.target_apps_pool = list(self.new_apps)
             logger.info(f"[ApiDriven] Mode: INCREMENTAL. Target Pool (New Apps): {self.target_apps_pool}")
         else:
-            self.mode = "maintenance" # 或者 done，这里为了持续运行设为 maintenance
+            self.mode = "maintenance"
             self.target_apps_pool = list(self.active_apps)
             logger.info("[ApiDriven] Mode: MAINTENANCE. Re-exploring active apps.")
+
+    def _load_sandbox_task_id(self, path: str) -> str:
+        """
+        从预处理生成的 task_app_labels.json 中读取一个真实存在的 Task ID。
+        AppWorld 初始化必须依赖合法的 ID，不能凭空捏造。
+        严格模式：如果文件不存在或解析失败，直接报错。
+        """
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"[ApiDriven] Critical Error: Task labels file not found at '{path}'. "
+                "Please run 'python -m agentevolver.preprocess.main' first to generate required data."
+            )
+        
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception as e:
+            raise ValueError(f"[ApiDriven] Failed to parse JSON from '{path}': {e}")
+
+        if isinstance(data, list) and len(data) > 0:
+            # 优先选取第一个任务作为沙盒
+            first_task = data[0]
+            sandbox_id = first_task.get("TaskID")
+            
+            if sandbox_id:
+                return sandbox_id
+            else:
+                raise ValueError(f"[ApiDriven] Valid list found in '{path}' but the first item is missing 'TaskID'.")
+        
+        raise ValueError(f"[ApiDriven] Task labels file at '{path}' is empty or invalid format.")
 
     def explore(self, task: Task, data_id: str, rollout_id: str) -> List[Trajectory]:
         """
         核心入口。
-        注意：这里的 task 参数通常是 TaskManager 传进来的空壳或种子，
-        但在 ApiDriven 模式下，我们会自己生成具体的 Instruction。
         """
-        # 懒加载执行环境 (避免在 init 时过早连接)
+        # 懒加载执行环境
         self._ensure_execution_capability()
 
         if not self.target_apps_pool:
             return []
 
-        # 随机策略：50% 概率做单域探索，50% 概率做跨域合成 (如果条件允许)
-        # 优先保证新 APP 的单域探索
+        # 随机策略：50% 概率做单域探索，50% 概率做跨域合成
         target_app = random.choice(self.target_apps_pool)
         
         trajectories = []
@@ -99,7 +140,6 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             traj = self._run_intra_domain_exploration(target_app)
 
         if traj:
-            # 标记该 APP 已探索 (简单处理，实际可能需要达到一定成功率才标记)
             if target_app not in self.explored_apps:
                 self.explored_apps.add(target_app)
                 self._save_memory()
@@ -115,7 +155,6 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         if not trajectory or not trajectory.steps:
             return []
         
-        # 只有当我们在 trajectory.info 中标记了成功，并且提取了真实的用户 query 时才生成
         user_query = trajectory.info.get("synthesized_user_query")
         if user_query:
             return [TaskObjective(input=user_query, output=trajectory)]
@@ -129,32 +168,40 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         app_knowledge = self.api_knowledge.get(app_name, {})
         apis = app_knowledge.get("apis", {})
         if not apis:
+            logger.warning(f"No APIs found for {app_name}")
             return None
 
-        # 1. 锚定终态：筛选 Action API (非 GET 且有参数)
+        # 1. 锚定终态：利用 Preprocess 阶段生成的 'action_type' 字段
         action_apis = [
             k for k, v in apis.items() 
-            if v.get("method", "").upper() != "GET" and len(v.get("parameters", [])) > 0
+            if v.get("action_type") == "Executive Action"
         ]
+        
+        # 兜底：如果没有 Executive Action，回退到原来的逻辑（非 GET）
         if not action_apis:
-            # 如果没有明显的 Action API，随机选一个非 list 的
-            action_apis = list(apis.keys())
+            action_apis = [
+                k for k, v in apis.items() 
+                if v.get("method", "").upper() != "GET" and len(v.get("parameters", [])) > 0
+            ]
+        
+        if not action_apis:
+            return None
         
         target_api_name = random.choice(action_apis)
         target_api_def = apis[target_api_name]
         
-        # 筛选 Info APIs 供 LLM 参考
+        # 筛选 Info APIs：利用 action_type 为 Informational Action
         info_apis = {
             k: v for k, v in apis.items() 
-            if k != target_api_name and (k.startswith("get") or k.startswith("list") or k.startswith("search"))
+            if k != target_api_name and v.get("action_type") == "Informational Action"
         }
 
         # 2. LLM 规划 (Plan Generation)
         prompt = PLAN_GENERATION_PROMPT.format(
             target_api_name=target_api_name,
             app_name=app_name,
-            target_api_details=json.dumps(target_api_def, indent=2),
-            available_info_apis=json.dumps(info_apis, indent=2)
+            target_api_details=json.dumps(target_api_def, indent=2, ensure_ascii=False),
+            available_info_apis=json.dumps(info_apis, indent=2, ensure_ascii=False)
         )
         
         messages = [{"role": "user", "content": prompt}]
@@ -163,7 +210,6 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         logger.info(f"[Intra-Domain] Generated Plan: {instruction}")
 
         # 3. 执行探索 (Execution)
-        # 构造一个用于执行的 Task 对象
         exec_task = Task(
             task_id=f"intra_{app_name}_{random.randint(1000,9999)}",
             instruction=instruction,
@@ -184,7 +230,6 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             bt_response = self.llm_client.chat(messages=[{"role": "user", "content": bt_prompt}])
             user_query = bt_response.content.strip()
             
-            # 将生成的 User Query 注入到 Trajectory info 中
             trajectory.info["synthesized_user_query"] = user_query
             trajectory.info["exploration_type"] = "intra_domain"
             return trajectory
@@ -196,7 +241,6 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
 
     def _run_cross_domain_synthesis(self, primary_app: str) -> Optional[Trajectory]:
         # 1. 角色定义与配对
-        # 尝试将 primary_app 归类
         is_info_provider = primary_app in UNIVERSAL_INFO_PROVIDERS
         
         info_app = ""
@@ -204,23 +248,20 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         
         if is_info_provider:
             info_app = primary_app
-            # 找一个非 info 的 app 做 executor
             candidates = [a for a in self.active_apps if a not in UNIVERSAL_INFO_PROVIDERS]
             if not candidates: return None
             exec_app = random.choice(candidates)
         else:
             exec_app = primary_app
-            # 找一个 info app
             candidates = [a for a in self.active_apps if a in UNIVERSAL_INFO_PROVIDERS]
             if not candidates: return None
             info_app = random.choice(candidates)
             
         logger.info(f"[Cross-Domain] Pair: Info({info_app}) -> Exec({exec_app})")
         
-        # 获取相关描述
         info_desc = self.api_knowledge.get(info_app, {}).get("description", "No description")
         exec_desc = self.api_knowledge.get(exec_app, {}).get("description", "No description")
-        exec_apis = list(self.api_knowledge.get(exec_app, {}).get("apis", {}).keys())[:10] # 限制长度
+        exec_apis = list(self.api_knowledge.get(exec_app, {}).get("apis", {}).keys())[:10]
 
         # 2. 目的合成 (Purpose Synthesis)
         prompt = PURPOSE_SYNTHESIS_PROMPT.format(
@@ -244,9 +285,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
 
         logger.info(f"[Cross-Domain] Scenario: {user_query}")
 
-        # 3. 环境预设 (Data Injection)
-        # 注意：这里需要 EnvWorker 支持 setup 注入。
-        # 我们假设 task.metrics 或 task.extra_config 可以传递给环境的 reset/setup
+        # 3. 环境预设
         exec_task = Task(
             task_id=f"cross_{info_app}_{exec_app}_{random.randint(1000,9999)}",
             instruction=user_query,
@@ -260,7 +299,6 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         # 4. 执行与验证
         trajectory = self._execute_agent_loop(exec_task)
         
-        # 验证：既要看了 Info App，又要调了 Exec App
         called_info = self._check_app_usage(trajectory, info_app)
         called_exec = self._check_api_called(trajectory, target_action)
         
@@ -275,48 +313,59 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
     # ================= 辅助方法 =================
 
     def _ensure_execution_capability(self):
-        """
-        初始化 AgentFlow 和 EnvWorker。
-        这里我们实例化一个新的 Worker，不影响 TaskManager 主流程的 Worker。
-        """
         if self.agent_flow is None:
-            # 初始化 Agent Flow
             self.agent_flow = AgentFlow(self.config, self.tokenizer)
             
         if self.env_worker is None:
-            # 初始化 Env Client 和 Worker
-            # 假设 env_config 在 self.config.env_config 中
             from agentevolver.client.env_client import EnvClient
-            
-            # 使用 config 中的配置，但可能需要覆盖 task_id 等
             env_config = self.config.get("env_config", {})
             env_client = EnvClient(**env_config)
             self.env_worker = EnvWorker(env_client=env_client)
-            # 注意：真实的 EnvWorker 可能需要 start 或 connect
-            # self.env_worker.start() 
 
     def _execute_agent_loop(self, task: Task) -> Trajectory:
         """
-        运行完整的 Agent Loop：Thought -> Act -> Obs
+        运行完整的 Agent Loop。
         """
-        # 重置环境
-        # 注意：这里我们利用 task 对象传参来控制环境初始化（如果支持）
-        obs = self.env_worker.reset(task) 
+        # 保存原始生成的指令
+        generated_instruction = task.instruction
         
-        # 使用 AgentFlow 运行任务
-        # 这里假设 agent_flow.run 返回的是 Trajectory 对象
+        # 强制使用存在的 Sandbox Task ID
+        task.task_id = self.sandbox_task_id
+        
+        # 重置环境
+        obs = self.env_worker.reset(task)
+        
+        # 覆盖指令
+        task.instruction = generated_instruction
+        
+        # 处理数据注入
+        if task.metrics and task.metrics.get("setup_action") == "inject_data":
+            self._inject_context(task.metrics)
+
         try:
             trajectory = self.agent_flow.run(task, self.env_worker)
             return trajectory
         except Exception as e:
             logger.error(f"Execution failed: {e}")
+            import traceback
+            traceback.print_exc()
             return Trajectory(steps=[])
 
+    def _inject_context(self, metrics: Dict):
+        """简单的数据注入实现占位"""
+        try:
+            app = metrics.get("app")
+            content = metrics.get("content")
+            # 这里需要 EnvWorker 暴露执行代码的接口
+            if hasattr(self.env_worker, "execute"):
+                logger.info(f"Injecting into {app}: {content}")
+                # 示例: self.env_worker.execute(f"apis.{app}.add_note('{content}')")
+        except Exception as e:
+            logger.warning(f"Injection failed: {e}")
+
     def _check_api_called(self, trajectory: Trajectory, api_name: str) -> bool:
-        """检查轨迹中是否成功调用了指定 API (无 Error)"""
         if not trajectory or not trajectory.steps:
             return False
-        
         for step in trajectory.steps:
             if step.role == "tool" and not step.error:
                 if api_name in step.tool_name:
@@ -324,16 +373,11 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         return False
 
     def _check_app_usage(self, trajectory: Trajectory, app_name: str) -> bool:
-        """检查轨迹中是否调用了属于某个 App 的任意 API"""
         if not trajectory or not trajectory.steps:
             return False
-        # 假设 tool_name 格式为 app.function 或类似的
-        # 或者我们遍历 api_knowledge 查找该 app 下的所有 api
         app_apis = self.api_knowledge.get(app_name, {}).get("apis", {}).keys()
-        
         for step in trajectory.steps:
             if step.role == "tool":
-                # 简单匹配：如果 tool_name 包含 app 名，或者在 app_apis 列表中
                 if app_name.lower() in step.tool_name.lower():
                     return True
                 for api in app_apis:
@@ -342,14 +386,12 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         return False
 
     def _extract_tool_trace(self, trajectory: Trajectory) -> str:
-        """将轨迹转换为文本摘要"""
         trace = []
         for step in trajectory.steps:
             if step.role == "assistant" and step.tool_calls:
                 for tc in step.tool_calls:
                     trace.append(f"Action: {tc['name']} args={tc['arguments']}")
             elif step.role == "tool":
-                # 截断过长的输出
                 content = str(step.content)
                 if len(content) > 200:
                     content = content[:200] + "...[truncated]"
