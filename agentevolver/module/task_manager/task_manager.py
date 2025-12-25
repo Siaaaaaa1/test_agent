@@ -281,8 +281,6 @@ class TaskManager(object):
                 if task:
                     new_objectives = self._explore_and_summarize_intra(task)
             
-            
-            
             elif phase == "extra":
                 # 生成跨域任务 -> 执行 Agent (含数据注入) -> 总结验证
                 task = self._exploration_strategy.generate_cross_task()
