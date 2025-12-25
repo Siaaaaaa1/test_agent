@@ -3,23 +3,25 @@
 import os
 import sys
 
-# --- 动态添加项目根目录到 sys.path ---
-current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(os.path.dirname(current_dir))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
+# --- 移除旧的路径注入代码 (sys.path hack) ---
+# 强制要求以模块方式运行，以保证包结构引用的正确性
+if __package__ is None:
+    print("❌ 错误: 请以模块方式运行此脚本。")
+    print("✅ 正确用法: 在项目根目录下运行: python -m agentevolver.preprocess.main")
+    sys.exit(1)
 
 try:
     from agentevolver.preprocess.generators import ToolManualGenerator, TaskAppLabeler
 except ImportError as e:
     print(f"❌ 导入模块失败: {e}")
-    print("请确保已安装 appworld 并正确配置了 agentevolver 路径。")
+    print("请确保已安装 appworld 并正确配置了环境。")
     sys.exit(1)
 
 def main():
     print("🚀 AppWorld 数据预处理流水线启动")
     
-    # 默认输出目录
+    # 获取当前文件所在目录作为基准
+    current_dir = os.path.dirname(os.path.abspath(__file__))
     output_dir = os.path.join(current_dir, "output")
     
     # 1. 生成工具手册
@@ -29,7 +31,7 @@ def main():
 
     # 2. 标注任务
     # 读取所有任务，调用 LLM 识别所需 App
-    # 默认处理 'train' 和 'dev' (test 集通常无标准答案，视需求可加)
+    # 默认处理 'train' 和 'dev'
     labeler = TaskAppLabeler(output_dir=output_dir)
     labeler.run(splits=["train", "dev", "test"], filename="task_app_labels.json")
 

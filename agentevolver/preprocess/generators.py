@@ -2,11 +2,36 @@
 
 import json
 import os
+import re
 import time
 from tqdm import tqdm
 from appworld import AppWorld, load_task_ids
 from agentevolver.client.llm_client import DashScopeClient
 from agentevolver.preprocess.prompts import APP_SELECTION_SYSTEM_PROMPT, APP_SELECTION_USER_TEMPLATE
+
+def extract_json_from_str(text: str):
+    """
+    从字符串中提取 JSON (对象或数组)。
+    优先尝试直接解析，失败则尝试正则提取第一个 {...} 或 [...] 块。
+    """
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # 尝试提取 JSON 对象或数组
+    # 匹配最外层的 {...} 或 [...]
+    pattern = r"(\{.*\}|\[.*\])"
+    match = re.search(pattern, text, re.DOTALL)
+    
+    if match:
+        json_str = match.group(1)
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError:
+            pass
+            
+    raise ValueError(f"无法从输出中提取有效的 JSON: {text[:200]}...")
 
 class ToolManualGenerator:
     """
@@ -44,13 +69,14 @@ class ToolManualGenerator:
         
         # 初始化环境以读取文档 (使用 train 集第一个任务)
         task_ids = load_task_ids("train")
-        world = AppWorld(task_id=task_ids[0])
+        # 建议加上 timeout 防止卡死
+        world = AppWorld(task_id=task_ids[0]) 
         manual_data = {}
 
         try:
             # 1. 获取所有 App
-            apps_json = world.execute("print(apis.api_docs.show_app_descriptions())")
-            apps_list = json.loads(apps_json)
+            raw_apps_output = world.execute("print(apis.api_docs.show_app_descriptions())")
+            apps_list = extract_json_from_str(raw_apps_output)
 
             for app in tqdm(apps_list, desc="解析应用文档"):
                 app_name = app['name']
@@ -61,7 +87,8 @@ class ToolManualGenerator:
 
                 # 2. 获取该 App 下的所有 API
                 api_list_cmd = f"print(apis.api_docs.show_api_descriptions(app_name='{app_name}'))"
-                api_descriptions = json.loads(world.execute(api_list_cmd))
+                raw_apis_output = world.execute(api_list_cmd)
+                api_descriptions = extract_json_from_str(raw_apis_output)
 
                 for api_short_desc in api_descriptions:
                     # 提取 API 名称 (格式通常为 "name : description")
@@ -69,7 +96,13 @@ class ToolManualGenerator:
                     
                     # 3. 获取 API 详细文档 (入参、出参)
                     api_doc_cmd = f"print(apis.api_docs.show_api_doc(app_name='{app_name}', api_name='{api_name}'))"
-                    api_doc = json.loads(world.execute(api_doc_cmd))
+                    raw_doc_output = world.execute(api_doc_cmd)
+                    
+                    try:
+                        api_doc = extract_json_from_str(raw_doc_output)
+                    except ValueError as e:
+                        print(f"⚠️ 跳过 {app_name}.{api_name}: 文档解析失败 ({e})")
+                        continue
 
                     # 4. 判定动作类型
                     action_type = self._classify_action_type(api_name)
@@ -91,6 +124,8 @@ class ToolManualGenerator:
 
         except Exception as e:
             print(f"❌ 生成手册时出错: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
             world.close()
 
@@ -104,11 +139,10 @@ class TaskAppLabeler:
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
         
-        # 检查 API Key，若无则仅仅打印警告，初始化时不崩溃
+        # 检查 API Key
         if not os.environ.get("DASHSCOPE_API_KEY"):
             print("⚠️ 警告: 未检测到 DASHSCOPE_API_KEY，LLM 调用将失败。")
         
-        # 初始化 Client
         try:
             self.client = DashScopeClient(model_name="qwen-plus", temperature=0.0)
         except Exception as e:
@@ -120,9 +154,10 @@ class TaskAppLabeler:
         task_ids = load_task_ids("train")
         world = AppWorld(task_id=task_ids[0])
         try:
-            apps_json = world.execute("print(apis.api_docs.show_app_descriptions())")
-            apps_list = [app['name'] for app in json.loads(apps_json)]
-            return json.dumps(apps_list) # 返回 JSON 格式的字符串列表
+            raw_output = world.execute("print(apis.api_docs.show_app_descriptions())")
+            apps_data = extract_json_from_str(raw_output)
+            apps_list = [app['name'] for app in apps_data]
+            return json.dumps(apps_list) 
         finally:
             world.close()
 
@@ -173,14 +208,14 @@ class TaskAppLabeler:
                     response = self.client.chat(messages, sampling_params={"stream": False})
                     
                     # 简单清洗
+                    # 这里也可以使用 extract_json_from_str，但 LLM 输出通常是 Markdown 代码块
                     cleaned_resp = response.replace("```json", "").replace("```", "").strip()
                     
                     try:
-                        needed_apps = json.loads(cleaned_resp)
-                        # 确保是列表
+                        needed_apps = extract_json_from_str(cleaned_resp)
                         if not isinstance(needed_apps, list):
                             needed_apps = [str(needed_apps)]
-                    except json.JSONDecodeError:
+                    except Exception:
                         needed_apps = ["PARSE_ERROR", cleaned_resp]
 
                     # 构造返回对象
