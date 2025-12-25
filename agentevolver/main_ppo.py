@@ -12,7 +12,7 @@ import hydra
 import ray
 
 # 引入 AgentEvolver 特有的模块
-from agentevolver.client.llm_client import DashScopeClient
+from AgentEvolver.agentevolver.client.llm_client_backup import DashScopeClient
 from agentevolver.module.task_manager.base import NaiveTaskObjectiveRetrieval
 from agentevolver.module.task_manager.data_mixture import OriginalOnlyStrategy, UnifiedMixtureStrategy
 from agentevolver.module.task_manager.strategies.random import LlmRandomSamplingExploreStrategy

@@ -17,35 +17,18 @@ class LlmException(Exception):
         
 
 class DashScopeClient:
-    """Aliyun DashScope API Client (Modified for Custom API)"""
+    """Aliyun DashScope API Client"""
     
     def __init__(self, api_key: Optional[str] = None, model_name: str = "qwen-plus", 
                  temperature: float = 0.7, max_tokens: int = 2048):
-        # ----------------------------------------------------------------------
-        # 修改说明：
-        # 1. 忽略传入的 api_key 和环境变量检查，直接硬编码指定的 Key。
-        # 2. 忽略传入的 model_name，强制使用 DeepSeek-V3.2。
-        # 3. 修改 base_url 为指定的 API 服务地址。
-        # ----------------------------------------------------------------------
+        self.api_key = api_key or os.getenv("DASHSCOPE_API_KEY")
+        if not self.api_key:
+            raise ValueError("API key is required. Please set DASHSCOPE_API_KEY environment variable or pass it directly.")
         
-        # [修改 1] 直接设置 API Key，不再依赖环境变量
-        self.api_key = "sk-PsgcxTpfL8QiIdSxzCKSfA"
-        
-        # 原有的 Key 检查逻辑已注释，防止报错
-        # self.api_key = api_key or os.getenv("DASHSCOPE_API_KEY")
-        # if not self.api_key:
-        #     raise ValueError("API key is required. Please set DASHSCOPE_API_KEY environment variable or pass it directly.")
-        
-        # [修改 2] 强制指定模型名称
-        self.model_name = "DeepSeek-V3.2"
-        
+        self.model_name = model_name
         self.temperature = temperature
         self.max_tokens = max_tokens
-        
-        # [修改 3] 设置新的 Base URL
-        # 后续 chat_completion 方法会拼接 /chat/completions
-        # 最终请求地址将为: https://llmapi.paratera.com/v1/chat/completions
-        self.base_url = "https://llmapi.paratera.com/v1"
+        self.base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
         
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",

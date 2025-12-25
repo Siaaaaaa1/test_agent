@@ -28,7 +28,7 @@ import requests
 from torch.utils.data import IterableDataset, Dataset
 from tqdm import tqdm
 from agentevolver.client.env_client import EnvClient
-from agentevolver.client.llm_client import DashScopeClient
+from AgentEvolver.agentevolver.client.llm_client_backup import DashScopeClient
 from agentevolver.module.agent_flow.agent_flow import AgentFlow
 from agentevolver.module.agent_flow.base_agent_flow import BaseAgentFlow
 from agentevolver.module.task_manager import adapter

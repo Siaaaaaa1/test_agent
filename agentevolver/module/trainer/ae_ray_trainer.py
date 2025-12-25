@@ -54,7 +54,7 @@ from verl.trainer.ppo.reward import compute_reward, compute_reward_async
 from verl.utils.dataset.rl_dataset import RLHFDataset
 from verl.utils.metric import reduce_metrics
 
-from agentevolver.client.llm_client import DashScopeClient
+from AgentEvolver.agentevolver.client.llm_client_backup import DashScopeClient
 from agentevolver.client.em_client import EMClient
 from agentevolver.module.env_manager.env_manager import ParallelEnvManager
 from agentevolver.module.task_manager import adapter as task_adapter

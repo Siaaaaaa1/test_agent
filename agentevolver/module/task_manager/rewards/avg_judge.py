@@ -4,7 +4,7 @@ from typing import Any, Optional, Type, cast
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from loguru import logger
 from agentevolver.client.env_client import EnvClient
-from agentevolver.client.llm_client import DashScopeClient
+from AgentEvolver.agentevolver.client.llm_client_backup import DashScopeClient
 from agentevolver.module.agent_flow.reward_calculator import GraderResult, RewardCalculator
 from agentevolver.module.task_manager.rewards.binary_judge_gt import LlmAsJudgeBinaryRewardCalculatorWithGT
 from agentevolver.module.task_manager.rewards.reward import LlmAsJudgeRewardCalculator
