@@ -250,7 +250,7 @@ class TaskAppLabeler:
                         )}
                     ]
 
-                    response = self.client.chat(messages, sampling_params={"stream": False})
+                    response = self.client.chat_with_retry(messages)
                     cleaned_resp = response.replace("```json", "").replace("```", "").strip()
                     
                     try:
