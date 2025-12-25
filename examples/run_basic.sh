@@ -93,6 +93,8 @@ python3 -m agentevolver.main_ppo \
     actor_rollout_ref.rollout.val_kwargs.n=8 \
     task_manager.train_data_path=/mmu_cd_ssd/zhangzhenyu06/workspace/AgentEvolver/tasks_explored/tasks_explored.train.json \
     task_manager.val_data_path=/mmu_cd_ssd/zhangzhenyu06/workspace/AgentEvolver/tasks_explored/tasks_explored.val.json \
+    task_manager.exploration_strategy_args.a=5 \
+    task_manager.exploration_strategy_args.b=10 \
     2>&1 | tee "$log_file"
 
 # 训练结束后清理后台进程

@@ -253,64 +253,117 @@ class TaskManager(object):
 
     def _generate_task_api_driven(self, tasks: Sequence[Task], *, show_progress=False, resume_file: Optional[str] = None) -> list[TaskObjective]:
         """
-        API Driven 策略下的任务生成：
-        特点：采用串行 While 循环。策略内部维护了一个状态机（单域 -> 跨域），
-        因为 API 探索通常需要维护环境的连续性或根据已掌握的 App 决定下一步。
+        API Driven 策略：两阶段池化生成模式。
+        a, b 来源于 config.task_manager.exploration_strategy_args
+        第一阶段：单域池 (active_apps) 扩大 n * a 倍。
+        第二阶段：跨域池 (seed_tasks) 扩大 n * b 倍。
         """
-        if resume_file is None:
-            resume_file = '.generate_task_api.checkpoint.json'
-
-        current_tasks_hash = self._compute_tasks_hash(tasks)
-        res = []
-        target_count = len(tasks) * self._n
+        # 1. 从配置中读取超参 a 和 b
+        # 假设配置路径为 task_manager.exploration_strategy_args
+        strategy_args = self._config.task_manager.get('exploration_strategy_args', {})
+        a = strategy_args.get('a', 1)  # 单域倍数，默认1
+        b = strategy_args.get('b', 1)  # 跨域倍数，默认1
+        n = self._n # 基础膨胀系数
         
-        # 断点恢复逻辑
-        if resume_file and os.path.exists(resume_file):
+        if resume_file is None:
+            resume_file = '.generate_task_api'
+        
+        intra_ckpt_path = f"{resume_file}.intra.json"
+        cross_ckpt_path = f"{resume_file}.extra.json"
+        current_tasks_hash = self._compute_tasks_hash(tasks)
+        
+        # --- 阶段 1: 单域探索 (Intra-Domain) ---
+        active_apps = list(self._exploration_strategy.active_apps)
+        # 定义单域任务池：扩大 n * a 倍
+        intra_pool = active_apps * (n * a)
+        intra_res = []
+        intra_processed_idx = set()
+        
+        # 恢复单域断点
+        if os.path.exists(intra_ckpt_path):
             try:
-                with open(resume_file, 'r') as f:
-                    checkpoint = json.load(f)
-                    if checkpoint.get('tasks_hash') == current_tasks_hash:
-                        res = [TaskObjective.parse_raw(json.dumps(obj)) for obj in checkpoint.get('results', [])]
-                        logger.info(f"API 策略从断点恢复: {len(res)} 条结果")
+                with open(intra_ckpt_path, 'r') as f:
+                    cp = json.load(f)
+                    if cp.get('tasks_hash') == current_tasks_hash:
+                        intra_res = [TaskObjective.parse_raw(json.dumps(obj)) for obj in cp.get('results', [])]
+                        intra_processed_idx = {int(i) for i in cp.get('processed_indices', [])}
+                        logger.info(f"Intra-Domain resumed: {len(intra_res)} tasks loaded.")
             except Exception as e:
-                logger.warning(f"API 断点加载失败: {e}")
+                logger.warning(f"Failed to load intra checkpoint: {e}")
 
-        pbar = tqdm(total=target_count, desc="generating tasks (api)", disable=not show_progress)
-        pbar.update(len(res))
+        # 单域生成循环
+        if len(intra_processed_idx) < len(intra_pool):
+            pbar = tqdm(total=len(intra_pool), desc="Stage 1: Intra-Domain (a)", disable=not show_progress)
+            pbar.update(len(intra_processed_idx))
+            
+            for idx, app_name in enumerate(intra_pool):
+                if idx in intra_processed_idx:
+                    continue
+                
+                # 传入指定的 app_name
+                task = self._exploration_strategy.generate_intra_task(app_name=app_name)
+                if task:
+                    new_obj = self._explore_and_summarize_intra(task)
+                    if new_obj:
+                        intra_res.extend(new_obj)
+                
+                intra_processed_idx.add(idx)
+                pbar.update(1)
+                
+                # 实时过滤并保存断点
+                intra_res = functools.reduce(lambda x, f: f.filter(x), self._realtime_filters, intra_res)
+                self._save_checkpoint(intra_ckpt_path, intra_res, intra_processed_idx, len(intra_pool), current_tasks_hash)
+            pbar.close()
 
-        # 主循环：根据策略内部的状态机不断生成任务
-        while len(res) < target_count:
-            # 由策略类决定当前该做单域(intra)还是跨域(extra)
-            phase = self._exploration_strategy.decide_phase()
-            new_objectives = []
+        # --- 阶段 2: 跨域合成 (Cross-Domain) ---
+        # 只有单域任务全部处理完（idx 达到 n*a 种组合）才进行
+        cross_res = []
+        if len(intra_processed_idx) >= len(intra_pool):
+            # 定义跨域任务池：种子任务扩大 n * b 倍
+            cross_pool = list(tasks) * (n * b)
+            cross_processed_idx = set()
+            
+            if os.path.exists(cross_ckpt_path):
+                try:
+                    with open(cross_ckpt_path, 'r') as f:
+                        cp = json.load(f)
+                        cross_res = [TaskObjective.parse_raw(json.dumps(obj)) for obj in cp.get('results', [])]
+                        cross_processed_idx = {int(i) for i in cp.get('processed_indices', [])}
+                        logger.info(f"Cross-Domain resumed: {len(cross_res)} tasks loaded.")
+                except Exception: pass
 
-            if phase == "intra":
-                # 生成、执行并总结单域任务
-                task = self._exploration_strategy.generate_intra_task()
-                if task: new_objectives = self._explore_and_summarize_intra(task)
-            elif phase == "extra":
-                # 生成、执行并总结跨域合成任务
+            pbar = tqdm(total=len(cross_pool), desc="Stage 2: Cross-Domain (b)", disable=not show_progress)
+            pbar.update(len(cross_processed_idx))
+            
+            for idx, seed_task in enumerate(cross_pool):
+                if idx in cross_processed_idx:
+                    continue
+                
+                # 生成跨域任务，并绑定到种子环境 ID 上
                 task = self._exploration_strategy.generate_cross_task()
-                if task: new_objectives = self._explore_and_summarize_extra(task)
-            else:
-                logger.info(f"API 策略指示结束或未知阶段: {phase}")
-                break
-            
-            if new_objectives:
-                res.extend(new_objectives)
-                pbar.update(len(new_objectives))
-
-                # 实时过滤与去重更新
-                res = functools.reduce(lambda x, f: f.filter(x), self._realtime_filters, res)
+                if task:
+                    task.task_id = seed_task.task_id
+                    new_obj = self._explore_and_summarize_extra(task)
+                    if new_obj:
+                        cross_res.extend(new_obj)
+                
+                cross_processed_idx.add(idx)
+                pbar.update(1)
+                
+                # 实时过滤与检索库更新（混合两部分结果去重）
+                current_batch_all = intra_res + cross_res
+                current_batch_all = functools.reduce(lambda x, f: f.filter(x), self._realtime_filters, current_batch_all)
+                
+                # 这里的 cross_res 应该是过滤后剔除 intra 部分的增量
+                # 简单处理：更新检索库
                 self._old_retrival.reset()
-                for j in res: self._old_retrival.add_objective(j)
-            
-            # 持续保存断点
-            if resume_file:
-                self._save_checkpoint(resume_file, res, [], target_count, current_tasks_hash)
-
-        pbar.close()
-        return self._apply_post_filter(res)
+                for j in current_batch_all: self._old_retrival.add_objective(j)
+                
+                self._save_checkpoint(cross_ckpt_path, cross_res, cross_processed_idx, len(cross_pool), current_tasks_hash)
+            pbar.close()
+        
+        # 合并结果并应用最终的后置质量过滤
+        return self._apply_post_filter(intra_res + cross_res)
 
     def _save_checkpoint(self, path, results, processed_indices, total, hash_val):
         """保存任务生成的断点信息到 JSON 文件"""

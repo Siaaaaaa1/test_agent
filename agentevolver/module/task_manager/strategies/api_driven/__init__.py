@@ -118,12 +118,15 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         生成单域探索任务：针对特定的 API 编写探索指令。
         流程：随机选一个未掌握的 App -> 选一个执行类 API -> 让 LLM 生成操作该 API 的指令。
         """
-        unmastered_apps = list(self.active_apps - self.explored_intra_apps)
-        if not unmastered_apps:
-            return None
-            
-        app_name = random.choice(unmastered_apps)
-        logger.info(f"[ApiDriven] Generating Intra-Domain Task for: {app_name}")
+        if not app_name:
+            # 原有逻辑：从未掌握的 App 中随机选
+            unmastered_apps = list(self.active_apps - self.explored_intra_apps)
+            if not unmastered_apps:
+                app_name = random.choice(list(self.active_apps))
+            else:
+                app_name = random.choice(unmastered_apps)
+        
+        logger.debug(f"[ApiDriven] Generating Task for specific App: {app_name}")
         
         app_knowledge = self.api_knowledge.get(app_name, {})
         apis = app_knowledge.get("apis", {})

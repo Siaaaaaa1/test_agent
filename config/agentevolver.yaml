@@ -161,6 +161,10 @@ task_manager:
     exploration_llm_temperature: 1.0
     exploration_llm_top_p: 1.0
     exploration_llm_top_k: 100
+  
+  exploration_strategy_args:
+    a: 1  # 默认值
+    b: 1  # 默认值
 
 exp_manager:
   # rollout mode on dev/test set: ["mixed", "all", "woexp"]
