@@ -1,7 +1,23 @@
 # ---- Start Environment Service ----
-# conda activate appworld
-# bash env_service/launch_script/appworld.sh
 
+# 1. 确保 conda 可以在脚本中使用 (这一步非常关键)
+# 尝试找到 conda.sh 的位置并 source 它。根据你的安装路径可能需要调整，这里是常见的路径。
+CONDA_BASE=$(conda info --base 2>/dev/null || echo "$HOME/anaconda3")
+source "$CONDA_BASE/etc/profile.d/conda.sh"
+
+# 2. 激活环境
+conda activate appworld
+
+# 3. 启动 Server 并放入后台运行 (&)，否则会卡住
+echo "Starting AppWorld Environment Service..."
+bash env_service/launch_script/appworld.sh > server.log 2>&1 &
+SERVER_PID=$!
+
+# 4. 等待服务启动 (给予几秒钟缓冲时间)
+echo "Waiting for server to start (PID: $SERVER_PID)..."
+sleep 10  # 等待 10 秒确保 8080 端口准备就绪
+
+conda activate agentevolver
 
 # ---- Start Training ----
 PROJECT_DIR="$(pwd)"
@@ -10,7 +26,7 @@ env_url=http://localhost:8080
 current_time=$(date "+%Y%m%d_%H%M%S")
 log_file="log_${current_time}.log"
 
-
+echo "Starting Training..."
 python3 -m agentevolver.main_ppo \
     --config-path="$CONFIG_PATH" \
     --config-name='script_config' \
@@ -75,4 +91,7 @@ python3 -m agentevolver.main_ppo \
     task_manager.mixture.synthetic_data_ratio=0.0 \
     task_manager.mixture.use_original_tasks=True \
     actor_rollout_ref.rollout.val_kwargs.n=8 \
-    2>&1 | tee "$log_file" \
+    2>&1 | tee "$log_file"
+
+# 训练结束后清理后台进程
+kill $SERVER_PID
