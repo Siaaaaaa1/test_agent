@@ -46,7 +46,7 @@ python3 -m agentevolver.main_ppo \
     actor_rollout_ref.rollout.response_length=4096 \
     actor_rollout_ref.rollout.max_model_len=25580 \
     actor_rollout_ref.rollout.temperature=0.9 \
-    actor_rollout_ref.model.path=Qwen/Qwen2.5-7B-Instruct \
+    actor_rollout_ref.model.path=/mmu_cd_ssd/zhangzhenyu06/workspace/Qwen2.5-7B-Instruct \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
@@ -76,7 +76,7 @@ python3 -m agentevolver.main_ppo \
     trainer.save_freq=10000 \
     trainer.test_freq=10 \
     trainer.total_epochs=40 \
-    trainer.val_before_train=True \
+    trainer.val_before_train=False \
     trainer.validation_data_dir="experiments/tech_synthetic/${experiment_name}/validation_log" \
     trainer.rollout_data_dir="experiments/tech_synthetic/${experiment_name}/rollout_log" \
     actor_rollout_ref.actor.ppo_max_token_len_per_gpu=25580 \
@@ -87,10 +87,12 @@ python3 -m agentevolver.main_ppo \
     data.train_files=null \
     data.val_files=null \
     env_service.env_type=appworld \
-    task_manager.n=0 \
-    task_manager.mixture.synthetic_data_ratio=0.0 \
-    task_manager.mixture.use_original_tasks=True \
+    task_manager.n=5 \
+    task_manager.mixture.synthetic_data_ratio=1.0 \
+    task_manager.mixture.use_original_tasks=False \
     actor_rollout_ref.rollout.val_kwargs.n=8 \
+    task_manager.train_data_path=/mmu_cd_ssd/zhangzhenyu06/workspace/AgentEvolver/tasks_explored/tasks_explored.train.json \
+    task_manager.val_data_path=/mmu_cd_ssd/zhangzhenyu06/workspace/AgentEvolver/tasks_explored/tasks_explored.val.json \
     2>&1 | tee "$log_file"
 
 # 训练结束后清理后台进程
