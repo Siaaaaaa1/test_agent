@@ -273,9 +273,10 @@ class TaskManager(object):
         current_tasks_hash = self._compute_tasks_hash(tasks)
         
         # --- 阶段 1: 单域探索 (Intra-Domain) ---
+        ## 这里的active_apps应该改为active_apis，以所有active_apps的api数量*a作为单域任务池，后面的代码也以api进行统计。
         active_apps = list(self._exploration_strategy.active_apps)
         # 定义单域任务池：扩大 n * a 倍
-        intra_pool = active_apps * (n * a)
+        intra_pool = active_apps * a
         intra_res = []
         intra_processed_idx = set()
         
@@ -316,11 +317,11 @@ class TaskManager(object):
             pbar.close()
 
         # --- 阶段 2: 跨域合成 (Cross-Domain) ---
-        # 只有单域任务全部处理完（idx 达到 n*a 种组合）才进行
+        # 只有单域任务全部处理完进行
         cross_res = []
         if len(intra_processed_idx) >= len(intra_pool):
-            # 定义跨域任务池：种子任务扩大 n * b 倍
-            cross_pool = list(tasks) * (n * b)
+            # 定义跨域任务池：种子任务扩大 b 倍
+            cross_pool = list(tasks) * b
             cross_processed_idx = set()
             
             if os.path.exists(cross_ckpt_path):
