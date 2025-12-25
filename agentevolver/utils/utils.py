@@ -1,6 +1,8 @@
-from typing import Any, List, Dict
+from typing import Any, List, Dict, Union
 import torch
 from loguru import logger
+import json
+import re
 
 # apply chat_template to a message, and then convert back to message
 def convert_tool_to_user_message(tool_message, format="qwen"):
@@ -129,3 +131,64 @@ def get_batched_exponential_decay_weights_vectorized(
     final_weights = torch.where(mask, calculated_weights, torch.tensor(padding_value, device=device))
     
     return final_weights
+
+
+def extract_json_from_str(content: str) -> Union[Dict, List, Any]:
+    """
+    从字符串中提取 JSON 对象。
+    支持提取 Markdown 代码块中的 JSON (```json ... ```) 或直接查找最外层的 {}/[]。
+    """
+    if not content:
+        return {}
+
+    content = content.strip()
+
+    # 1. 尝试直接解析
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        pass
+
+    # 2. 尝试提取 Markdown 代码块 (```json ... ```)
+    pattern = r"```json\s*([\s\S]*?)\s*```"
+    match = re.search(pattern, content)
+    if match:
+        try:
+            return json.loads(match.group(1))
+        except json.JSONDecodeError:
+            pass
+
+    # 3. 尝试提取通用代码块 (``` ... ```)
+    pattern = r"```\s*([\s\S]*?)\s*```"
+    match = re.search(pattern, content)
+    if match:
+        try:
+            return json.loads(match.group(1))
+        except json.JSONDecodeError:
+            pass
+
+    # 4. 尝试寻找最外层的 '{' 和 '}' 或 '[' 和 ']'
+    # 这是一个启发式方法，用于处理 LLM 有时会在 JSON 前后输出闲聊内容的情况
+    try:
+        start_brace = content.find('{')
+        start_bracket = content.find('[')
+        
+        start = -1
+        end = -1
+        
+        # 确定是对象还是数组，优先匹配出现较早的
+        if start_brace != -1 and (start_bracket == -1 or start_brace < start_bracket):
+            start = start_brace
+            end = content.rfind('}')
+        elif start_bracket != -1:
+            start = start_bracket
+            end = content.rfind(']')
+            
+        if start != -1 and end != -1 and end > start:
+            json_str = content[start : end + 1]
+            return json.loads(json_str)
+    except json.JSONDecodeError:
+        pass
+
+    logger.warning(f"Failed to extract JSON from string: {content[:100]}...")
+    return {}
