@@ -23,15 +23,21 @@ def main():
     output_dir = os.path.join(current_dir, "output")
     
     # 1. 生成工具手册
+    # 注意：这会依赖 generators.py 中设置的 path
     manual_gen = ToolManualGenerator(output_dir=output_dir)
     manual_gen.generate(filename="appworld_tool_manual.json")
 
     # 2. 标注任务
-    # 默认处理 'train', 'dev', 'test'
-    # 结果将保存为: task_app_labels_train.json, task_app_labels_dev.json 等
+    # 根据您提供的文件列表，我们指定具体的 split 名称
+    # train.txt -> "train"
+    # dev.txt -> "dev"
+    # test_challenge.txt -> "test_challenge"
+    # test_normal.txt -> "test_normal"
+    target_splits = ["train", "dev", "test_challenge", "test_normal"]
+    
     labeler = TaskAppLabeler(output_dir=output_dir)
     labeler.run(
-        splits=["train", "dev", "test"], 
+        splits=target_splits, 
         filename_prefix="task_app_labels"
     )
 

@@ -3,40 +3,70 @@
 import json
 import os
 import re
-import time
+import ast
+import sys
 from tqdm import tqdm
+
+# --- [CRITICAL] 配置 AppWorld 路径 ---
+# 必须在 import appworld 之前设置
+CUSTOM_APPWORLD_ROOT = "./env_service/environments/appworld"
+
+if os.path.exists(CUSTOM_APPWORLD_ROOT):
+    os.environ["APPWORLD_ROOT"] = CUSTOM_APPWORLD_ROOT
+else:
+    print(f"⚠️ 警告: 未找到指定的 AppWorld 路径: {CUSTOM_APPWORLD_ROOT}")
+# ------------------------------------
+
 from appworld import AppWorld, load_task_ids
 from agentevolver.client.llm_client import DashScopeClient
 from agentevolver.preprocess.prompts import APP_SELECTION_SYSTEM_PROMPT, APP_SELECTION_USER_TEMPLATE
 
-# ... (保留 extract_json_from_str 和 ToolManualGenerator 类不变) ...
-
 def extract_json_from_str(text: str):
     """
-    从字符串中提取 JSON (对象或数组)。
-    优先尝试直接解析，失败则尝试正则提取第一个 {...} 或 [...] 块。
+    增强版解析器：
+    1. 尝试标准 JSON (json.loads)
+    2. 尝试 Python 字典字面量 (ast.literal_eval) -> 解决单引号问题
+    3. 尝试正则提取
     """
+    text = text.strip()
+    
+    # 1. 尝试直接解析 JSON
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
 
-    # 尝试提取 JSON 对象或数组
+    # 2. 尝试解析 Python 字典/列表字符串 (例如 {'a': 1})
+    try:
+        result = ast.literal_eval(text)
+        if isinstance(result, (dict, list)):
+            return result
+    except (ValueError, SyntaxError):
+        pass
+
+    # 3. 尝试正则提取 JSON/Dict 块
     pattern = r"(\{.*\}|\[.*\])"
     match = re.search(pattern, text, re.DOTALL)
     
     if match:
-        json_str = match.group(1)
+        clean_str = match.group(1)
+        # 再次尝试 JSON
         try:
-            return json.loads(json_str)
+            return json.loads(clean_str)
         except json.JSONDecodeError:
             pass
+        # 再次尝试 ast
+        try:
+            result = ast.literal_eval(clean_str)
+            if isinstance(result, (dict, list)):
+                return result
+        except (ValueError, SyntaxError):
+            pass
             
-    raise ValueError(f"无法从输出中提取有效的 JSON: {text[:200]}...")
+    raise ValueError(f"无法解析数据: {text[:100]}...")
 
 
 class ToolManualGenerator:
-    # ... (保持原有的 ToolManualGenerator 代码不变) ...
     def __init__(self, output_dir: str):
         self.output_dir = output_dir
         if not os.path.exists(self.output_dir):
@@ -55,10 +85,11 @@ class ToolManualGenerator:
     def generate(self, filename="appworld_tool_manual.json"):
         print(f"\n[ToolManualGenerator] 正在生成工具手册...")
         output_path = os.path.join(self.output_dir, filename)
-        # 初始化环境以读取文档
-        # 这里使用一个简单的 try-catch 防止 task_id 加载失败
+        
         try:
             task_ids = load_task_ids("train")
+            if not task_ids:
+                raise ValueError("未加载到任何 Task ID")
             world = AppWorld(task_id=task_ids[0])
         except Exception as e:
             print(f"❌ 初始化 AppWorld 失败: {e}")
@@ -67,30 +98,59 @@ class ToolManualGenerator:
         manual_data = {}
 
         try:
+            # 1. 获取所有 APP 列表
             raw_apps_output = world.execute("print(apis.api_docs.show_app_descriptions())")
             apps_list = extract_json_from_str(raw_apps_output)
 
             for app in tqdm(apps_list, desc="解析应用文档"):
-                app_name = app['name']
+                # 兼容处理：有些版本返回 dict，有些可能是字符串
+                if isinstance(app, dict):
+                    app_name = app.get('name')
+                    app_desc = app.get('description', '')
+                else:
+                    print(f"⚠️ 无法解析 APP 数据结构: {app}")
+                    continue
+
+                if not app_name:
+                    continue
+
                 manual_data[app_name] = {
-                    "description": app['description'],
+                    "description": app_desc,
                     "apis": {}
                 }
 
+                # 2. 获取该 APP 下的所有 API 简介
                 api_list_cmd = f"print(apis.api_docs.show_api_descriptions(app_name='{app_name}'))"
                 raw_apis_output = world.execute(api_list_cmd)
-                api_descriptions = extract_json_from_str(raw_apis_output)
+                
+                try:
+                    api_descriptions = extract_json_from_str(raw_apis_output)
+                except ValueError:
+                    print(f"⚠️ 跳过 {app_name}: API 列表解析失败")
+                    continue
 
-                for api_short_desc in api_descriptions:
-                    api_name_token = api_short_desc.split(" : ")[0] if " : " in api_short_desc else api_short_desc
+                for api_item in api_descriptions:
+                    # [修复关键点] 此时 api_item 是一个字典，不是字符串
+                    # 例如: {'name': 'login', 'description': 'Log in...'}
+                    if isinstance(api_item, dict):
+                        api_name_token = api_item.get('name')
+                    elif isinstance(api_item, str):
+                        # 旧逻辑兼容
+                        api_name_token = api_item.split(" : ")[0]
+                    else:
+                        continue
+
+                    if not api_name_token:
+                        continue
                     
+                    # 3. 获取具体 API 的详细文档
                     api_doc_cmd = f"print(apis.api_docs.show_api_doc(app_name='{app_name}', api_name='{api_name_token}'))"
                     raw_doc_output = world.execute(api_doc_cmd)
                     
                     try:
                         api_doc = extract_json_from_str(raw_doc_output)
-                    except ValueError as e:
-                        print(f"⚠️ 跳过 {app_name}.{api_name_token}: 文档解析失败")
+                    except ValueError:
+                        print(f"⚠️ 跳过 {app_name}.{api_name_token}: 文档解析失败 (Raw: {raw_doc_output[:50]}...)")
                         continue
 
                     action_type = self._classify_action_type(api_name_token)
@@ -109,6 +169,8 @@ class ToolManualGenerator:
 
         except Exception as e:
             print(f"❌ 生成手册时出错: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
             world.close()
 
@@ -116,7 +178,6 @@ class ToolManualGenerator:
 class TaskAppLabeler:
     """
     功能 2: 读取 Task 并调用 LLM 标注所需 App。
-    支持按 Dataset Split (train, dev, test) 分别存储文件。
     """
     def __init__(self, output_dir: str):
         self.output_dir = output_dir
@@ -138,36 +199,38 @@ class TaskAppLabeler:
         world = AppWorld(task_id=task_ids[0])
         try:
             raw_output = world.execute("print(apis.api_docs.show_app_descriptions())")
+            # 这里同样使用增强版解析器
             apps_data = extract_json_from_str(raw_output)
-            apps_list = [app['name'] for app in apps_data]
+            
+            # 数据清洗：确保提取正确的 name
+            apps_list = []
+            for app in apps_data:
+                if isinstance(app, dict) and 'name' in app:
+                    apps_list.append(app['name'])
+                elif isinstance(app, str):
+                    apps_list.append(app)
+            
             return json.dumps(apps_list) 
         finally:
             world.close()
 
-    def run(self, splits=["train", "dev", "test"], filename_prefix="task_app_labels"):
-        """
-        按 split 分别生成文件，例如:
-        task_app_labels_train.json
-        task_app_labels_dev.json
-        """
+    def run(self, splits, filename_prefix="task_app_labels"):
         print(f"\n[TaskAppLabeler] 开始标注任务 (Splits: {splits})...")
         if not self.client:
             print("❌ 无法运行: LLM Client 未就绪。")
             return
 
-        # 1. 准备上下文 (只需获取一次)
         try:
             apps_context = self._get_apps_context()
         except Exception as e:
             print(f"❌ 获取 App 列表失败: {e}")
             return
 
-        # 2. 遍历所有指定的 Split
         for split in splits:
             try:
                 task_ids = load_task_ids(split)
-            except Exception:
-                print(f"⚠️ 跳过 split '{split}': 无法加载或不存在。")
+            except Exception as e:
+                print(f"⚠️ 跳过 split '{split}': 无法加载 (Error: {e})。")
                 continue
                 
             print(f"处理 {split} 集，共 {len(task_ids)} 个任务...")
@@ -206,7 +269,6 @@ class TaskAppLabeler:
                 except Exception as e:
                     split_results.append({"TaskID": tid, "Error": str(e)})
 
-            # 3. 单独保存该 Split 的结果
             output_filename = f"{filename_prefix}_{split}.json"
             output_path = os.path.join(self.output_dir, output_filename)
             
