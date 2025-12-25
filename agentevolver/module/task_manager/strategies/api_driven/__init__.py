@@ -8,67 +8,77 @@ from typing import List, Dict, Any, Optional, Set
 
 from loguru import logger
 
+# 导入基础策略类和数据模型
 from agentevolver.module.task_manager.strategies import TaskExploreStrategy
 from agentevolver.schema.task import Task, TaskObjective
 from agentevolver.schema.trajectory import Trajectory
 from agentevolver.module.task_manager.base import LlmClient
 from agentevolver.utils.utils import extract_json_from_str
 
-# 引入 Prompt
+# 引入预定义的 Prompt 模板
 from agentevolver.module.task_manager.strategies.api_driven.prompts import (
-    PLAN_GENERATION_PROMPT,
-    BACK_TRANSLATION_PROMPT,
-    PURPOSE_SYNTHESIS_PROMPT
+    PLAN_GENERATION_PROMPT,     # 用于生成单域探索计划
+    BACK_TRANSLATION_PROMPT,    # 用于将执行轨迹反向翻译为用户查询
+    PURPOSE_SYNTHESIS_PROMPT    # 用于合成跨域任务目的
 )
 
-# 定义通用信息提供者集合
+# 定义通用信息提供者 App 集合（通常作为跨域任务的数据源，如从邮件或笔记中获取信息）
 UNIVERSAL_INFO_PROVIDERS = {"notes", "gmail", "simple_messages", "calendar", "contacts"}
 
 class ApiDrivenExploreStrategy(TaskExploreStrategy):
     """
-    API Driven Exploration Strategy
-    Decomposed into:
-    1. Task Generation (Intra/Cross)
-    2. Summarization/Back-Translation
+    API 驱动的探索策略类
+    该策略将探索分解为：
+    1. 任务生成阶段（单域/跨域）
+    2. 总结与反向翻译阶段（验证并提炼训练数据）
     """
 
     def __init__(self, tokenizer, config, **kwargs):
+        """
+        初始化探索策略
+        :param tokenizer: 分词器对象
+        :param config: 配置字典
+        :param kwargs: 其他可选参数，如路径配置、活跃 App 列表等
+        """
         super().__init__(tokenizer, config)
         self.tokenizer = tokenizer
         self.config = config
         
-        # 1. 初始化 LLM Client
+        # 1. 初始化 LLM 客户端，用于生成和总结任务
         self.llm_client = LlmClient(config)
-        self._max_llm_retries = kwargs.get("max_llm_retries", 3)
+        self._max_llm_retries = kwargs.get("max_llm_retries", 3) # 最大重试次数
         
-        # --- 路径配置 ---
+        # --- 路径与文件配置 ---
+        # API 知识库路径（包含所有 App 的 API 定义）
         self.api_knowledge_path = kwargs.get(
             "api_knowledge_path", 
             "agentevolver/preprocess/output/appworld_tool_manual.json"
         )
+        # 任务标签路径（用于获取 Sandbox Task ID）
         self.task_labels_path = kwargs.get(
             "task_labels_path", 
             "agentevolver/preprocess/output/task_app_labels_train.json"
         )
         
-        # 拆分记忆文件路径
+        # 记忆文件路径：记录哪些 App 已经成功探索过
         base_memory_dir = "data/memory/api_driven"
         self.intra_memory_path = kwargs.get("intra_memory_path", os.path.join(base_memory_dir, "intra_domain_success.json"))
         self.cross_memory_path = kwargs.get("cross_memory_path", os.path.join(base_memory_dir, "cross_domain_success.json"))
         
+        # 当前环境下激活的 App 列表
         self.active_apps = set(kwargs.get("active_apps", []))
         
-        # 2. 加载 API 知识库
+        # 2. 加载 API 知识库数据
         self.api_knowledge = self._load_json(self.api_knowledge_path)
         if not self.api_knowledge:
             logger.warning(f"API Knowledge not found at {self.api_knowledge_path}. Exploration might fail.")
 
-        # 3. 获取 Sandbox Task IDs 并构建循环迭代器
+        # 3. 加载沙箱任务 ID 池，并构建无限循环迭代器，作为环境重置的锚点
         self.sandbox_ids_pool = self._load_sandbox_task_ids(self.task_labels_path)
         self.sandbox_id_iterator = itertools.cycle(self.sandbox_ids_pool)
         logger.info(f"[ApiDriven] Loaded {len(self.sandbox_ids_pool)} Sandbox Task IDs.")
 
-        # 4. 加载已完成单域探索的 APP 记录
+        # 4. 加载已完成单域探索的 APP 记录（长期记忆）
         self.intra_memory_data = self._load_json(self.intra_memory_path)
         self.explored_intra_apps = set(self.intra_memory_data.get("explored_apps", []))
         self.cross_memory_data = self._load_json(self.cross_memory_path)
@@ -78,25 +88,36 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
     # ================= 核心接口：兼容 TaskManager 调用 =================
 
     def get_next_sandbox_id(self) -> str:
-        """提供给 TaskManager 获取环境锚点"""
+        """
+        获取下一个沙箱 ID，为 Agent 提供初始环境状态。
+        TaskManager 会调用此函数来决定在哪个环境下开始探索。
+        """
         try:
             return next(self.sandbox_id_iterator)
         except StopIteration:
-            return "train_001" # Should not happen with cycle
+            return "train_001" # 理论上不会发生，因为使用了 cycle
 
     def decide_phase(self) -> str:
-        """决定当前是单域还是跨域阶段"""
+        """
+        决定当前的探索阶段。
+        1. 如果还有未探索的活跃 App，优先进行 'intra'（单域）。
+        2. 如果全部掌握且有多个 App，进行 'extra'（跨域）。
+        3. 否则结束探索。
+        """
         unmastered_apps = list(self.active_apps - self.explored_intra_apps)
         if unmastered_apps:
             return "intra"
         if len(self.active_apps) >= 2:
-            return "extra" # cross-domain
+            return "extra" # 跨域探索
         return "done"
 
     # ================= 阶段生成逻辑 (Generation) =================
 
     def generate_intra_task(self) -> Optional[Task]:
-        """生成单域探索任务 (Plan Generation)"""
+        """
+        生成单域探索任务：针对特定的 API 编写探索指令。
+        流程：随机选一个未掌握的 App -> 选一个执行类 API -> 让 LLM 生成操作该 API 的指令。
+        """
         unmastered_apps = list(self.active_apps - self.explored_intra_apps)
         if not unmastered_apps:
             return None
@@ -107,20 +128,23 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         app_knowledge = self.api_knowledge.get(app_name, {})
         apis = app_knowledge.get("apis", {})
         
-        # 筛选 API
+        # 筛选“执行类”API（会对环境产生副作用的操作，如创建、修改）
         action_apis = [k for k, v in apis.items() if v.get("action_type") == "Executive Action"]
         if not action_apis:
+            # 退而求其次，寻找非 GET 且带参数的 API
             action_apis = [k for k, v in apis.items() if v.get("method", "").upper() != "GET" and len(v.get("parameters", [])) > 0]
         
         if not action_apis:
             logger.warning(f"No executable actions for {app_name}")
             return None
 
+        # 随机选择一个目标 API
         target_api_name = random.choice(action_apis)
         target_api_def = apis[target_api_name]
+        # 获取该 App 下的其他信息类 API，供 LLM 在规划时参考（例如先查询再修改）
         info_apis = {k: v for k, v in apis.items() if k != target_api_name and v.get("action_type") == "Informational Action"}
 
-        # LLM 规划
+        # 使用 LLM 生成具体的任务指令
         prompt = PLAN_GENERATION_PROMPT.format(
             target_api_name=target_api_name,
             app_name=app_name,
@@ -134,9 +158,9 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             
         instruction = response.content.strip()
         
-        # 构造 Task 对象
+        # 构造并返回 Task 对象
         task = Task(
-            task_id="intra_placeholder", # 将在 Manager 中被覆盖
+            task_id="intra_placeholder", # 占位符，由外层 TaskManager 分配正式 ID
             instruction=instruction,
             metrics={
                 "phase": "intra",
@@ -147,11 +171,14 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         return task
 
     def generate_cross_task(self) -> Optional[Task]:
-        """生成跨域合成任务 (Purpose Synthesis)"""
+        """
+        生成跨域合成任务：模拟跨 App 的信息流转。
+        流程：选择一个已掌握的“普通 App”和一个“信息提供 App” -> LLM 合成一个需要两者配合的场景。
+        """
         is_info_provider = lambda a: a in UNIVERSAL_INFO_PROVIDERS
         
-        # 选择 App Pair
-        primary_app = random.choice(list(self.explored_intra_apps)) # 必须是已掌握的
+        # 挑选两个 App 组成配对，必须包含一个信息源和一个执行器
+        primary_app = random.choice(list(self.explored_intra_apps))
         info_app, exec_app = "", ""
         
         if is_info_provider(primary_app):
@@ -167,11 +194,12 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
 
         logger.info(f"[ApiDriven] Generating Cross-Domain Task: {info_app} -> {exec_app}")
 
-        # 目的合成
+        # 获取 App 描述和 API 列表供 LLM 参考
         info_desc = self.api_knowledge.get(info_app, {}).get("description", "")
         exec_desc = self.api_knowledge.get(exec_app, {}).get("description", "")
         exec_apis = list(self.api_knowledge.get(exec_app, {}).get("apis", {}).keys())[:15]
 
+        # 调用 LLM 合成跨域场景：包含需要在信息 App 预埋的数据和最终用户查询
         prompt = PURPOSE_SYNTHESIS_PROMPT.format(
             info_app_name=info_app,
             info_app_desc=info_desc,
@@ -189,12 +217,13 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         
         try:
             scenario_data = extract_json_from_str(response.content)
-            setup_context = scenario_data.get("setup_context", "")
-            user_query = scenario_data.get("user_query", "")
-            target_action = scenario_data.get("target_action_api", "")
+            setup_context = scenario_data.get("setup_context", "") # 预埋的环境背景数据
+            user_query = scenario_data.get("user_query", "")      # 生成的任务查询
+            target_action = scenario_data.get("target_action_api", "") # 预期的核心 API
         except Exception:
             return None
 
+        # 构造 Task，metrics 中包含 setup 动作指令，TaskManager 会据此初始化环境
         task = Task(
             task_id="cross_placeholder",
             instruction=user_query,
@@ -213,17 +242,24 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
     # ================= 阶段总结逻辑 (Summarize) =================
 
     def summarize_intra(self, task: Task, trajectory: Trajectory) -> Optional[TaskObjective]:
-        """单域：验证 API 调用并进行反向归纳"""
+        """
+        单域探索总结：验证生成的指令是否真的触发了目标 API。
+        如果成功触发，则将这一串 API 调用轨迹“反向归纳”成一个简洁的自然语言 Query。
+        """
         target_app = task.metrics.get("target_app")
         target_api = task.metrics.get("target_api")
         
+        # 1. 检查执行轨迹中是否包含目标 API 且无报错
         if not self._check_api_called(trajectory, target_api):
             logger.info(f"[Intra-Domain] Failed: Target API {target_api} not called.")
             return None
             
         logger.info(f"[Intra-Domain] Success: Back-translating...")
+        
+        # 2. 提取 API 调用序列（Trace）
         tool_trace = self._extract_tool_trace(trajectory)
         
+        # 3. 使用 LLM 进行反向归纳 (Back-Translation)
         bt_prompt = BACK_TRANSLATION_PROMPT.format(
             tool_calls_trace=tool_trace,
             target_api_name=target_api
@@ -235,24 +271,28 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             
         user_query = bt_response.content.strip()
         
-        # 更新状态：标记 APP 为已掌握
+        # 4. 更新探索状态：将此 App 加入“已掌握”记忆
         if target_app not in self.explored_intra_apps:
             self.explored_intra_apps.add(target_app)
             self._save_intra_memory(target_app)
             
-        # 构造训练样本
+        # 5. 补充轨迹信息，返回高质量的任务目标（用于模型训练）
         trajectory.info["synthesized_user_query"] = user_query
         trajectory.info["exploration_type"] = "intra_domain"
         
         return TaskObjective(input=user_query, output=trajectory)
 
     def summarize_cross(self, task: Task, trajectory: Trajectory) -> Optional[TaskObjective]:
-        """跨域：验证信息流和执行动作"""
+        """
+        跨域探索总结：验证信息流是否打通。
+        验证点：是否使用了信息源 App，且是否调用了目标执行 API。
+        """
         info_app = task.metrics.get("info_app")
         exec_app = task.metrics.get("exec_app")
         target_api = task.metrics.get("target_api")
-        user_query = task.instruction # 跨域的任务已经是合成好的 query，不需要反向归纳，只需验证
+        user_query = task.instruction 
         
+        # 验证两个 App 是否都被用到
         called_info = self._check_app_usage(trajectory, info_app)
         called_exec = self._check_api_called(trajectory, target_api)
         
@@ -261,27 +301,32 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             trajectory.info["synthesized_user_query"] = user_query
             trajectory.info["exploration_type"] = "cross_domain"
             
-            # 保存日志
+            # 保存跨域成功日志
             self._save_cross_memory(trajectory.info)
             return TaskObjective(input=user_query, output=trajectory)
         
         return None
 
-    # ================= 辅助方法 =================
+    # ================= 辅助私有方法 =================
 
     def _chat_with_retry(self, messages: List[Dict], **kwargs) -> Optional[Any]:
+        """
+        带重试机制的 LLM 调用
+        :param messages: 消息列表
+        :param kwargs: LLM 参数（如 temperature）
+        """
         for i in range(self._max_llm_retries):
             try:
                 response = self.llm_client.chat(messages=messages, **kwargs)
                 if response and response.content: return response
             except Exception as e:
                 logger.warning(f"LLM call failed: {e}. Retry {i+1}...")
-            time.sleep(2 ** i)
+            time.sleep(2 ** i) # 指数退避重试
         return None
 
     def _load_sandbox_task_ids(self, path: str) -> List[str]:
+        """从 JSON 文件加载可用的沙箱任务 ID"""
         if not os.path.exists(path):
-            # 简化处理，实际应抛出异常
             logger.error("Label file missing")
             return ["train_001"]
         try:
@@ -292,6 +337,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             return ["train_001"]
 
     def _check_api_called(self, trajectory: Trajectory, api_name: str) -> bool:
+        """检查轨迹中是否存在对指定 API 的成功调用"""
         if not trajectory or not trajectory.steps: return False
         for step in trajectory.steps:
             if step.role == "tool" and not step.error:
@@ -299,16 +345,19 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         return False
 
     def _check_app_usage(self, trajectory: Trajectory, app_name: str) -> bool:
+        """检查轨迹中是否存在对指定 App 下任意 API 的调用"""
         if not trajectory or not trajectory.steps: return False
         app_apis = self.api_knowledge.get(app_name, {}).get("apis", {}).keys()
         for step in trajectory.steps:
             if step.role == "tool":
+                # 匹配 app 名称或 app 下的任一 API 名称
                 if app_name.lower() in step.tool_name.lower(): return True
                 for api in app_apis:
                     if api in step.tool_name: return True
         return False
 
     def _extract_tool_trace(self, trajectory: Trajectory) -> str:
+        """从轨迹中提取精简的‘动作-观察’序列，方便 LLM 理解"""
         trace = []
         for step in trajectory.steps:
             if step.role == "assistant" and step.tool_calls:
@@ -316,11 +365,13 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                     trace.append(f"Action: {tc['name']} args={tc['arguments']}")
             elif step.role == "tool":
                 content = str(step.content)
+                # 截断过长的观察内容，避免超出 Token 限制
                 if len(content) > 200: content = content[:200] + "..."
                 trace.append(f"Observation: {content}")
         return "\n".join(trace)
 
     def _load_json(self, path: str) -> Dict:
+        """通用的 JSON 文件加载方法"""
         if os.path.exists(path):
             try:
                 with open(path, 'r', encoding='utf-8') as f:
@@ -329,6 +380,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         return {}
 
     def _save_intra_memory(self, app_name: str):
+        """保存已成功探索的单域 App 列表到磁盘"""
         os.makedirs(os.path.dirname(self.intra_memory_path), exist_ok=True)
         current_data = self._load_json(self.intra_memory_path)
         current_apps = set(current_data.get("explored_apps", []))
@@ -337,6 +389,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             json.dump({"explored_apps": list(current_apps)}, f, indent=2)
 
     def _save_cross_memory(self, metadata: Dict):
+        """保存成功合成的跨域任务日志"""
         os.makedirs(os.path.dirname(self.cross_memory_path), exist_ok=True)
         current_data = self._load_json(self.cross_memory_path)
         if "logs" not in current_data: current_data["logs"] = []

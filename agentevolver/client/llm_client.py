@@ -14,7 +14,6 @@ class LlmException(Exception):
     @property
     def typ(self):
         return self._type
-        
 
 class DashScopeClient:
     """Aliyun DashScope API Client (Modified for Custom API)"""
