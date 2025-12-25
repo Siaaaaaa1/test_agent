@@ -11,7 +11,7 @@ from loguru import logger
 from agentevolver.module.task_manager.strategies import TaskExploreStrategy
 from agentevolver.schema.task import Task, TaskObjective
 from agentevolver.schema.trajectory import Trajectory
-from AgentEvolver.agentevolver.client.llm_client_backup import LlmClient
+from agentevolver.module.task_manager.base import LlmClient
 from agentevolver.utils.utils import extract_json_from_str
 
 # 引入 Prompt
