@@ -7,7 +7,9 @@ import uuid
 from typing import List, Dict, Any, Optional, Set
 
 from loguru import logger
-
+from agentevolver.module.env_manager.env_worker import EnvWorker, TrajExpConfig
+from agentevolver.module.agent_flow.agent_flow import AgentFlow
+from agentevolver.module.task_manager.env_profiles import get_agent_interaction_system_prompt
 # 导入基础策略类和数据模型
 from agentevolver.module.task_manager.strategies import TaskExploreStrategy
 from agentevolver.schema.task import Task, TaskObjective
@@ -78,42 +80,83 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
 
     def explore(self, task: Task, data_id: str, rollout_id: str) -> List[Trajectory]:
         """
-        执行探索任务的核心入口。
-        负责动态初始化环境和 Agent，执行任务，并返回轨迹。
-        不再依赖 TaskManager 进行循环。
+        [ApiDriven] 执行探索任务的核心入口 (重构版)。
+        模仿 Random 策略，使用 EnvWorker.execute 接管执行流。
         """
-        # 1. 动态获取沙箱 ID
+        # 1. 动态获取沙箱 ID (保留 API 策略特有的逻辑)
         real_sandbox_id = self.get_next_sandbox_id()
         if real_sandbox_id:
             task.task_id = real_sandbox_id
             
         logger.info(f"[ApiDriven] Exploring task (Phase: {task.metrics.get('phase')}) on Sandbox: {real_sandbox_id}")
 
-        # 2. 动态初始化 EnvWorker 和 AgentFlow
-        # 注意：这里假设 Config 中包含了连接环境所需的 url 等信息
-        env_worker = EnvWorker(self.config) 
-        agent_flow = AgentFlow(self.config)
+        # 2. 初始化环境工作者 (EnvWorker)
+        # 注意：这里需要确保 self.tokenizer 已在 __init__ 中被正确赋值，否则需从 config 加载
+        env_worker = EnvWorker(
+            task=task,
+            config=self.config, 
+            thread_index=0,  # 单任务执行默认为 0
+            tokenizer=self.tokenizer
+        )
 
-        trajectory = Trajectory(steps=[])
+        # 3. 构造 LLM 聊天函数
+        # 使用探索专用的采样参数（需要确保 config 中有这些 key，或者提供默认值）
+        sampling_params = {
+            "temperature": self.config.get("exploration_llm_temperature", 1.0),
+            "top_p": self.config.get("exploration_llm_top_p", 1.0),
+            "top_k": self.config.get("exploration_llm_top_k", -1),
+        }
+        
+        # 假设父类或当前类中有 _get_llm_chat_fn 方法，且 self.llm_client 已初始化
+        llm_chat_fn = self._get_llm_chat_fn(
+            self.llm_client, 
+            sampling_params=sampling_params
+        )
 
+        # 4. 初始化 Agent 工作流 (AgentFlow)
+        agent_flow = AgentFlow(
+            enable_context_generator=False, # 禁用上下文生成，简化流程
+            llm_chat_fn=llm_chat_fn,
+            tokenizer=self.tokenizer,
+            config=self.config,
+        )
+        
+        # 设置最大步数和模型长度
+        agent_flow.max_steps = self.config.get("max_explore_step", 10) # 建议从配置读取
+        agent_flow.max_model_len = 102400 # 硬编码限制，需确保模型支持
+
+        # 5. [保留但注释] 环境数据注入逻辑
+        # 由于 EnvWorker.execute 内部会调用 reset，注入逻辑可能需要移到 EnvWorker 的 reset 钩子中
+        # 或者在 execute 之前手动处理，但这会破坏 execute 的封装。
+        # if task.metrics and task.metrics.get("setup_action") == "inject_data":
+        #     pass # 需另行处理注入逻辑
+
+        # 6. 执行 Agent，获取轨迹
+        # 使用 execute 统一接管 Loop
         try:
-            # 3. 环境重置
-            env_worker.reset(task)
+            # 获取对应的 System Prompt
+            env_profile_name = self.config.get("env_profile", "appworld") # 需确保能获取 profile name
+            system_prompt = get_agent_interaction_system_prompt(env_profile_name)
 
-            # 4. [已注释] 环境数据注入逻辑
-            # if task.metrics and task.metrics.get("setup_action") == "inject_data":
-            #     self._inject_context(env_worker, task.metrics)
-
-            # 5. 执行 Agent Loop
-            trajectory = agent_flow.run(task, env_worker)
+            trajectory = env_worker.execute(
+                data_id=data_id,
+                rollout_id=rollout_id,
+                traj_exp_config=TrajExpConfig(add_exp=False), # API 探索通常不直接添加到经验池
+                agent_flow=agent_flow,
+                tmux={
+                    'step': [0],  # 共享计数器
+                    'token': [0],
+                },
+                stop=[False], # 停止信号
+                system_prompt=system_prompt,
+            )
             
-        except Exception as e:
-            logger.error(f"[ApiDriven] Explore failed: {e}")
-        finally:
-            # 清理资源（如果需要）
-            pass
+            return [trajectory]
 
-        return [trajectory]
+        except Exception as e:
+            logger.error(f"[ApiDriven] Explore failed on Sandbox {real_sandbox_id}: {e}")
+            # 返回空轨迹或抛出异常，视上层处理逻辑而定
+            return [Trajectory(steps=[])]
 
     # def _inject_context(self, env_worker, metrics: Dict):
     #     """
