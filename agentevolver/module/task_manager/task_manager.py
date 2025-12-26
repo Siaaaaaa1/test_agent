@@ -49,17 +49,23 @@ class RewardProps(TypedDict):
 
 # --- 工具函数 ---
 
-def get_exploration_strategy(name: str, strategy_args, *, tokenizer, config) -> TaskExploreStrategy:
-    """
-    探索策略工厂函数：根据配置名称返回具体的策略实例。
-    - random: 随机采样策略
-    - api_driven: 基于 API 知识库的链式探索策略
-    """
+def get_exploration_strategy(name: str, strategy_args, *, tokenizer, config, llm_client) -> TaskExploreStrategy:
     logger.info(f"loading exploration strategy {name}")
     if name == "random":
-        return LlmRandomSamplingExploreStrategy(tokenizer=tokenizer, config=config, **strategy_args)
+        # Random 策略似乎通过基类或后续注入处理，也可以根据需要传递
+        return LlmRandomSamplingExploreStrategy(
+            tokenizer=tokenizer, 
+            config=config, 
+            **strategy_args
+            )
     elif name == "api_driven":
-        return ApiDrivenExploreStrategy(tokenizer=tokenizer, config=config, **strategy_args)
+        # [修改点 2]: 将 llm_client 传递给 ApiDriven 策略
+        return ApiDrivenExploreStrategy(
+            tokenizer=tokenizer, 
+            config=config, 
+            llm_client=llm_client,  # <--- 传递实例
+            **strategy_args
+        )
     else:
         raise NotImplementedError(f"exploration strategy {name} not implemented")
 
@@ -98,7 +104,8 @@ class TaskManager(object):
             exploration_strategy, 
             exploration_strategy_args, 
             tokenizer=tokenizer, 
-            config=config
+            config=config,
+            llm_client=llm_client  # <--- 传入
         )
         self._llm_client = llm_client
         self._old_retrival = old_retrival       # 用于任务检索和去重的存储器
@@ -263,6 +270,18 @@ class TaskManager(object):
                 # 1. 生成任务描述
                 # 注意：深拷贝种子任务以避免副作用
                 current_task = copy.deepcopy(seed_task)
+
+                # --- 新增代码开始 ---
+                # 确保 metadata 存在
+                if current_task.metadata is None:
+                    current_task.metadata = {}
+                
+                # 计算并注入线程索引 (使用取模确保索引在 0 到 num_threads-1 之间)
+                # 这样不同的并发任务会分配到不同的模拟环境/端口
+                thread_idx = idx % self._num_exploration_threads
+                current_task.metadata['thread_index'] = thread_idx
+                # --- 新增代码结束 ---
+
                 current_task = self._exploration_strategy.generate_intra_task(
                     app_name=api_info["app_name"], 
                     target_api_name=api_info["api_name"],
@@ -290,6 +309,18 @@ class TaskManager(object):
             """单线程处理：跨域任务生成 -> 探索 -> 总结"""
             try:
                 current_task = copy.deepcopy(seed_task)
+
+                # --- 新增代码开始 ---
+                # 确保 metadata 存在
+                if current_task.metadata is None:
+                    current_task.metadata = {}
+                
+                # 计算并注入线程索引 (使用取模确保索引在 0 到 num_threads-1 之间)
+                # 这样不同的并发任务会分配到不同的模拟环境/端口
+                thread_idx = idx % self._num_exploration_threads
+                current_task.metadata['thread_index'] = thread_idx
+                # --- 新增代码结束 ---
+
                 current_task = self._exploration_strategy.generate_cross_task(app_list=app_list, task=current_task)
                 if not current_task: return []
                 

@@ -36,12 +36,18 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
     修复了并发写入冲突、拼写错误及执行时 query 缺失的问题。
     """
 
-    def __init__(self, tokenizer, config, **kwargs):
+    def __init__(self, tokenizer, config, llm_client=None, **kwargs):
         super().__init__()
         self.tokenizer = tokenizer
         self.config = config
         
-        self.llm_client = LlmClient(config)
+        # [修改点 5]: 复用传入的客户端，仅当未传入时才新建 (兼容性处理)
+        if llm_client:
+            self.llm_client = llm_client
+        else:
+            logger.warning("[ApiDriven] No LlmClient passed, creating a new one (Redundant).")
+            self.llm_client = LlmClient(config)
+            
         self._max_llm_retries = kwargs.get("max_llm_retries", 3)
         self._lock = threading.Lock() # 用于保护记忆文件的并发写入
         
@@ -94,10 +100,15 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         logger.info(f"[ApiDriven] Exploring task (Phase: {task.metrics.get('phase')}) on Sandbox: {real_sandbox_id}")
 
         # 2. 初始化环境工作者 (EnvWorker)
+        thread_idx = 0
+        if task.metadata and 'thread_index' in task.metadata:
+            thread_idx = task.metadata['thread_index']
+        
+        # 2. 初始化环境工作者 (EnvWorker)
         env_worker = EnvWorker(
             task=task,
             config=self.config, 
-            thread_index=0,  # 单任务执行默认为 0
+            thread_index=thread_idx,  # <--- 这里使用变量替代硬编码的 0
             tokenizer=self.tokenizer
         )
 
@@ -114,11 +125,11 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         )
 
         # 4. 初始化 Agent 工作流 (ModifiedAgentFlow)
-        # [FIX]: 使用 ModifiedAgentFlow，它应该在内部处理了 `enable_context_generator` 等配置
         agent_flow = ModifiedAgentFlow(
             llm_chat_fn=llm_chat_fn,
             tokenizer=self.tokenizer,
             config=self.config,
+            enable_context_generator=False
         )
         
         # 动态设置最大步数和模型长度
