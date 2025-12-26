@@ -20,6 +20,14 @@ from agentevolver.schema.trajectory import Trajectory
 from agentevolver.module.task_manager.base import LlmClient
 from agentevolver.utils.utils import extract_json_from_str
 
+# [新增]: 导入通用的总结 Prompt 和解析工具，与 Random 策略保持一致
+from agentevolver.module.task_manager.strategies.api_driven.prompts.prompt_summarize import (
+    get_task_summarize_prompt,
+    parse_tasks_from_response,
+)
+# [新增]: 导入环境 Profile 以支持 get_task_summarize_prompt
+from agentevolver.module.task_manager.prelude_profiles import appworld, bfcl, webshop
+
 # 引入预定义的 Prompt 模板
 from agentevolver.module.task_manager.strategies.api_driven.prompts import (
     PLAN_GENERATION_PROMPT,
@@ -79,6 +87,9 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         self.intra_memory_data = self._load_json(self.intra_memory_path)
         self.explored_intra_apps = set(self.intra_memory_data.get("explored_apps", []))
         self.cross_memory_data = self._load_json(self.cross_memory_path)
+        
+        # 获取环境配置名称，用于 System Prompt
+        self.env_profile_name = self.config.get("env_service", {}).get("env_type", "appworld")
 
         logger.info(f"[ApiDriven] Initialized. Mastered Apps (Intra): {list(self.explored_intra_apps)}")
 
@@ -104,11 +115,10 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         if task.metadata and 'thread_index' in task.metadata:
             thread_idx = task.metadata['thread_index']
         
-        # 2. 初始化环境工作者 (EnvWorker)
         env_worker = EnvWorker(
             task=task,
             config=self.config, 
-            thread_index=thread_idx,  # <--- 这里使用变量替代硬编码的 0
+            thread_index=thread_idx,
             tokenizer=self.tokenizer
         )
 
@@ -139,8 +149,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         # 5. 执行 Agent，获取轨迹
         try:
             # 获取对应的 System Prompt
-            env_profile_name = self.config.get("env_service", {}).get("env_type", "appworld")            
-            system_prompt = get_agent_interaction_system_prompt(env_profile_name)
+            system_prompt = get_agent_interaction_system_prompt(self.env_profile_name)
 
             trajectory = env_worker.execute(
                 data_id=data_id, # [FIX]: 接收并使用 TaskManager 传递过来的唯一 ID
@@ -166,19 +175,21 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
     def summarize(self, task: Task, trajectory: Trajectory) -> List[TaskObjective]:
         """
         统一的总结入口，根据任务阶段路由到具体逻辑。
+        返回 List[TaskObjective] 以支持批量生成。
         """
         if not trajectory or not trajectory.steps:
             return []
 
         phase = task.metrics.get("phase", "unknown")
-        result = None
+        results = []
         
         if phase == "intra":
-            result = self.summarize_intra(task, trajectory)
+            results = self.summarize_intra(task, trajectory)
         elif phase == "extra":
-            result = self.summarize_cross(task, trajectory)
+            results = self.summarize_cross(task, trajectory)
         
-        return [result] if result else []
+        # 如果 summarize 子方法返回 None 或空列表，则返回空
+        return results if results else []
 
     def get_next_sandbox_id(self) -> str:
         try:
@@ -337,117 +348,170 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
 
     # ================= 阶段总结逻辑 (Summarize) =================
 
-    # def summarize_intra(self, task: Task, trajectory: Trajectory) -> Optional[TaskObjective]:
-    #     target_app = task.metrics.get("target_app")
-    #     target_api = task.metrics.get("target_api")
-        
-    #     if not self._check_api_called(trajectory, target_api):
-    #         return None
-            
-    #     tool_trace = self._extract_tool_trace(trajectory)
-    #     bt_prompt = BACK_TRANSLATION_PROMPT.format(
-    #         tool_calls_trace=tool_trace,
-    #         target_api_name=target_api
-    #     )
-        
-    #     bt_response = self._chat_with_retry(messages=[{"role": "user", "content": bt_prompt}])
-    #     if not bt_response:
-    #         return None
-            
-    #     user_query = bt_response.content.strip()
-        
-    #     # [Fix Race Condition] 加锁
-    #     with self._lock:
-    #         if target_app not in self.explored_intra_apps:
-    #             self.explored_intra_apps.add(target_app)
-    #             self._save_intra_memory(target_app)
-            
-    #     trajectory.info["synthesized_user_query"] = user_query
-    #     trajectory.info["exploration_type"] = "intra_domain"
-        
-    #     return TaskObjective(input=user_query, output=trajectory)
-
-    # def summarize_cross(self, task: Task, trajectory: Trajectory) -> Optional[TaskObjective]:
-    #     info_app = task.metrics.get("info_app")
-    #     exec_app = task.metrics.get("exec_app")
-    #     target_api = task.metrics.get("target_api")
-    #     user_query = task.instruction 
-        
-    #     called_info = self._check_app_usage(trajectory, info_app)
-    #     called_exec = self._check_api_called(trajectory, target_api)
-        
-    #     if called_info and called_exec:
-    #         trajectory.info["synthesized_user_query"] = user_query
-    #         trajectory.info["exploration_type"] = "cross_domain"
-            
-    #         # [Fix Race Condition] 加锁
-    #         with self._lock:
-    #             self._save_cross_memory(trajectory.info)
-    #         return TaskObjective(input=user_query, output=trajectory)
-        
-    #     return None
-    def summarize_intra(self, task: Task, trajectory: Trajectory) -> Optional[TaskObjective]:
-        llm_fn = self._get_llm_chat_fn(
-            self.llm_client_summarize,
-            sampling_params={
-                "temperature": self._exploration_llm_temperature,
-                "top_p": self._exploration_llm_top_p,
-                "top_k": self._exploration_llm_top_k,
-            }
-        )
-
+    def summarize_intra(self, task: Task, trajectory: Trajectory) -> List[TaskObjective]:
+        """
+        单域探索总结：检查是否调用目标 API，如果调用则使用 LLM 归纳任务意图。
+        [FIX] 使用 parse_tasks_from_response 解析出列表，逻辑模仿 Random 策略。
+        """
         target_app = task.metrics.get("target_app")
         target_api = task.metrics.get("target_api")
         
+        # 1. 前置检查：如果目标 API 未被调用，视为探索失败，不生成总结
         if not self._check_api_called(trajectory, target_api):
-            return None
+            return []
             
-        tool_trace = self._extract_tool_trace(trajectory)
-        bt_prompt = BACK_TRANSLATION_PROMPT.format(
-            tool_calls_trace=tool_trace,
-            target_api_name=target_api
+        # 2. 构造 LLM 函数
+        # 优先使用专门的 summarize client，如果未定义则回退到默认 client
+        client = getattr(self, "llm_client_summarize", self.llm_client)
+        llm_fn = self._get_llm_chat_fn(
+            client,
+            sampling_params={
+                "temperature": self.config.get("exploration_llm_temperature", 1.0),
+                "top_p": self.config.get("exploration_llm_top_p", 1.0),
+                "top_k": self.config.get("exploration_llm_top_k", -1),
+            }
         )
         
-        bt_response = self._chat_with_retry(messages=[{"role": "user", "content": bt_prompt}])
-        if not bt_response:
-            return None
-            
-        user_query = bt_response.content.strip()
-        
-        # [Fix Race Condition] 加锁
-        with self._lock:
-            if target_app not in self.explored_intra_apps:
-                self.explored_intra_apps.add(target_app)
-                self._save_intra_memory(target_app)
-            
-        trajectory.info["synthesized_user_query"] = user_query
-        trajectory.info["exploration_type"] = "intra_domain"
+        # 3. 检索旧任务目标 (如果支持)
+        old_objectives = []
+        if getattr(self, "_old_retrival", None):
+             old_objectives = self._old_retrival.retrieve_objectives(task)
 
-        tasks = parse_tasks_from_response(task, bt_response)
-        
-        return TaskObjective(input=user_query, output=trajectory)
+        # 4. 数据脱敏
+        masked_trajectory = copy.deepcopy(trajectory)
+        if len(masked_trajectory.steps) > 2:
+            if masked_trajectory.steps[1].get('role') == 'user':
+                masked_trajectory.steps[1]['content'] = '[MASKED]'
+            if masked_trajectory.steps[2].get('role') == 'user':
+                masked_trajectory.steps[2]['content'] = '[MASKED]'
 
-    def summarize_cross(self, task: Task, trajectory: Trajectory) -> Optional[TaskObjective]:
+        # 5. 生成 Prompt
+        env_profile_obj = self._get_env_profile_obj()
+        system_prompt, user_prompt = get_task_summarize_prompt(
+            [masked_trajectory], old_objectives, env_profile_obj
+        )
+        
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+        
+        # 6. 调用 LLM
+        try:
+            llm_response = llm_fn(messages=messages)
+            llm_output = llm_response["content"]
+        except Exception as e:
+            logger.error(f"[Summarize Intra] LLM call failed: {e}")
+            return []
+        
+        # 7. 解析结果
+        task_copy = task.copy()
+        task_copy.evaluator = 'synthetic'
+        tasks = parse_tasks_from_response(task_copy, llm_output)
+        
+        # 8. 记录记忆（如果成功生成了总结，说明该 App 已被探索）
+        if tasks:
+            # 取第一个生成的 Query 作为记录
+            user_query = tasks[0].input
+            
+            # [Fix Race Condition] 加锁
+            with self._lock:
+                if target_app not in self.explored_intra_apps:
+                    self.explored_intra_apps.add(target_app)
+                    self._save_intra_memory(target_app)
+                
+            trajectory.info["synthesized_user_query"] = user_query
+            trajectory.info["exploration_type"] = "intra_domain"
+            
+        return tasks
+
+    def summarize_cross(self, task: Task, trajectory: Trajectory) -> List[TaskObjective]:
+        """
+        跨域探索总结：同样进行后验归纳，解析出实际完成的任务。
+        [FIX] 调整返回值为列表，并增加 LLM 归纳步骤。
+        """
         info_app = task.metrics.get("info_app")
-        exec_app = task.metrics.get("exec_app")
         target_api = task.metrics.get("target_api")
-        user_query = task.instruction 
         
+        # 1. 前置检查
         called_info = self._check_app_usage(trajectory, info_app)
         called_exec = self._check_api_called(trajectory, target_api)
         
-        if called_info and called_exec:
+        if not (called_info and called_exec):
+            return []
+            
+        # 2. 构造 LLM 函数
+        client = getattr(self, "llm_client_summarize", self.llm_client)
+        llm_fn = self._get_llm_chat_fn(
+            client,
+            sampling_params={
+                "temperature": self.config.get("exploration_llm_temperature", 1.0),
+                "top_p": self.config.get("exploration_llm_top_p", 1.0),
+                "top_k": self.config.get("exploration_llm_top_k", -1),
+            }
+        )
+        
+        # 3. 检索旧任务目标
+        old_objectives = []
+        if getattr(self, "_old_retrival", None):
+             old_objectives = self._old_retrival.retrieve_objectives(task)
+        
+        # 4. 数据脱敏
+        masked_trajectory = copy.deepcopy(trajectory)
+        if len(masked_trajectory.steps) > 2:
+            if masked_trajectory.steps[1].get('role') == 'user':
+                masked_trajectory.steps[1]['content'] = '[MASKED]'
+            if masked_trajectory.steps[2].get('role') == 'user':
+                masked_trajectory.steps[2]['content'] = '[MASKED]'
+        
+        # 5. 生成 Prompt
+        env_profile_obj = self._get_env_profile_obj()
+        system_prompt, user_prompt = get_task_summarize_prompt(
+            [masked_trajectory], old_objectives, env_profile_obj
+        )
+        
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+        
+        # 6. 调用 LLM
+        try:
+            llm_response = llm_fn(messages=messages)
+            llm_output = llm_response["content"]
+        except Exception as e:
+            logger.error(f"[Summarize Cross] LLM call failed: {e}")
+            return []
+            
+        # 7. 解析结果
+        task_copy = task.copy()
+        task_copy.evaluator = 'synthetic'
+        tasks = parse_tasks_from_response(task_copy, llm_output)
+        
+        # 8. 记录记忆
+        if tasks:
+            user_query = tasks[0].input
             trajectory.info["synthesized_user_query"] = user_query
             trajectory.info["exploration_type"] = "cross_domain"
             
             # [Fix Race Condition] 加锁
             with self._lock:
                 self._save_cross_memory(trajectory.info)
-            return TaskObjective(input=user_query, output=trajectory)
-        
-        return None
+            
+        return tasks
 
     # ================= 辅助私有方法 =================
+
+    def _get_env_profile_obj(self):
+        """辅助方法：根据配置字符串获取 Profile 对象"""
+        env_type = self.env_profile_name
+        if env_type == "appworld":
+            return appworld.AppWorldProfile()
+        elif env_type == "bfcl":
+            return bfcl.BfclProfile()
+        elif env_type == "webshop":
+            return webshop.WebShopProfile()
+        return None
 
     def _chat_with_retry(self, messages: List[Dict], **kwargs) -> Optional[Any]:
         for i in range(self._max_llm_retries):
