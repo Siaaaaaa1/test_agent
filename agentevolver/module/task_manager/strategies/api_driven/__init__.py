@@ -86,7 +86,11 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         # 1. 动态获取沙箱 ID (保留 API 策略特有的逻辑)
         real_sandbox_id = self.get_next_sandbox_id()
         if real_sandbox_id:
-            task.task_id = real_sandbox_id
+            # task.task_id = real_sandbox_id
+            if task.metadata is None:
+                task.metadata = {}
+            # 将物理环境ID存入元数据，保留 task.task_id 为生成的唯一ID (如 gen_intra_0)
+            task.metadata["env_sandbox_id"] = real_sandbox_id
             
         logger.info(f"[ApiDriven] Exploring task (Phase: {task.metrics.get('phase')}) on Sandbox: {real_sandbox_id}")
 
@@ -135,7 +139,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         # 使用 execute 统一接管 Loop
         try:
             # 获取对应的 System Prompt
-            env_profile_name = self.config.get("env_profile", "appworld") # 需确保能获取 profile name
+            env_profile_name = self.config.get("env_service", {}).get("env_type", "appworld")            
             system_prompt = get_agent_interaction_system_prompt(env_profile_name)
 
             trajectory = env_worker.execute(

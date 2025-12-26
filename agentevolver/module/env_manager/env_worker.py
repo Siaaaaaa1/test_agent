@@ -45,6 +45,16 @@ class EnvWorker(object):
         self.task = task  # 保存任务对象
         self.env_type: str = task.env_type  # 环境类型 (例如 "appworld", "webshop")
         self.task_id: str = task.task_id  # 任务 ID (例如具体的某个用户场景 ID)
+
+        # =========== [新增代码] ===========
+        # 解析实际用于环境加载的物理 ID (Physical ID)
+        # 1. 优先尝试从 metadata 获取 'env_sandbox_id' (由 ApiDriven 策略注入)
+        # 2. 如果没有，则回退使用 task.task_id (适用于 Random 策略或标准数据集)
+        self.env_physical_id = task.task_id
+        if task.metadata and "env_sandbox_id" in task.metadata:
+            self.env_physical_id = task.metadata["env_sandbox_id"]
+            logger.debug(f"[EnvWorker] Using Physical ID {self.env_physical_id} instead of Logical ID {self.task_id}")
+        # =================================
         
         # 如果未提供 instance_id，则生成一个随机 UUID。这确保了每次执行都是独立的。
         self.instance_id: str = instance_id if instance_id is not None else uuid.uuid4().hex  
@@ -74,7 +84,7 @@ class EnvWorker(object):
             # 调用远程 API 初始化环境，返回初始状态 (通常包含 System Prompt 和 User Query)
             # params={'is_open_query': ...} 告诉环境这是一个开放式任务
             init_response = self.env.create_instance(env_type=self.env_type,
-                                                    task_id=self.task_id,
+                                                    task_id=self.env_physical_id,
                                                     instance_id=self.instance_id,
                                                     params={'is_open_query': self.is_open_query})
 

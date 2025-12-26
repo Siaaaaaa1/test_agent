@@ -127,14 +127,6 @@ class TaskManager(object):
         ]
 
         self._tasks: list[Task] = [] # 存储加载的种子任务
-        
-        # 3. 为策略注入依赖：将检索器、LLM 和环境配置文件传给策略内部使用
-        self._exploration_strategy._inject_deps(
-            self._old_retrival,
-            self._llm_client,
-            DashScopeClient(model_name='qwen3-235b-a22b-instruct-2507', max_tokens=8192), # 用于辅助任务的额外 Client
-            env_profile=env_profile
-        )
 
     @property
     def seed_tasks(self):
