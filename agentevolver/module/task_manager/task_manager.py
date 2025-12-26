@@ -255,25 +255,71 @@ class TaskManager(object):
         cross_ckpt_path = f"{resume_file}.extra.json"
         current_tasks_hash = self._compute_tasks_hash(tasks)
         
+        # 获取基础数据
         api_knowledge = getattr(self._exploration_strategy, 'api_knowledge', {})
         active_apps_set = getattr(self._exploration_strategy, 'active_apps', set(api_knowledge.keys()))
         active_apps_list = list(active_apps_set)
 
-        # --- 阶段 1: 单域探索 ---
+        # =================================================================
+        # 定义并行执行的原子函数 (Wrapper Functions)
+        # =================================================================
+        
+        def process_intra_task(idx: int, api_info: dict) -> List[TaskObjective]:
+            """单线程处理：单域任务生成 -> 探索 -> 总结"""
+            try:
+                # 1. 生成任务描述
+                task = self._exploration_strategy.generate_intra_task(
+                    app_name=api_info["app_name"], 
+                    target_api_name=api_info["api_name"]
+                )
+                if not task: return []
+                task.task_id = f"gen_intra_{idx}"
+                
+                # 2. 执行探索 (耗时操作)
+                # 注意：这里 "unknown" 是 placeholder，实际 random 策略中用于 dataset id
+                trajectories = self._exploration_strategy.explore(task, "unknown", "unknown")
+                
+                # 3. 总结结果 (涉及文件写操作，建议 Strategy 内部加锁，或接受偶尔的竞争)
+                results = []
+                if trajectories and trajectories[0].steps:
+                    results = self._exploration_strategy.summarize(task, trajectories[0])
+                return results if results else []
+            except Exception as e:
+                logger.error(f"[Intra-Task Error] Index {idx}: {e}")
+                return []
+
+        def process_cross_task(idx: int, seed_task: Task) -> List[TaskObjective]:
+            """单线程处理：跨域任务生成 -> 探索 -> 总结"""
+            try:
+                task = self._exploration_strategy.generate_cross_task(app_list=active_apps_list)
+                if not task: return []
+                task.task_id = f"gen_cross_{seed_task.task_id}_{idx}"
+                
+                trajectories = self._exploration_strategy.explore(task, "unknown", "unknown")
+                
+                results = []
+                if trajectories and trajectories[0].steps:
+                    results = self._exploration_strategy.summarize(task, trajectories[0])
+                return results if results else []
+            except Exception as e:
+                logger.error(f"[Cross-Task Error] Index {idx}: {e}")
+                return []
+
+        # =================================================================
+        # 阶段 1: 单域探索 (Intra-Domain) - 并行化
+        # =================================================================
         active_apis = []
         for app_name in sorted(list(active_apps_set)):
             if app_name in api_knowledge:
                 apis = api_knowledge[app_name].get("apis", {})
                 for api_name in sorted(apis.keys()):
-                    active_apis.append({
-                        "app_name": app_name,
-                        "api_name": api_name
-                    })
+                    active_apis.append({"app_name": app_name, "api_name": api_name})
         
         intra_pool = active_apis * a
         intra_res = []
         intra_processed_idx = set()
         
+        # 尝试恢复断点
         if os.path.exists(intra_ckpt_path):
             try:
                 with open(intra_ckpt_path, 'r') as f:
@@ -285,83 +331,216 @@ class TaskManager(object):
             except Exception as e:
                 logger.warning(f"Failed to load intra checkpoint: {e}")
 
+        # 使用线程池执行
         if len(intra_processed_idx) < len(intra_pool):
-            pbar = tqdm(total=len(intra_pool), desc="Stage 1: Intra-Domain (API-level)", disable=not show_progress)
+            parallel_num = max(1, min(self._num_exploration_threads, len(intra_pool)))
+            # 生成待处理的索引列表
+            remaining_indices = [i for i in range(len(intra_pool)) if i not in intra_processed_idx]
+            # 分批次处理以便定期保存
+            batch_size = parallel_num * 2 
+            batches = [remaining_indices[i:i + batch_size] for i in range(0, len(remaining_indices), batch_size)]
+
+            pbar = tqdm(total=len(intra_pool), desc="Stage 1: Intra-Domain (Parallel)", disable=not show_progress)
             pbar.update(len(intra_processed_idx))
-            
-            for idx, api_info in enumerate(intra_pool):
-                if idx in intra_processed_idx:
-                    continue
-                
-                # 1. 生成任务
-                task = self._exploration_strategy.generate_intra_task(
-                    app_name=api_info["app_name"], 
-                    target_api_name=api_info["api_name"]
-                )
-                
-                if task:
-                    task.task_id = f"gen_intra_{idx}"
-                    # 2. 执行探索（现在由 Strategy 内部全权负责，包括 Init Agent）
-                    trajectories = self._exploration_strategy.explore(task, "unknown", "unknown")
-                    
-                    # 3. 总结
-                    if trajectories and trajectories[0].steps:
-                        objs = self._exploration_strategy.summarize(task, trajectories[0])
-                        if objs:
+
+            with ThreadPoolExecutor(max_workers=parallel_num) as pool:
+                for batch_idxs in batches:
+                    future_to_idx = {
+                        pool.submit(process_intra_task, idx, intra_pool[idx]): idx 
+                        for idx in batch_idxs
+                    }
+
+                    for future in as_completed(future_to_idx):
+                        idx = future_to_idx[future]
+                        try:
+                            objs = future.result()
                             intra_res.extend(objs)
-                
-                intra_processed_idx.add(idx)
-                pbar.update(1)
-                
-                intra_res = functools.reduce(lambda x, f: f.filter(x), self._realtime_filters, intra_res)
-                self._save_checkpoint(intra_ckpt_path, intra_res, intra_processed_idx, len(intra_pool), current_tasks_hash)
+                        except Exception as e:
+                            logger.error(f"Unhandled exception in future for task {idx}: {e}")
+                        finally:
+                            intra_processed_idx.add(idx)
+                            pbar.update(1)
+                    
+                    # 每个批次结束后保存一次断点和过滤
+                    intra_res = functools.reduce(lambda x, f: f.filter(x), self._realtime_filters, intra_res)
+                    self._save_checkpoint(intra_ckpt_path, intra_res, intra_processed_idx, len(intra_pool), current_tasks_hash)
+            
             pbar.close()
 
-        # --- 阶段 2: 跨域合成 ---
+        # =================================================================
+        # 阶段 2: 跨域合成 (Cross-Domain) - 并行化
+        # =================================================================
         cross_res = []
+        # 注意：这里逻辑是从 intra 完成后才开始 extra，保持原逻辑流
         if len(intra_processed_idx) >= len(intra_pool):
             cross_pool = list(tasks) * b
             cross_processed_idx = set()
             
+            # 尝试恢复断点
             if os.path.exists(cross_ckpt_path):
                 try:
                     with open(cross_ckpt_path, 'r') as f:
                         cp = json.load(f)
+                        # 这里不做 hash 强校验，因为 cross 依赖较少
                         cross_res = [TaskObjective.parse_raw(json.dumps(obj)) for obj in cp.get('results', [])]
                         cross_processed_idx = {int(i) for i in cp.get('processed_indices', [])}
                         logger.info(f"Cross-Domain resumed: {len(cross_res)} tasks loaded.")
                 except Exception: pass
 
-            pbar = tqdm(total=len(cross_pool), desc="Stage 2: Cross-Domain (b)", disable=not show_progress)
-            pbar.update(len(cross_processed_idx))
-            
-            for idx, seed_task in enumerate(cross_pool):
-                if idx in cross_processed_idx:
-                    continue
+            if len(cross_processed_idx) < len(cross_pool):
+                parallel_num = max(1, min(self._num_exploration_threads, len(cross_pool)))
+                remaining_indices = [i for i in range(len(cross_pool)) if i not in cross_processed_idx]
+                batches = [remaining_indices[i:i + parallel_num * 2] for i in range(0, len(remaining_indices), parallel_num * 2)]
+
+                pbar = tqdm(total=len(cross_pool), desc="Stage 2: Cross-Domain (Parallel)", disable=not show_progress)
+                pbar.update(len(cross_processed_idx))
+
+                with ThreadPoolExecutor(max_workers=parallel_num) as pool:
+                    for batch_idxs in batches:
+                        future_to_idx = {
+                            pool.submit(process_cross_task, idx, cross_pool[idx]): idx 
+                            for idx in batch_idxs
+                        }
+
+                        for future in as_completed(future_to_idx):
+                            idx = future_to_idx[future]
+                            try:
+                                objs = future.result()
+                                cross_res.extend(objs)
+                            except Exception as e:
+                                logger.error(f"Unhandled exception in cross task {idx}: {e}")
+                            finally:
+                                cross_processed_idx.add(idx)
+                                pbar.update(1)
+                        
+                        # 批次保存
+                        current_batch_all = intra_res + cross_res
+                        current_batch_all = functools.reduce(lambda x, f: f.filter(x), self._realtime_filters, current_batch_all)
+                        self._save_checkpoint(cross_ckpt_path, cross_res, cross_processed_idx, len(cross_pool), current_tasks_hash)
                 
-                task = self._exploration_strategy.generate_cross_task(app_list=active_apps_list)
-                
-                if task:
-                    task.task_id = f"gen_cross_{seed_task.task_id}_{idx}"
-                    
-                    # 同样的调用接口
-                    trajectories = self._exploration_strategy.explore(task, "unknown", "unknown")
-                    
-                    if trajectories and trajectories[0].steps:
-                        objs = self._exploration_strategy.summarize(task, trajectories[0])
-                        if objs:
-                            cross_res.extend(objs)
-                
-                cross_processed_idx.add(idx)
-                pbar.update(1)
-                
-                current_batch_all = intra_res + cross_res
-                current_batch_all = functools.reduce(lambda x, f: f.filter(x), self._realtime_filters, current_batch_all)
-                
-                self._save_checkpoint(cross_ckpt_path, cross_res, cross_processed_idx, len(cross_pool), current_tasks_hash)
-            pbar.close()
+                pbar.close()
         
         return self._apply_post_filter(intra_res + cross_res)
+
+    # def _generate_task_api_driven(self, tasks: Sequence[Task], *, show_progress=False, resume_file: Optional[str] = None) -> list[TaskObjective]:
+    #     strategy_args = self._config.task_manager.get('exploration_strategy_args', {})
+    #     a = strategy_args.get('a', 1)
+    #     b = strategy_args.get('b', 1)
+        
+    #     if resume_file is None:
+    #         resume_file = '.generate_task_api'
+        
+    #     intra_ckpt_path = f"{resume_file}.intra.json"
+    #     cross_ckpt_path = f"{resume_file}.extra.json"
+    #     current_tasks_hash = self._compute_tasks_hash(tasks)
+        
+    #     api_knowledge = getattr(self._exploration_strategy, 'api_knowledge', {})
+    #     active_apps_set = getattr(self._exploration_strategy, 'active_apps', set(api_knowledge.keys()))
+    #     active_apps_list = list(active_apps_set)
+
+    #     # --- 阶段 1: 单域探索 ---
+    #     active_apis = []
+    #     for app_name in sorted(list(active_apps_set)):
+    #         if app_name in api_knowledge:
+    #             apis = api_knowledge[app_name].get("apis", {})
+    #             for api_name in sorted(apis.keys()):
+    #                 active_apis.append({
+    #                     "app_name": app_name,
+    #                     "api_name": api_name
+    #                 })
+        
+    #     intra_pool = active_apis * a
+    #     intra_res = []
+    #     intra_processed_idx = set()
+        
+    #     if os.path.exists(intra_ckpt_path):
+    #         try:
+    #             with open(intra_ckpt_path, 'r') as f:
+    #                 cp = json.load(f)
+    #                 if cp.get('tasks_hash') == current_tasks_hash:
+    #                     intra_res = [TaskObjective.parse_raw(json.dumps(obj)) for obj in cp.get('results', [])]
+    #                     intra_processed_idx = {int(i) for i in cp.get('processed_indices', [])}
+    #                     logger.info(f"Intra-Domain resumed: {len(intra_res)} tasks loaded.")
+    #         except Exception as e:
+    #             logger.warning(f"Failed to load intra checkpoint: {e}")
+
+    #     if len(intra_processed_idx) < len(intra_pool):
+    #         pbar = tqdm(total=len(intra_pool), desc="Stage 1: Intra-Domain (API-level)", disable=not show_progress)
+    #         pbar.update(len(intra_processed_idx))
+            
+    #         for idx, api_info in enumerate(intra_pool):
+    #             if idx in intra_processed_idx:
+    #                 continue
+                
+    #             # 1. 生成任务
+    #             task = self._exploration_strategy.generate_intra_task(
+    #                 app_name=api_info["app_name"], 
+    #                 target_api_name=api_info["api_name"]
+    #             )
+                
+    #             if task:
+    #                 task.task_id = f"gen_intra_{idx}"
+    #                 # 2. 执行探索（现在由 Strategy 内部全权负责，包括 Init Agent）
+    #                 trajectories = self._exploration_strategy.explore(task, "unknown", "unknown")
+                    
+    #                 # 3. 总结
+    #                 if trajectories and trajectories[0].steps:
+    #                     objs = self._exploration_strategy.summarize(task, trajectories[0])
+    #                     if objs:
+    #                         intra_res.extend(objs)
+                
+    #             intra_processed_idx.add(idx)
+    #             pbar.update(1)
+                
+    #             intra_res = functools.reduce(lambda x, f: f.filter(x), self._realtime_filters, intra_res)
+    #             self._save_checkpoint(intra_ckpt_path, intra_res, intra_processed_idx, len(intra_pool), current_tasks_hash)
+    #         pbar.close()
+
+    #     # --- 阶段 2: 跨域合成 ---
+    #     cross_res = []
+    #     if len(intra_processed_idx) >= len(intra_pool):
+    #         cross_pool = list(tasks) * b
+    #         cross_processed_idx = set()
+            
+    #         if os.path.exists(cross_ckpt_path):
+    #             try:
+    #                 with open(cross_ckpt_path, 'r') as f:
+    #                     cp = json.load(f)
+    #                     cross_res = [TaskObjective.parse_raw(json.dumps(obj)) for obj in cp.get('results', [])]
+    #                     cross_processed_idx = {int(i) for i in cp.get('processed_indices', [])}
+    #                     logger.info(f"Cross-Domain resumed: {len(cross_res)} tasks loaded.")
+    #             except Exception: pass
+
+    #         pbar = tqdm(total=len(cross_pool), desc="Stage 2: Cross-Domain (b)", disable=not show_progress)
+    #         pbar.update(len(cross_processed_idx))
+            
+    #         for idx, seed_task in enumerate(cross_pool):
+    #             if idx in cross_processed_idx:
+    #                 continue
+                
+    #             task = self._exploration_strategy.generate_cross_task(app_list=active_apps_list)
+                
+    #             if task:
+    #                 task.task_id = f"gen_cross_{seed_task.task_id}_{idx}"
+                    
+    #                 # 同样的调用接口
+    #                 trajectories = self._exploration_strategy.explore(task, "unknown", "unknown")
+                    
+    #                 if trajectories and trajectories[0].steps:
+    #                     objs = self._exploration_strategy.summarize(task, trajectories[0])
+    #                     if objs:
+    #                         cross_res.extend(objs)
+                
+    #             cross_processed_idx.add(idx)
+    #             pbar.update(1)
+                
+    #             current_batch_all = intra_res + cross_res
+    #             current_batch_all = functools.reduce(lambda x, f: f.filter(x), self._realtime_filters, current_batch_all)
+                
+    #             self._save_checkpoint(cross_ckpt_path, cross_res, cross_processed_idx, len(cross_pool), current_tasks_hash)
+    #         pbar.close()
+        
+    #     return self._apply_post_filter(intra_res + cross_res)
 
     def _save_checkpoint(self, path, results, processed_indices, total, hash_val):
         """保存任务生成的断点信息到 JSON 文件"""

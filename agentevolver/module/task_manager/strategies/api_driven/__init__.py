@@ -481,3 +481,59 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         current_data["logs"].append(metadata)
         with open(self.cross_memory_path, 'w', encoding='utf-8') as f:
             json.dump(current_data, f, indent=2)
+
+    def _get_llm_chat_fn(self, llm_client:LlmClient, sampling_params: Optional[dict] = None) -> Callable:
+        """
+        辅助函数：封装 LLM 客户端调用，增加重试机制和参数合并。
+
+        Args:
+            llm_client (LlmClient): 基础 LLM 客户端。
+            sampling_params (Optional[dict]): 默认采样参数。
+
+        Returns:
+            Callable: 封装后的聊天函数。
+        """
+        def llm_chat(
+            messages: list[dict[str, str]],
+            custom_sampling_params: Optional[dict] = None,
+            request_id: Optional[str] = None,
+        ) -> dict:
+            """
+            实际执行聊天的闭包函数。
+            输入格式: [{"role": "system", "value": "..."}, {"role": "user", "value": "..."}]
+            输出格式: {"role": "assistant", "content": "..."}
+            """
+            # 合并采样参数：自定义参数 > 默认参数
+            updated_sampling_params = {}
+            if sampling_params:
+                updated_sampling_params.update(sampling_params)
+            if custom_sampling_params:
+                updated_sampling_params.update(custom_sampling_params)
+
+            input_messages = copy.deepcopy(messages)
+            res = None
+            
+            # 带指数退避 (Exponential Backoff) 的重试循环
+            for i in range(self._max_llm_retries):
+                try:
+                    res = llm_client.chat(
+                        messages=input_messages, sampling_params=updated_sampling_params
+                    )
+                    # 如果结果不为空，跳出重试
+                    if res is not None and res != "":
+                        break
+
+                except Exception as e:
+                    logger.exception(f"rollout_server.{i} error: {e.args}")
+                    # 指数退避：第一次等 1s，第二次等 2s，第三次等 4s...
+                    time.sleep(2**i)
+
+            assert res is not None and res != "", f"LLM client failed to chat"
+            
+            # 返回标准化的响应字典
+            return {
+                "role": "assistant",
+                "content": res,
+            }
+
+        return llm_chat
