@@ -264,16 +264,17 @@ class TaskManager(object):
         # 定义并行执行的原子函数 (Wrapper Functions)
         # =================================================================
         
-        def process_intra_task(idx: int, api_info: dict) -> List[TaskObjective]:
+        def process_intra_task(idx: int, api_info: dict, task: Task) -> List[TaskObjective]:
             """单线程处理：单域任务生成 -> 探索 -> 总结"""
             try:
                 # 1. 生成任务描述
                 task = self._exploration_strategy.generate_intra_task(
                     app_name=api_info["app_name"], 
-                    target_api_name=api_info["api_name"]
+                    target_api_name=api_info["api_name"],
+                    task=task
                 )
                 if not task: return []
-                task.task_id = f"gen_intra_{idx}"
+                task.metrics["data_id"] = f"gen_intra_{idx}"
                 
                 # 2. 执行探索 (耗时操作)
                 # 注意：这里 "unknown" 是 placeholder，实际 random 策略中用于 dataset id
@@ -288,12 +289,12 @@ class TaskManager(object):
                 logger.error(f"[Intra-Task Error] Index {idx}: {e}")
                 return []
 
-        def process_cross_task(idx: int, seed_task: Task) -> List[TaskObjective]:
+        def process_cross_task(idx: int, active_apps_list: List[str], task: Task) -> List[TaskObjective]:
             """单线程处理：跨域任务生成 -> 探索 -> 总结"""
             try:
-                task = self._exploration_strategy.generate_cross_task(app_list=active_apps_list)
+                task = self._exploration_strategy.generate_cross_task(app_list=active_apps_list, task=task)
                 if not task: return []
-                task.task_id = f"gen_cross_{seed_task.task_id}_{idx}"
+                task.metrics["data_id"] = f"gen_cross_{idx}"
                 
                 trajectories = self._exploration_strategy.explore(task, "unknown", "unknown")
                 
@@ -315,7 +316,7 @@ class TaskManager(object):
                 for api_name in sorted(apis.keys()):
                     active_apis.append({"app_name": app_name, "api_name": api_name})
         
-        intra_pool = active_apis * a
+        intra_task_pool = list(copy.copy(tasks)) * a
         intra_res = []
         intra_processed_idx = set()
         
@@ -332,21 +333,21 @@ class TaskManager(object):
                 logger.warning(f"Failed to load intra checkpoint: {e}")
 
         # 使用线程池执行
-        if len(intra_processed_idx) < len(intra_pool):
-            parallel_num = max(1, min(self._num_exploration_threads, len(intra_pool)))
+        if len(intra_processed_idx) < len(intra_task_pool):
+            parallel_num = max(1, min(self._num_exploration_threads, len(intra_task_pool)))
             # 生成待处理的索引列表
-            remaining_indices = [i for i in range(len(intra_pool)) if i not in intra_processed_idx]
+            remaining_indices = [i for i in range(len(intra_task_pool)) if i not in intra_processed_idx]
             # 分批次处理以便定期保存
             batch_size = parallel_num * 2 
             batches = [remaining_indices[i:i + batch_size] for i in range(0, len(remaining_indices), batch_size)]
 
-            pbar = tqdm(total=len(intra_pool), desc="Stage 1: Intra-Domain (Parallel)", disable=not show_progress)
+            pbar = tqdm(total=len(intra_task_pool), desc="Stage 1: Intra-Domain (Parallel)", disable=not show_progress)
             pbar.update(len(intra_processed_idx))
 
             with ThreadPoolExecutor(max_workers=parallel_num) as pool:
                 for batch_idxs in batches:
                     future_to_idx = {
-                        pool.submit(process_intra_task, idx, intra_pool[idx]): idx 
+                        pool.submit(process_intra_task, idx, intra_task_pool[idx]): idx 
                         for idx in batch_idxs
                     }
 
@@ -372,8 +373,8 @@ class TaskManager(object):
         # =================================================================
         cross_res = []
         # 注意：这里逻辑是从 intra 完成后才开始 extra，保持原逻辑流
-        if len(intra_processed_idx) >= len(intra_pool):
-            cross_pool = list(tasks) * b
+        if len(intra_processed_idx) >= len(intra_task_pool):
+            cross_task_pool = copy.copy(tasks) * b
             cross_processed_idx = set()
             
             # 尝试恢复断点
@@ -387,18 +388,18 @@ class TaskManager(object):
                         logger.info(f"Cross-Domain resumed: {len(cross_res)} tasks loaded.")
                 except Exception: pass
 
-            if len(cross_processed_idx) < len(cross_pool):
-                parallel_num = max(1, min(self._num_exploration_threads, len(cross_pool)))
-                remaining_indices = [i for i in range(len(cross_pool)) if i not in cross_processed_idx]
+            if len(cross_processed_idx) < len(cross_task_pool):
+                parallel_num = max(1, min(self._num_exploration_threads, len(cross_task_pool)))
+                remaining_indices = [i for i in range(len(cross_task_pool)) if i not in cross_processed_idx]
                 batches = [remaining_indices[i:i + parallel_num * 2] for i in range(0, len(remaining_indices), parallel_num * 2)]
 
-                pbar = tqdm(total=len(cross_pool), desc="Stage 2: Cross-Domain (Parallel)", disable=not show_progress)
+                pbar = tqdm(total=len(cross_task_pool), desc="Stage 2: Cross-Domain (Parallel)", disable=not show_progress)
                 pbar.update(len(cross_processed_idx))
 
                 with ThreadPoolExecutor(max_workers=parallel_num) as pool:
                     for batch_idxs in batches:
                         future_to_idx = {
-                            pool.submit(process_cross_task, idx, cross_pool[idx]): idx 
+                            pool.submit(process_cross_task, idx, cross_task_pool[idx]): idx 
                             for idx in batch_idxs
                         }
 

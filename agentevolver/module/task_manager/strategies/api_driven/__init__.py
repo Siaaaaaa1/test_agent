@@ -203,7 +203,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
 
     # ================= 任务生成 (Generation) =================
 
-    def generate_intra_task(self, app_name: str = None, target_api_name: str = None) -> Optional[Task]:
+    def generate_intra_task(self, app_name: str = None, target_api_name: str = None, task: Task = None) -> Optional[Task]:
         """
         生成单域探索任务。
         """
@@ -243,18 +243,15 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         
         response = self._chat_with_retry(messages=[{"role": "user", "content": prompt}], temperature=0.7)
         if not response: return None
-            
-        return Task(
-            task_id="intra_placeholder",
-            instruction=response.content.strip(),
-            metrics={
+        task.intruction = response.content.strip()
+        task.metrics = {
                 "phase": "intra", 
                 "target_app": app_name, 
                 "target_api": target_api_name
             }
-        )
+        return task
 
-    def generate_cross_task(self, app_list: List[str] = None) -> Optional[Task]:
+    def generate_cross_task(self, app_list: List[str] = None, task: Task = None) -> Optional[Task]:
         """
         生成跨域探索任务。
         """
@@ -339,25 +336,16 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             user_query = res_json.get("user_query", "")
             target_action = res_json.get("target_action_api", "")
         except Exception: return None
-
-        return Task(
-            task_id="cross_placeholder",
-            instruction=user_query,
-            metrics={
+        task.instruction = user_query
+        task.metrics = {
                 "phase": "extra",
                 "info_app": info_app_name,
                 "exec_app": exec_app_name,
                 "target_api": target_action,
-                
-                # [注释] 移除注入标记
-                # "setup_action": "inject_data",
-                # "app": info_app_name,
-                # "content": injection_content,
-                
                 "sampled_info_apis": list(info_apis.keys()),
                 "sampled_exec_apis": list(exec_apis.keys())
             }
-        )
+        return task
 
     # ================= 阶段总结逻辑 (Summarize) =================
 
