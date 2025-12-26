@@ -4,7 +4,9 @@ import random
 import time
 import itertools
 import uuid
-from typing import List, Dict, Any, Optional, Set
+import threading
+import copy
+from typing import List, Dict, Any, Optional, Set, Callable
 
 from loguru import logger
 from agentevolver.module.env_manager.env_worker import EnvWorker, TrajExpConfig
@@ -16,10 +18,6 @@ from agentevolver.schema.task import Task, TaskObjective
 from agentevolver.schema.trajectory import Trajectory
 from agentevolver.module.task_manager.base import LlmClient
 from agentevolver.utils.utils import extract_json_from_str
-
-# [新增] 引入执行组件以支持动态初始化
-from agentevolver.module.agent_flow.agent_flow import AgentFlow
-from agentevolver.module.env_manager.env_worker import EnvWorker
 
 # 引入预定义的 Prompt 模板
 from agentevolver.module.task_manager.strategies.api_driven.prompts import (
@@ -34,7 +32,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
     """
     API 驱动的探索策略类
     重构版：包含完整的执行循环（explore）和总结逻辑（summarize），
-    且 AgentFlow 为动态初始化。
+    修复了并发写入冲突、拼写错误及执行时 query 缺失的问题。
     """
 
     def __init__(self, tokenizer, config, **kwargs):
@@ -44,6 +42,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         
         self.llm_client = LlmClient(config)
         self._max_llm_retries = kwargs.get("max_llm_retries", 3)
+        self._lock = threading.Lock() # 用于保护记忆文件的并发写入
         
         # --- 路径与文件配置 ---
         self.api_knowledge_path = kwargs.get(
@@ -80,13 +79,12 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
 
     def explore(self, task: Task, data_id: str, rollout_id: str) -> List[Trajectory]:
         """
-        [ApiDriven] 执行探索任务的核心入口 (重构版)。
+        [ApiDriven] 执行探索任务的核心入口。
         模仿 Random 策略，使用 EnvWorker.execute 接管执行流。
         """
         # 1. 动态获取沙箱 ID (保留 API 策略特有的逻辑)
         real_sandbox_id = self.get_next_sandbox_id()
         if real_sandbox_id:
-            # task.task_id = real_sandbox_id
             if task.metadata is None:
                 task.metadata = {}
             # 将物理环境ID存入元数据，保留 task.task_id 为生成的唯一ID (如 gen_intra_0)
@@ -95,7 +93,6 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         logger.info(f"[ApiDriven] Exploring task (Phase: {task.metrics.get('phase')}) on Sandbox: {real_sandbox_id}")
 
         # 2. 初始化环境工作者 (EnvWorker)
-        # 注意：这里需要确保 self.tokenizer 已在 __init__ 中被正确赋值，否则需从 config 加载
         env_worker = EnvWorker(
             task=task,
             config=self.config, 
@@ -104,14 +101,12 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         )
 
         # 3. 构造 LLM 聊天函数
-        # 使用探索专用的采样参数（需要确保 config 中有这些 key，或者提供默认值）
         sampling_params = {
             "temperature": self.config.get("exploration_llm_temperature", 1.0),
             "top_p": self.config.get("exploration_llm_top_p", 1.0),
             "top_k": self.config.get("exploration_llm_top_k", -1),
         }
         
-        # 假设父类或当前类中有 _get_llm_chat_fn 方法，且 self.llm_client 已初始化
         llm_chat_fn = self._get_llm_chat_fn(
             self.llm_client, 
             sampling_params=sampling_params
@@ -125,18 +120,11 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             config=self.config,
         )
         
-        # 设置最大步数和模型长度
-        agent_flow.max_steps = self.config.get("max_explore_step", 10) # 建议从配置读取
-        agent_flow.max_model_len = 102400 # 硬编码限制，需确保模型支持
+        # 动态设置最大步数和模型长度
+        agent_flow.max_steps = self.config.get("max_explore_step", 10) 
+        agent_flow.max_model_len = self.config.get("max_model_len", 102400)
 
-        # 5. [保留但注释] 环境数据注入逻辑
-        # 由于 EnvWorker.execute 内部会调用 reset，注入逻辑可能需要移到 EnvWorker 的 reset 钩子中
-        # 或者在 execute 之前手动处理，但这会破坏 execute 的封装。
-        # if task.metrics and task.metrics.get("setup_action") == "inject_data":
-        #     pass # 需另行处理注入逻辑
-
-        # 6. 执行 Agent，获取轨迹
-        # 使用 execute 统一接管 Loop
+        # 5. 执行 Agent，获取轨迹
         try:
             # 获取对应的 System Prompt
             env_profile_name = self.config.get("env_service", {}).get("env_type", "appworld")            
@@ -159,22 +147,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
 
         except Exception as e:
             logger.error(f"[ApiDriven] Explore failed on Sandbox {real_sandbox_id}: {e}")
-            # 返回空轨迹或抛出异常，视上层处理逻辑而定
             return [Trajectory(steps=[])]
-
-    # def _inject_context(self, env_worker, metrics: Dict):
-    #     """
-    #     [已弃用] 向环境注入初始数据。
-    #     根据用户要求，此逻辑已被注释。
-    #     """
-    #     try:
-    #         app = metrics.get("app")
-    #         content = metrics.get("content")
-    #         logger.info(f"[Injection Skipped] App: {app}, Content: {content}")
-    #         # if hasattr(env_worker, "execute_god_command"):
-    #         #     env_worker.execute_god_command(f"inject {app}", content=content)
-    #     except Exception as e:
-    #         logger.warning(f"Injection failed: {e}")
 
     # ================= 总结逻辑 =================
 
@@ -243,7 +216,10 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         
         response = self._chat_with_retry(messages=[{"role": "user", "content": prompt}], temperature=0.7)
         if not response: return None
-        task.intruction = response.content.strip()
+        
+        # [Fix Typo & Logic] 修正属性名并赋值给 query，确保执行时生效
+        task.instruction = response.content.strip()
+        task.query = task.instruction 
         task.metrics = {
                 "phase": "intra", 
                 "target_app": app_name, 
@@ -307,9 +283,6 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         info_apis = get_sampled_apis(info_app_name, "info", 5)
         exec_apis = get_sampled_apis(exec_app_name, "exec", 5)
 
-        # [修改] 移除实际的注入内容，但在 prompt 中仍可假设数据存在，或者让 LLM 自由发挥
-        # injection_content = f"Code_{uuid.uuid4().hex[:6].upper()}"
-
         system_tools_hint = (
             "Available System Tools:\n"
             "- supervisor: Use to coordinate steps.\n"
@@ -336,7 +309,10 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             user_query = res_json.get("user_query", "")
             target_action = res_json.get("target_action_api", "")
         except Exception: return None
+        
+        # [Fix Logic] 赋值给 query
         task.instruction = user_query
+        task.query = user_query
         task.metrics = {
                 "phase": "extra",
                 "info_app": info_app_name,
@@ -368,9 +344,11 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             
         user_query = bt_response.content.strip()
         
-        if target_app not in self.explored_intra_apps:
-            self.explored_intra_apps.add(target_app)
-            self._save_intra_memory(target_app)
+        # [Fix Race Condition] 加锁
+        with self._lock:
+            if target_app not in self.explored_intra_apps:
+                self.explored_intra_apps.add(target_app)
+                self._save_intra_memory(target_app)
             
         trajectory.info["synthesized_user_query"] = user_query
         trajectory.info["exploration_type"] = "intra_domain"
@@ -389,7 +367,10 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         if called_info and called_exec:
             trajectory.info["synthesized_user_query"] = user_query
             trajectory.info["exploration_type"] = "cross_domain"
-            self._save_cross_memory(trajectory.info)
+            
+            # [Fix Race Condition] 加锁
+            with self._lock:
+                self._save_cross_memory(trajectory.info)
             return TaskObjective(input=user_query, output=trajectory)
         
         return None
@@ -455,6 +436,8 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         return {}
 
     def _save_intra_memory(self, app_name: str):
+        # 注意：此方法应在锁保护下调用，或内部加锁。目前上层 summarise 方法已加锁。
+        # 为安全起见，这里不需要额外加锁，只要保证调用方正确。
         os.makedirs(os.path.dirname(self.intra_memory_path), exist_ok=True)
         current_data = self._load_json(self.intra_memory_path)
         current_apps = set(current_data.get("explored_apps", []))
@@ -473,25 +456,12 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
     def _get_llm_chat_fn(self, llm_client:LlmClient, sampling_params: Optional[dict] = None) -> Callable:
         """
         辅助函数：封装 LLM 客户端调用，增加重试机制和参数合并。
-
-        Args:
-            llm_client (LlmClient): 基础 LLM 客户端。
-            sampling_params (Optional[dict]): 默认采样参数。
-
-        Returns:
-            Callable: 封装后的聊天函数。
         """
         def llm_chat(
             messages: list[dict[str, str]],
             custom_sampling_params: Optional[dict] = None,
             request_id: Optional[str] = None,
         ) -> dict:
-            """
-            实际执行聊天的闭包函数。
-            输入格式: [{"role": "system", "value": "..."}, {"role": "user", "value": "..."}]
-            输出格式: {"role": "assistant", "content": "..."}
-            """
-            # 合并采样参数：自定义参数 > 默认参数
             updated_sampling_params = {}
             if sampling_params:
                 updated_sampling_params.update(sampling_params)
@@ -501,24 +471,20 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             input_messages = copy.deepcopy(messages)
             res = None
             
-            # 带指数退避 (Exponential Backoff) 的重试循环
             for i in range(self._max_llm_retries):
                 try:
                     res = llm_client.chat(
                         messages=input_messages, sampling_params=updated_sampling_params
                     )
-                    # 如果结果不为空，跳出重试
                     if res is not None and res != "":
                         break
 
                 except Exception as e:
                     logger.exception(f"rollout_server.{i} error: {e.args}")
-                    # 指数退避：第一次等 1s，第二次等 2s，第三次等 4s...
                     time.sleep(2**i)
 
             assert res is not None and res != "", f"LLM client failed to chat"
             
-            # 返回标准化的响应字典
             return {
                 "role": "assistant",
                 "content": res,
