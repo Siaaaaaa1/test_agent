@@ -337,7 +337,65 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
 
     # ================= 阶段总结逻辑 (Summarize) =================
 
+    # def summarize_intra(self, task: Task, trajectory: Trajectory) -> Optional[TaskObjective]:
+    #     target_app = task.metrics.get("target_app")
+    #     target_api = task.metrics.get("target_api")
+        
+    #     if not self._check_api_called(trajectory, target_api):
+    #         return None
+            
+    #     tool_trace = self._extract_tool_trace(trajectory)
+    #     bt_prompt = BACK_TRANSLATION_PROMPT.format(
+    #         tool_calls_trace=tool_trace,
+    #         target_api_name=target_api
+    #     )
+        
+    #     bt_response = self._chat_with_retry(messages=[{"role": "user", "content": bt_prompt}])
+    #     if not bt_response:
+    #         return None
+            
+    #     user_query = bt_response.content.strip()
+        
+    #     # [Fix Race Condition] 加锁
+    #     with self._lock:
+    #         if target_app not in self.explored_intra_apps:
+    #             self.explored_intra_apps.add(target_app)
+    #             self._save_intra_memory(target_app)
+            
+    #     trajectory.info["synthesized_user_query"] = user_query
+    #     trajectory.info["exploration_type"] = "intra_domain"
+        
+    #     return TaskObjective(input=user_query, output=trajectory)
+
+    # def summarize_cross(self, task: Task, trajectory: Trajectory) -> Optional[TaskObjective]:
+    #     info_app = task.metrics.get("info_app")
+    #     exec_app = task.metrics.get("exec_app")
+    #     target_api = task.metrics.get("target_api")
+    #     user_query = task.instruction 
+        
+    #     called_info = self._check_app_usage(trajectory, info_app)
+    #     called_exec = self._check_api_called(trajectory, target_api)
+        
+    #     if called_info and called_exec:
+    #         trajectory.info["synthesized_user_query"] = user_query
+    #         trajectory.info["exploration_type"] = "cross_domain"
+            
+    #         # [Fix Race Condition] 加锁
+    #         with self._lock:
+    #             self._save_cross_memory(trajectory.info)
+    #         return TaskObjective(input=user_query, output=trajectory)
+        
+    #     return None
     def summarize_intra(self, task: Task, trajectory: Trajectory) -> Optional[TaskObjective]:
+        llm_fn = self._get_llm_chat_fn(
+            self.llm_client_summarize,
+            sampling_params={
+                "temperature": self._exploration_llm_temperature,
+                "top_p": self._exploration_llm_top_p,
+                "top_k": self._exploration_llm_top_k,
+            }
+        )
+
         target_app = task.metrics.get("target_app")
         target_api = task.metrics.get("target_api")
         
@@ -364,6 +422,8 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             
         trajectory.info["synthesized_user_query"] = user_query
         trajectory.info["exploration_type"] = "intra_domain"
+
+        tasks = parse_tasks_from_response(task, bt_response)
         
         return TaskObjective(input=user_query, output=trajectory)
 
