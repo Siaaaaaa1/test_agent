@@ -113,134 +113,155 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
 
     # ================= 阶段生成逻辑 (Generation) =================
 
-    def generate_intra_task(self) -> Optional[Task]:
+    def generate_intra_task(self, app_name: str = None, target_api_name: str = None) -> Optional[Task]:
         """
-        生成单域探索任务：针对特定的 API 编写探索指令。
-        流程：随机选一个未掌握的 App -> 选一个执行类 API -> 让 LLM 生成操作该 API 的指令。
+        生成单域探索任务：支持指定 API，并按 7:3 比例探索执行/信息类功能。
         """
+        # 1. 确定目标 App
         if not app_name:
-            # 原有逻辑：从未掌握的 App 中随机选
             unmastered_apps = list(self.active_apps - self.explored_intra_apps)
-            if not unmastered_apps:
-                app_name = random.choice(list(self.active_apps))
-            else:
-                app_name = random.choice(unmastered_apps)
+            app_name = random.choice(unmastered_apps) if unmastered_apps else random.choice(list(self.active_apps))
         
-        logger.debug(f"[ApiDriven] Generating Task for specific App: {app_name}")
-        
+        logger.debug(f"[ApiDriven] Generating Task for: {app_name}")
         app_knowledge = self.api_knowledge.get(app_name, {})
         apis = app_knowledge.get("apis", {})
-        
-        # 筛选“执行类”API（会对环境产生副作用的操作，如创建、修改）
-        action_apis = [k for k, v in apis.items() if v.get("action_type") == "Executive Action"]
-        if not action_apis:
-            # 退而求其次，寻找非 GET 且带参数的 API
-            action_apis = [k for k, v in apis.items() if v.get("method", "").upper() != "GET" and len(v.get("parameters", [])) > 0]
-        
-        if not action_apis:
-            logger.warning(f"No executable actions for {app_name}")
+
+        # 2. 确定目标 API
+        if not target_api_name:
+            # 分类 API
+            action_apis = [k for k, v in apis.items() if v.get("action_type") == "Executive Action"]
+            info_apis_list = [k for k, v in apis.items() if v.get("action_type") == "Informational Action"]
+            
+            roll = random.random()
+            if roll < 0.7 and action_apis:
+                # 70% 概率探索执行类
+                target_api_name = random.choice(action_apis)
+            elif info_apis_list:
+                # 30% 概率探索信息类（或执行类为空时兜底）
+                target_api_name = random.choice(info_apis_list)
+            else:
+                # 极端兜底：随机选一个
+                target_api_name = random.choice(list(apis.keys())) if apis else None
+
+        if not target_api_name:
+            logger.warning(f"No suitable APIs found for {app_name}")
             return None
 
-        # 随机选择一个目标 API
-        target_api_name = random.choice(action_apis)
-        target_api_def = apis[target_api_name]
-        # 获取该 App 下的其他信息类 API，供 LLM 在规划时参考（例如先查询再修改）
-        info_apis = {k: v for k, v in apis.items() if k != target_api_name and v.get("action_type") == "Informational Action"}
+        target_api_def = apis.get(target_api_name)
+        
+        # 3. 准备参考 API：如果探索的是执行类，则提供所有信息类 API 给 LLM 做前置依赖参考
+        # 如果探索的是信息类，则提供部分执行类作为背景参考
+        is_executive = target_api_def.get("action_type") == "Executive Action"
+        ref_type = "Informational Action" if is_executive else "Executive Action"
+        reference_apis = {k: v for k, v in apis.items() if k != target_api_name and v.get("action_type") == ref_type}
 
-        # 使用 LLM 生成具体的任务指令
+        # 4. 调用 LLM 生成指令
         prompt = PLAN_GENERATION_PROMPT.format(
             target_api_name=target_api_name,
             app_name=app_name,
             target_api_details=json.dumps(target_api_def, indent=2, ensure_ascii=False),
-            available_info_apis=json.dumps(info_apis, indent=2, ensure_ascii=False)
+            available_info_apis=json.dumps(reference_apis, indent=2, ensure_ascii=False)
         )
         
         response = self._chat_with_retry(messages=[{"role": "user", "content": prompt}], temperature=0.7)
-        if not response:
-            return None
+        if not response: return None
             
-        instruction = response.content.strip()
-        
-        # 构造并返回 Task 对象
-        task = Task(
-            task_id="intra_placeholder", # 占位符，由外层 TaskManager 分配正式 ID
-            instruction=instruction,
-            metrics={
-                "phase": "intra",
-                "target_app": app_name,
-                "target_api": target_api_name
-            }
+        return Task(
+            task_id="intra_placeholder",
+            instruction=response.content.strip(),
+            metrics={"phase": "intra", "target_app": app_name, "target_api": target_api_name}
         )
-        return task
 
-    def generate_cross_task(self) -> Optional[Task]:
+    def generate_cross_task(self, app_list: List[str] = None) -> Optional[Task]:
         """
-        生成跨域合成任务：模拟跨 App 的信息流转。
-        流程：选择一个已掌握的“普通 App”和一个“信息提供 App” -> LLM 合成一个需要两者配合的场景。
+        生成跨域探索任务：从指定 APP 列表中随机采样 5+5 API 并合成泛泛的探索指令。
         """
-        is_info_provider = lambda a: a in UNIVERSAL_INFO_PROVIDERS
+        # 0. 默认 APP 列表
+        if not app_list:
+            app_list = [
+                "venmo", "spotify", "phone", "file_system", "simple_note", 
+                "amazon", "gmail", "splitwise", "todoist"
+            ]
         
-        # 挑选两个 App 组成配对，必须包含一个信息源和一个执行器
-        primary_app = random.choice(list(self.explored_intra_apps))
-        info_app, exec_app = "", ""
+        available_apps = [app for app in app_list if app in self.api_knowledge]
+        if len(available_apps) < 2:
+            logger.warning("[ApiDriven] Not enough active apps for cross-domain task.")
+            return None
         
-        if is_info_provider(primary_app):
-            info_app = primary_app
-            candidates = [a for a in self.explored_intra_apps if not is_info_provider(a)]
-            if not candidates: return None
-            exec_app = random.choice(candidates)
+        # 1. 随机选择 2 个不同的 APP
+        selected_apps = random.sample(available_apps, 2)
+        app_a, app_b = selected_apps[0], selected_apps[1]
+        
+        # 简单角色分配逻辑：优先让强信息类 App 做 Source，强执行类 App 做 Target
+        if app_a not in UNIVERSAL_INFO_PROVIDERS and app_b in UNIVERSAL_INFO_PROVIDERS:
+            info_app_name, exec_app_name = app_b, app_a
         else:
-            exec_app = primary_app
-            candidates = [a for a in self.explored_intra_apps if is_info_provider(a)]
-            if not candidates: return None
-            info_app = random.choice(candidates)
+            info_app_name, exec_app_name = app_a, app_b
 
-        logger.info(f"[ApiDriven] Generating Cross-Domain Task: {info_app} -> {exec_app}")
+        # 2. 内部采样函数
+        def get_sampled_apis(app_name, intent_type, count=5):
+            app_info = self.api_knowledge.get(app_name, {})
+            all_apis = app_info.get("apis", {})
+            candidates = []
+            if intent_type == "info":
+                candidates = [k for k, v in all_apis.items() if v.get("action_type") == "Informational Action"]
+                if not candidates:
+                    candidates = [k for k, v in all_apis.items() if v.get("method", "").upper() == "GET"]
+            else:
+                candidates = [k for k, v in all_apis.items() if v.get("action_type") == "Executive Action"]
+                if not candidates:
+                    candidates = [k for k, v in all_apis.items() if v.get("method", "").upper() != "GET"]
+            
+            if not candidates: candidates = list(all_apis.keys())
+            sampled_keys = random.sample(candidates, min(len(candidates), count))
+            return {k: all_apis[k] for k in sampled_keys}
 
-        # 获取 App 描述和 API 列表供 LLM 参考
-        info_desc = self.api_knowledge.get(info_app, {}).get("description", "")
-        exec_desc = self.api_knowledge.get(exec_app, {}).get("description", "")
-        exec_apis = list(self.api_knowledge.get(exec_app, {}).get("apis", {}).keys())[:15]
+        info_apis = get_sampled_apis(info_app_name, "info", 5)
+        exec_apis = get_sampled_apis(exec_app_name, "exec", 5)
 
-        # 调用 LLM 合成跨域场景：包含需要在信息 App 预埋的数据和最终用户查询
-        prompt = PURPOSE_SYNTHESIS_PROMPT.format(
-            info_app_name=info_app,
-            info_app_desc=info_desc,
-            exec_app_name=exec_app,
-            exec_app_desc=exec_desc,
-            exec_api_list=json.dumps(exec_apis)
+        logger.info(f"[ApiDriven] Cross-Exploration: {info_app_name} (Info) -> {exec_app_name} (Exec)")
+
+        # 3. 准备 Prompt 参数
+        system_tools_hint = (
+            "Available System Tools (Use these to verify logic or specs):\n"
+            "- supervisor: Use to coordinate the multi-step process or report final success.\n"
+            "- api_docs: Use to check parameter formats or search syntax (e.g., query operators for email) before calling tools."
         )
-        
+
+        # 4. 填充 Prompt 模板
+        prompt = PURPOSE_SYNTHESIS_PROMPT.format(
+            info_app_name=info_app_name,
+            exec_app_name=exec_app_name,
+            info_apis_json=json.dumps(info_apis, indent=2, ensure_ascii=False),
+            exec_apis_json=json.dumps(exec_apis, indent=2, ensure_ascii=False),
+            system_tools_hint=system_tools_hint
+        )
+
+        # 5. 调用 LLM
         response = self._chat_with_retry(
             messages=[{"role": "user", "content": prompt}], 
             response_format={"type": "json_object"}
         )
-        if not response:
-            return None
+        if not response: return None
         
         try:
-            scenario_data = extract_json_from_str(response.content)
-            setup_context = scenario_data.get("setup_context", "") # 预埋的环境背景数据
-            user_query = scenario_data.get("user_query", "")      # 生成的任务查询
-            target_action = scenario_data.get("target_action_api", "") # 预期的核心 API
-        except Exception:
-            return None
+            res_json = extract_json_from_str(response.content)
+            user_query = res_json.get("user_query", "")
+            target_action = res_json.get("target_action_api", "")
+        except Exception: return None
 
-        # 构造 Task，metrics 中包含 setup 动作指令，TaskManager 会据此初始化环境
-        task = Task(
+        return Task(
             task_id="cross_placeholder",
             instruction=user_query,
             metrics={
                 "phase": "extra",
-                "setup_action": "inject_data",
-                "app": info_app,
-                "content": setup_context,
-                "info_app": info_app,
-                "exec_app": exec_app,
-                "target_api": target_action
+                "info_app": info_app_name,
+                "exec_app": exec_app_name,
+                "target_api": target_action,
+                "sampled_info_apis": list(info_apis.keys()),
+                "sampled_exec_apis": list(exec_apis.keys())
             }
         )
-        return task
 
     # ================= 阶段总结逻辑 (Summarize) =================
 

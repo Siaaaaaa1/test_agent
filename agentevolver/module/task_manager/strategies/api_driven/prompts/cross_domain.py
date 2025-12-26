@@ -1,26 +1,31 @@
-# 阶段三：跨域合成 Prompt
+# 阶段三：跨域合成 Prompt (Generic Exploration Version)
 
 PURPOSE_SYNTHESIS_PROMPT = """
-You are a Scenario Designer for AI Agents.
-We need to construct a "Complex Cross-Domain Task" involving two specific Apps.
+You are a Cross-Domain Task Scenario Generator for AI Agents.
+Your goal is to create a **Generic and Exploratory** user query that connects two Apps based on their API capabilities.
 
-### App Roles
-1. **Source App (Info Provider):** {info_app_name}
-   - Description: {info_app_desc}
-   - This app contains unstructured information (emails, notes, messages).
-2. **Target App (Executor):** {exec_app_name}
-   - Description: {exec_app_desc}
-   - Available Action APIs: {exec_api_list}
+**Context**:
+We do NOT know the exact specific content in the environment (e.g., we don't know specifically if there is an email about "Dinner" or "Meeting").
+Therefore, the User Query must be **broad and condition-based**, forcing the agent to explore and react to what it finds.
 
-### Task Requirements
-1. **Context Creation:** Create a realistic piece of content for the Source App (e.g., a specific note text or email body) that contains necessary details (time, location, item, price, etc.) for the Target App's action.
-2. **User Query:** Create a user instruction that forces the agent to FIRST read the Source App to find information, and THEN perform an action in the Target App using that information.
+**The Setup**:
+1. **Source App ({info_app_name})**: The agent must search/read here first.
+   - Reference APIs: {info_apis_json}
+2. **Target App ({exec_app_name})**: The agent must perform an action here using data found in the Source App.
+   - Reference APIs: {exec_apis_json}
+3. {system_tools_hint}
 
-### Output Format (JSON)
-Please return a valid JSON object with exactly these keys:
+**Task Requirements**:
+1. Create a `user_query` that directs the agent to:
+   - "Check {info_app_name} for [general category, e.g., recent messages, starred notes, specific folder]."
+   - "If found, extract [key information, e.g., dates, amounts, song names]."
+   - "Then, use that information to perform an action in {exec_app_name}."
+2. The query should NOT contain hardcoded values (e.g., do NOT say "Pay John $50"). Instead say "Pay the person mentioned in the note the amount listed".
+3. Select one `target_action_api` from the Target App list that represents the final success.
+
+**Output Format (JSON Only)**:
 {{
-    "setup_context": "The specific content to be injected into the Source App (e.g., 'Note: Buy milk at 5pm').",
-    "user_query": "The instruction for the agent (e.g., 'Check my notes for what to buy and add it to my shopping list').",
-    "target_action_api": "The specific API name from Target App that represents success."
+    "user_query": "The natural language instruction.",
+    "target_action_api": "The name of the core API in Target App."
 }}
 """

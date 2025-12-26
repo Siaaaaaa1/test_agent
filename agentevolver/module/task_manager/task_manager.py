@@ -270,8 +270,6 @@ class TaskManager(object):
         cross_ckpt_path = f"{resume_file}.extra.json"
         current_tasks_hash = self._compute_tasks_hash(tasks)
         
-        # --- 阶段 1: 单域探索 (Intra-Domain) ---
-        # 获取所有活跃 App 的 API 列表并进行统计
         # 优先从策略已加载的知识库中获取，确保路径一致性
         api_knowledge = getattr(self._exploration_strategy, 'api_knowledge', {})
         if not api_knowledge:
@@ -281,9 +279,14 @@ class TaskManager(object):
                 with open(manual_path, 'r', encoding='utf-8') as f:
                     api_knowledge = json.load(f)
         
-        active_apps = self._exploration_strategy.active_apps
+        # 准备活跃 App 列表 (用于跨域随机采样)
+        active_apps_set = getattr(self._exploration_strategy, 'active_apps', set(api_knowledge.keys()))
+        active_apps_list = list(active_apps_set)
+
+        # --- 阶段 1: 单域探索 (Intra-Domain) ---
+        # 获取所有活跃 App 的 API 列表并进行统计
         active_apis = []
-        for app_name in sorted(active_apps): # 排序以保证断点恢复时的顺序一致
+        for app_name in sorted(list(active_apps_set)): # 排序以保证断点恢复时的顺序一致
             if app_name in api_knowledge:
                 apis = api_knowledge[app_name].get("apis", {})
                 for api_name in sorted(apis.keys()):
@@ -318,7 +321,7 @@ class TaskManager(object):
                 if idx in intra_processed_idx:
                     continue
                 
-                # 传入指定的 app_name 和 target_api_name
+                # 传入指定的 app_name 和 target_api_name，进行针对性探索
                 task = self._exploration_strategy.generate_intra_task(
                     app_name=api_info["app_name"], 
                     target_api_name=api_info["api_name"]
@@ -340,7 +343,7 @@ class TaskManager(object):
         # 只有单域任务全部处理完进行
         cross_res = []
         if len(intra_processed_idx) >= len(intra_pool):
-            # 定义跨域任务池：种子任务扩大 b 倍
+            # 定义跨域任务池：种子任务扩大 b 倍 (或者单纯设定一个数量)
             cross_pool = list(tasks) * b
             cross_processed_idx = set()
             
@@ -360,9 +363,11 @@ class TaskManager(object):
                 if idx in cross_processed_idx:
                     continue
                 
-                # 生成跨域任务，并绑定到种子环境 ID 上
-                task = self._exploration_strategy.generate_cross_task()
+                # 【修改点】传入 app_list，让策略层从中随机选择 2 个 App 及其 5+5 API 进行组合
+                task = self._exploration_strategy.generate_cross_task(app_list=active_apps_list)
+                
                 if task:
+                    # 将生成的泛泛探索任务绑定到当前的种子 ID (用于环境复用或记录)
                     task.task_id = seed_task.task_id
                     new_obj = self._explore_and_summarize_extra(task)
                     if new_obj:
@@ -375,8 +380,10 @@ class TaskManager(object):
                 current_batch_all = intra_res + cross_res
                 current_batch_all = functools.reduce(lambda x, f: f.filter(x), self._realtime_filters, current_batch_all)
                 
-                self._old_retrival.reset()
-                for j in current_batch_all: self._old_retrival.add_objective(j)
+                # 注意：这里可能需要优化，频繁 reset 检索库可能较慢，可视情况调整频率
+                if hasattr(self, '_old_retrival'):
+                    self._old_retrival.reset()
+                    for j in current_batch_all: self._old_retrival.add_objective(j)
                 
                 self._save_checkpoint(cross_ckpt_path, cross_res, cross_processed_idx, len(cross_pool), current_tasks_hash)
             pbar.close()
