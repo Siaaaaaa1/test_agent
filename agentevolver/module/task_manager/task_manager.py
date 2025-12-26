@@ -252,16 +252,9 @@ class TaskManager(object):
         return self._apply_post_filter(res)
 
     def _generate_task_api_driven(self, tasks: Sequence[Task], *, show_progress=False, resume_file: Optional[str] = None) -> list[TaskObjective]:
-        """
-        API Driven 策略：两阶段池化生成模式。
-        a, b 来源于 config.task_manager.exploration_strategy_args
-        第一阶段：单域池 (active_apis) 扩大 n * a 倍。
-        第二阶段：跨域池 (seed_tasks) 扩大 n * b 倍。
-        """
-        # 1. 从配置中读取超参 a 和 b
         strategy_args = self._config.task_manager.get('exploration_strategy_args', {})
-        a = strategy_args.get('a', 1)  # 单域倍数
-        b = strategy_args.get('b', 1)  # 跨域倍数
+        a = strategy_args.get('a', 1)
+        b = strategy_args.get('b', 1)
         
         if resume_file is None:
             resume_file = '.generate_task_api'
@@ -270,23 +263,13 @@ class TaskManager(object):
         cross_ckpt_path = f"{resume_file}.extra.json"
         current_tasks_hash = self._compute_tasks_hash(tasks)
         
-        # 优先从策略已加载的知识库中获取，确保路径一致性
         api_knowledge = getattr(self._exploration_strategy, 'api_knowledge', {})
-        if not api_knowledge:
-            # 如果策略未加载，则手动读取
-            manual_path = "./agentevolver/preprocess/output/appworld_tool_manual.json"
-            if os.path.exists(manual_path):
-                with open(manual_path, 'r', encoding='utf-8') as f:
-                    api_knowledge = json.load(f)
-        
-        # 准备活跃 App 列表 (用于跨域随机采样)
         active_apps_set = getattr(self._exploration_strategy, 'active_apps', set(api_knowledge.keys()))
         active_apps_list = list(active_apps_set)
 
-        # --- 阶段 1: 单域探索 (Intra-Domain) ---
-        # 获取所有活跃 App 的 API 列表并进行统计
+        # --- 阶段 1: 单域探索 ---
         active_apis = []
-        for app_name in sorted(list(active_apps_set)): # 排序以保证断点恢复时的顺序一致
+        for app_name in sorted(list(active_apps_set)):
             if app_name in api_knowledge:
                 apis = api_knowledge[app_name].get("apis", {})
                 for api_name in sorted(apis.keys()):
@@ -295,12 +278,10 @@ class TaskManager(object):
                         "api_name": api_name
                     })
         
-        # 定义单域任务池：每个 API 扩大 a 倍
         intra_pool = active_apis * a
         intra_res = []
         intra_processed_idx = set()
         
-        # 恢复单域断点
         if os.path.exists(intra_ckpt_path):
             try:
                 with open(intra_ckpt_path, 'r') as f:
@@ -312,7 +293,6 @@ class TaskManager(object):
             except Exception as e:
                 logger.warning(f"Failed to load intra checkpoint: {e}")
 
-        # 单域生成循环
         if len(intra_processed_idx) < len(intra_pool):
             pbar = tqdm(total=len(intra_pool), desc="Stage 1: Intra-Domain (API-level)", disable=not show_progress)
             pbar.update(len(intra_processed_idx))
@@ -321,29 +301,33 @@ class TaskManager(object):
                 if idx in intra_processed_idx:
                     continue
                 
-                # 传入指定的 app_name 和 target_api_name，进行针对性探索
+                # 1. 生成任务
                 task = self._exploration_strategy.generate_intra_task(
                     app_name=api_info["app_name"], 
                     target_api_name=api_info["api_name"]
                 )
+                
                 if task:
-                    new_obj = self._explore_and_summarize_intra(task)
-                    if new_obj:
-                        intra_res.extend(new_obj)
+                    task.task_id = f"gen_intra_{idx}"
+                    # 2. 执行探索（现在由 Strategy 内部全权负责，包括 Init Agent）
+                    trajectories = self._exploration_strategy.explore(task, "unknown", "unknown")
+                    
+                    # 3. 总结
+                    if trajectories and trajectories[0].steps:
+                        objs = self._exploration_strategy.summarize(task, trajectories[0])
+                        if objs:
+                            intra_res.extend(objs)
                 
                 intra_processed_idx.add(idx)
                 pbar.update(1)
                 
-                # 实时过滤并保存断点
                 intra_res = functools.reduce(lambda x, f: f.filter(x), self._realtime_filters, intra_res)
                 self._save_checkpoint(intra_ckpt_path, intra_res, intra_processed_idx, len(intra_pool), current_tasks_hash)
             pbar.close()
 
-        # --- 阶段 2: 跨域合成 (Cross-Domain) ---
-        # 只有单域任务全部处理完进行
+        # --- 阶段 2: 跨域合成 ---
         cross_res = []
         if len(intra_processed_idx) >= len(intra_pool):
-            # 定义跨域任务池：种子任务扩大 b 倍 (或者单纯设定一个数量)
             cross_pool = list(tasks) * b
             cross_processed_idx = set()
             
@@ -363,27 +347,24 @@ class TaskManager(object):
                 if idx in cross_processed_idx:
                     continue
                 
-                # 【修改点】传入 app_list，让策略层从中随机选择 2 个 App 及其 5+5 API 进行组合
                 task = self._exploration_strategy.generate_cross_task(app_list=active_apps_list)
                 
                 if task:
-                    # 将生成的泛泛探索任务绑定到当前的种子 ID (用于环境复用或记录)
-                    task.task_id = seed_task.task_id
-                    new_obj = self._explore_and_summarize_extra(task)
-                    if new_obj:
-                        cross_res.extend(new_obj)
+                    task.task_id = f"gen_cross_{seed_task.task_id}_{idx}"
+                    
+                    # 同样的调用接口
+                    trajectories = self._exploration_strategy.explore(task, "unknown", "unknown")
+                    
+                    if trajectories and trajectories[0].steps:
+                        objs = self._exploration_strategy.summarize(task, trajectories[0])
+                        if objs:
+                            cross_res.extend(objs)
                 
                 cross_processed_idx.add(idx)
                 pbar.update(1)
                 
-                # 实时过滤与检索库更新
                 current_batch_all = intra_res + cross_res
                 current_batch_all = functools.reduce(lambda x, f: f.filter(x), self._realtime_filters, current_batch_all)
-                
-                # 注意：这里可能需要优化，频繁 reset 检索库可能较慢，可视情况调整频率
-                if hasattr(self, '_old_retrival'):
-                    self._old_retrival.reset()
-                    for j in current_batch_all: self._old_retrival.add_objective(j)
                 
                 self._save_checkpoint(cross_ckpt_path, cross_res, cross_processed_idx, len(cross_pool), current_tasks_hash)
             pbar.close()
