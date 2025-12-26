@@ -12,7 +12,7 @@ from loguru import logger
 from agentevolver.module.env_manager.env_worker import EnvWorker, TrajExpConfig
 # [FIX]: 使用 ModifiedAgentFlow 代替标准 AgentFlow
 from agentevolver.module.task_manager.agent_flow import ModifiedAgentFlow
-from agentevolver.module.task_manager.env_profiles import get_agent_interaction_system_prompt
+from agentevolver.module.task_manager.strategies.api_driven.prompts import get_agent_interaction_system_prompt
 # 导入基础策略类和数据模型
 from agentevolver.module.task_manager.strategies import TaskExploreStrategy
 from agentevolver.schema.task import Task, TaskObjective
