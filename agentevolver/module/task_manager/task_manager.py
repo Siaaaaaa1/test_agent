@@ -269,10 +269,13 @@ class TaskManager(object):
                     task=current_task
                 )
                 if not current_task: return []
-                current_task.metrics["data_id"] = f"gen_intra_{idx}"
                 
-                # 2. 执行探索 (耗时操作)
-                trajectories = self._exploration_strategy.explore(current_task, "unknown", "unknown")
+                # [FIX]: 生成唯一 data_id 并传递给 explore，避免日志覆盖
+                data_id = f"gen_intra_{idx}"
+                current_task.metrics["data_id"] = data_id
+                
+                # 2. 执行探索 (耗时操作) - 传入正确的 ID
+                trajectories = self._exploration_strategy.explore(current_task, data_id, data_id)
                 
                 # 3. 总结结果 (Strategy 内部已加锁处理内存保存)
                 results = []
@@ -289,9 +292,13 @@ class TaskManager(object):
                 current_task = copy.deepcopy(seed_task)
                 current_task = self._exploration_strategy.generate_cross_task(app_list=app_list, task=current_task)
                 if not current_task: return []
-                current_task.metrics["data_id"] = f"gen_cross_{idx}"
                 
-                trajectories = self._exploration_strategy.explore(current_task, "unknown", "unknown")
+                # [FIX]: 生成唯一 data_id 并传递给 explore，避免日志覆盖
+                data_id = f"gen_cross_{idx}"
+                current_task.metrics["data_id"] = data_id
+                
+                # 2. 执行探索 - 传入正确的 ID
+                trajectories = self._exploration_strategy.explore(current_task, data_id, data_id)
                 
                 results = []
                 if trajectories and trajectories[0].steps:
@@ -312,14 +319,6 @@ class TaskManager(object):
                     active_apis.append({"app_name": app_name, "api_name": api_name})
         
         intra_task_pool = list(copy.copy(tasks)) * a
-        # 截断或填充以匹配API数量，这里简单处理：循环使用任务
-        # 实际上 API Driven 往往是遍历 API，而不是遍历 Seed Tasks。
-        # 假设我们为每个 (API, SeedTask) 对生成任务，或者是随机组合。
-        # 这里的逻辑假设是：利用 Active APIs 数量来决定总任务数
-        
-        # 调整逻辑：如果 Active APIs 很多，限制总数；或者基于配置。
-        # 此处保持原逻辑框架，用 active_apis 驱动循环
-        
         # 重新构造任务池：每个待测 API 分配一个 base task
         if len(intra_task_pool) < len(active_apis):
              intra_task_pool = (intra_task_pool * (len(active_apis) // len(intra_task_pool) + 1))[:len(active_apis)]
@@ -380,8 +379,6 @@ class TaskManager(object):
         cross_res = []
         active_apps_list = list(active_apps_set)
         
-        # Cross 阶段逻辑：仅当 Intra 阶段有产出或被配置强制执行时
-        # 此处保持原逻辑：Intra 结束后执行 Extra
         cross_task_pool = list(copy.copy(tasks)) * b
         cross_processed_idx = set()
         

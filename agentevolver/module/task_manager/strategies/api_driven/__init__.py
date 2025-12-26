@@ -10,7 +10,8 @@ from typing import List, Dict, Any, Optional, Set, Callable
 
 from loguru import logger
 from agentevolver.module.env_manager.env_worker import EnvWorker, TrajExpConfig
-from agentevolver.module.agent_flow.agent_flow import AgentFlow
+# [FIX]: 使用 ModifiedAgentFlow 代替标准 AgentFlow
+from agentevolver.module.task_manager.agent_flow import ModifiedAgentFlow
 from agentevolver.module.task_manager.env_profiles import get_agent_interaction_system_prompt
 # 导入基础策略类和数据模型
 from agentevolver.module.task_manager.strategies import TaskExploreStrategy
@@ -112,9 +113,9 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             sampling_params=sampling_params
         )
 
-        # 4. 初始化 Agent 工作流 (AgentFlow)
-        agent_flow = AgentFlow(
-            enable_context_generator=False, # 禁用上下文生成，简化流程
+        # 4. 初始化 Agent 工作流 (ModifiedAgentFlow)
+        # [FIX]: 使用 ModifiedAgentFlow，它应该在内部处理了 `enable_context_generator` 等配置
+        agent_flow = ModifiedAgentFlow(
             llm_chat_fn=llm_chat_fn,
             tokenizer=self.tokenizer,
             config=self.config,
@@ -131,7 +132,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             system_prompt = get_agent_interaction_system_prompt(env_profile_name)
 
             trajectory = env_worker.execute(
-                data_id=data_id,
+                data_id=data_id, # [FIX]: 接收并使用 TaskManager 传递过来的唯一 ID
                 rollout_id=rollout_id,
                 traj_exp_config=TrajExpConfig(add_exp=False), # API 探索通常不直接添加到经验池
                 agent_flow=agent_flow,
