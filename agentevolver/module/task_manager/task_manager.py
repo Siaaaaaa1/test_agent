@@ -250,6 +250,11 @@ class TaskManager(object):
         a = strategy_args.get('a', 1)
         b = strategy_args.get('b', 1)
         
+        debug_mode = self._config.get("debug_log", False)
+        if debug_mode:
+            logger.warning("Debug mode enabled: forcing single thread and single task execution for API Driven generation.")
+            random.seed(42)
+
         if resume_file is None:
             resume_file = '.generate_task_api'
         
@@ -388,7 +393,11 @@ class TaskManager(object):
                 apis = api_knowledge[app_name].get("apis", {})
                 for api_name in sorted(apis.keys()):
                     active_apis.append({"app_name": app_name, "api_name": api_name})
-        
+
+        if debug_mode:
+            logger.info(f"[Debug] Truncating Intra-Domain API list (Original: {len(active_apis)}) to 1.")
+            active_apis = active_apis[:1]
+
         intra_task_pool = list(copy.copy(tasks)) * a
         # 重新构造任务池：每个待测 API 分配一个 base task
         if len(intra_task_pool) < len(active_apis):
@@ -413,7 +422,9 @@ class TaskManager(object):
         total_intra = min(len(active_apis), len(intra_task_pool))
         if len(intra_processed_idx) < total_intra:
             parallel_num = max(1, min(self._num_exploration_threads, total_intra))
-            
+
+            if debug_mode: parallel_num = 1
+
             remaining_indices = [i for i in range(total_intra) if i not in intra_processed_idx]
             batch_size = parallel_num * 2 
             batches = [remaining_indices[i:i + batch_size] for i in range(0, len(remaining_indices), batch_size)]
@@ -451,6 +462,11 @@ class TaskManager(object):
         active_apps_list = list(active_apps_set)
         
         cross_task_pool = list(copy.copy(tasks)) * b
+
+        if debug_mode:
+            logger.info(f"[Debug] Truncating Cross-Domain task pool (Original: {len(cross_task_pool)}) to 1.")
+            cross_task_pool = cross_task_pool[:1]
+
         cross_processed_idx = set()
         
         if os.path.exists(cross_ckpt_path):
@@ -464,6 +480,7 @@ class TaskManager(object):
 
         if len(cross_processed_idx) < len(cross_task_pool):
             parallel_num = max(1, min(self._num_exploration_threads, len(cross_task_pool)))
+            if debug_mode: parallel_num = 1
             remaining_indices = [i for i in range(len(cross_task_pool)) if i not in cross_processed_idx]
             batches = [remaining_indices[i:i + parallel_num * 2] for i in range(0, len(remaining_indices), parallel_num * 2)]
 
