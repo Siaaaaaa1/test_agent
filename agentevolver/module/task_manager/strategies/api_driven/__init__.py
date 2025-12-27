@@ -19,7 +19,9 @@ from agentevolver.schema.task import Task, TaskObjective
 from agentevolver.schema.trajectory import Trajectory
 from agentevolver.module.task_manager.base import LlmClient
 from agentevolver.utils.utils import extract_json_from_str
-from agentevolver.module.task_manager.strategies.api_driven.prompts.prompt_explore import get_agent_interaction_system_prompt
+from agentevolver.module.task_manager.strategies.api_driven.prompts.prompt_explore import (
+    get_agent_interaction_system_prompt
+)
 # [新增]: 导入通用的总结 Prompt 和解析工具，与 Random 策略保持一致
 from agentevolver.module.task_manager.strategies.api_driven.prompts.prompt_summarize import (
     get_task_summarize_prompt,
