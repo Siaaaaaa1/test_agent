@@ -19,7 +19,7 @@ from agentevolver.schema.task import Task, TaskObjective
 from agentevolver.schema.trajectory import Trajectory
 from agentevolver.module.task_manager.base import LlmClient
 from agentevolver.utils.utils import extract_json_from_str
-
+from agentevolver.module.task_manager.strategies.api_driven.prompts.prompt_explore import get_agent_interaction_system_prompt
 # [新增]: 导入通用的总结 Prompt 和解析工具，与 Random 策略保持一致
 from agentevolver.module.task_manager.strategies.api_driven.prompts.prompt_summarize import (
     get_task_summarize_prompt,
@@ -373,9 +373,9 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         )
         
         # 3. 检索旧任务目标 (如果支持)
-        old_objectives = []
-        if getattr(self, "_old_retrival", None):
-             old_objectives = self._old_retrival.retrieve_objectives(task)
+        # old_objectives = []
+        # if getattr(self, "_old_retrival", None):
+        #      old_objectives = self._old_retrival.retrieve_objectives(task)
 
         # 4. 数据脱敏
         masked_trajectory = copy.deepcopy(trajectory)
@@ -452,9 +452,9 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         )
         
         # 3. 检索旧任务目标
-        old_objectives = []
-        if getattr(self, "_old_retrival", None):
-             old_objectives = self._old_retrival.retrieve_objectives(task)
+        # old_objectives = []
+        # if getattr(self, "_old_retrival", None):
+        #      old_objectives = self._old_retrival.retrieve_objectives(task)
         
         # 4. 数据脱敏
         masked_trajectory = copy.deepcopy(trajectory)
