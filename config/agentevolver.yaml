@@ -104,6 +104,7 @@ trainer:
   rollout_data_dir: "experiments/tech_synthetic/${trainer.experiment_name}/rollout_log"
   val_only: false
 
+debug_log: false
 
 
 ###############################################################################

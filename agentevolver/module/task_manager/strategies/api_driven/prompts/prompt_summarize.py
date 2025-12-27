@@ -112,7 +112,6 @@ def _get_action_observation_pair(traj: Trajectory) -> list[tuple[str, str]]:
 
 def get_task_summarize_prompt(
     trajectories: Sequence[Trajectory],
-    old_objectives: Sequence[TaskObjective],
     profile: EnvProfile | None,
 ) -> tuple[str, str]:
     x = ""
@@ -136,18 +135,9 @@ def get_task_summarize_prompt(
             x += f"### Reward: {traj.reward.outcome}\n{traj.reward.description}\n"
         idx += 1
 
-    objectives: list[str] = [x.objective for x in old_objectives if x.objective is not None]
-
     user_prompt = f"""Please analyze the following agent interaction sequence and abstract specific tasks from it:
 
 {x}
-
-# Old Objectives
-You have already explored the following objectives:
-
-{objectives}
-
-Please avoid repeating these objectives.
 
 # Task Requirements
 

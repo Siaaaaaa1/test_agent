@@ -36,6 +36,7 @@ from agentevolver.module.task_manager.strategies.api_driven.prompts import (
     BACK_TRANSLATION_PROMPT,
     PURPOSE_SYNTHESIS_PROMPT
 )
+from agentevolver.utils.debug_utils import debug_log
 
 UNIVERSAL_INFO_PROVIDERS = {"notes", "gmail", "simple_messages", "calendar", "contacts"}
 
@@ -238,10 +239,24 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             target_api_details=json.dumps(target_api_def, indent=2, ensure_ascii=False),
             available_info_apis=json.dumps(reference_apis, indent=2, ensure_ascii=False)
         )
+
+        debug_log(self.config, "api_gen_intra", {
+            "type": "LLM_INPUT",
+            "app_name": app_name,
+            "target_api": target_api_name,
+            "prompt": prompt
+        })
         
         response = self._chat_with_retry(messages=[{"role": "user", "content": prompt}], temperature=0.7)
+
+        debug_log(self.config, "api_gen_intra", {
+            "type": "LLM_OUTPUT",
+            "response_content": response.content if response else None,
+            "success": bool(response)
+        })
+
         if not response: return None
-        
+
         # [Fix Typo & Logic] 修正属性名并赋值给 query，确保执行时生效
         task.instruction = response.content.strip()
         task.query = task.instruction 
@@ -323,10 +338,24 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             system_tools_hint=system_tools_hint
         )
 
+        debug_log(self.config, "api_gen_cross", {
+            "type": "LLM_INPUT",
+            "info_app": info_app_name,
+            "exec_app": exec_app_name,
+            "prompt": prompt
+        })
+
         response = self._chat_with_retry(
             messages=[{"role": "user", "content": prompt}], 
             response_format={"type": "json_object"}
         )
+
+        debug_log(self.config, "api_gen_cross", {
+            "type": "LLM_OUTPUT",
+            "response_content": response.content if response else None,
+            "success": bool(response)
+        })
+
         if not response: return None
         
         try:
@@ -390,7 +419,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         # 5. 生成 Prompt
         env_profile_obj = self._get_env_profile_obj()
         system_prompt, user_prompt = get_task_summarize_prompt(
-            [masked_trajectory], old_objectives, env_profile_obj
+            [masked_trajectory], env_profile_obj
         )
         
         messages = [
@@ -398,10 +427,24 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             {"role": "user", "content": user_prompt}
         ]
         
+        debug_log(self.config, "api_sum_intra", {
+            "type": "LLM_INPUT",
+            "target_app": target_app,
+            "target_api": target_api,
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt
+        })
+
         # 6. 调用 LLM
         try:
             llm_response = llm_fn(messages=messages)
             llm_output = llm_response["content"]
+
+            debug_log(self.config, "api_sum_intra", {
+                "type": "LLM_OUTPUT",
+                "response": llm_output
+            })
+
         except Exception as e:
             logger.error(f"[Summarize Intra] LLM call failed: {e}")
             return []
@@ -477,10 +520,24 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             {"role": "user", "content": user_prompt}
         ]
         
+        debug_log(self.config, "api_sum_cross", {
+            "type": "LLM_INPUT",
+            "info_app": info_app,
+            "target_api": target_api,
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt
+        })
+
         # 6. 调用 LLM
         try:
             llm_response = llm_fn(messages=messages)
             llm_output = llm_response["content"]
+
+            debug_log(self.config, "api_sum_cross", {
+                "type": "LLM_OUTPUT",
+                "response": llm_output
+            })
+            
         except Exception as e:
             logger.error(f"[Summarize Cross] LLM call failed: {e}")
             return []

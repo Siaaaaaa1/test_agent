@@ -96,6 +96,7 @@ python3 -m agentevolver.main_ppo \
     task_manager.exploration_strategy_args.a=5 \
     task_manager.exploration_strategy_args.b=10 \
     task_manager.strategy=api_driven \
+    debug_log=True \
     2>&1 | tee "$log_file"
 
 # 训练结束后清理后台进程

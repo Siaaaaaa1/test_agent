@@ -34,6 +34,7 @@ from agentevolver.module.task_manager.env_profiles import EnvProfile
 from agentevolver.schema.task import Task, TaskObjective
 from agentevolver.schema.trajectory import Trajectory
 from verl.utils.dataset.rl_dataset import RLHFDataset
+from agentevolver.utils.debug_utils import debug_log
 
 # --- 类型定义 ---
 
@@ -266,6 +267,15 @@ class TaskManager(object):
         
         def process_intra_task(idx: int, api_info: dict, seed_task: Task) -> List[TaskObjective]:
             """单线程处理：单域任务生成 -> 探索 -> 总结"""
+
+            debug_log(self._config, "tm_process_intra", {
+                "status": "start",
+                "idx": idx,
+                "app_name": api_info.get("app_name"),
+                "api_name": api_info.get("api_name"),
+                "seed_task_id": seed_task.task_id
+            })
+
             try:
                 # 1. 生成任务描述
                 # 注意：深拷贝种子任务以避免副作用
@@ -300,13 +310,34 @@ class TaskManager(object):
                 results = []
                 if trajectories and trajectories[0].steps:
                     results = self._exploration_strategy.summarize(current_task, trajectories[0])
+                
+                debug_log(self._config, "tm_process_intra", {
+                    "status": "completed",
+                    "idx": idx,
+                    "data_id": data_id,
+                    "generated_objectives_count": len(results)
+                })
+
                 return results if results else []
             except Exception as e:
                 logger.error(f"[Intra-Task Error] Index {idx}: {e}")
+                debug_log(self._config, "tm_process_intra", {
+                    "status": "error",
+                    "idx": idx,
+                    "error": str(e)
+                })
                 return []
 
         def process_cross_task(idx: int, app_list: List[str], seed_task: Task) -> List[TaskObjective]:
             """单线程处理：跨域任务生成 -> 探索 -> 总结"""
+
+            debug_log(self._config, "tm_process_cross", {
+                "status": "start",
+                "idx": idx,
+                "candidate_apps_count": len(app_list),
+                "seed_task_id": seed_task.task_id
+            })
+
             try:
                 current_task = copy.deepcopy(seed_task)
 
@@ -334,9 +365,18 @@ class TaskManager(object):
                 results = []
                 if trajectories and trajectories[0].steps:
                     results = self._exploration_strategy.summarize(current_task, trajectories[0])
+
+                debug_log(self._config, "tm_process_cross", {
+                    "status": "completed",
+                    "idx": idx,
+                    "data_id": data_id,
+                    "generated_objectives_count": len(results)
+                })
+
                 return results if results else []
             except Exception as e:
                 logger.error(f"[Cross-Task Error] Index {idx}: {e}")
+                debug_log(self._config, "tm_process_cross", {"status": "error", "idx": idx, "error": str(e)})
                 return []
 
         # =================================================================
