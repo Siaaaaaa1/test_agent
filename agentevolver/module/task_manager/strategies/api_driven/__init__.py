@@ -94,6 +94,13 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         # 获取环境配置名称，用于 System Prompt
         self.env_profile_name = self.config.get("env_service", {}).get("env_type", "appworld")
 
+        debug_log(self.config, "api_strategy_init", {
+            "env_profile": self.env_profile_name,
+            "api_knowledge_size": len(self.api_knowledge),
+            "sandbox_pool_size": len(self.sandbox_ids_pool),
+            "mastered_intra_apps": len(self.explored_intra_apps),
+            "active_apps": list(self.active_apps)
+        })
         logger.info(f"[ApiDriven] Initialized. Mastered Apps (Intra): {list(self.explored_intra_apps)}")
 
     # ================= [核心] 执行循环逻辑 =================
@@ -112,6 +119,13 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             task.metadata["env_sandbox_id"] = real_sandbox_id
             
         logger.info(f"[ApiDriven] Exploring task (Phase: {task.metrics.get('phase')}) on Sandbox: {real_sandbox_id}")
+        debug_log(self.config, "api_explore_start", {
+            "task_id": task.task_id,
+            "data_id": data_id,
+            "phase": task.metrics.get('phase'),
+            "real_sandbox_id": real_sandbox_id,
+            "instruction": task.instruction[:50] + "..." if task.instruction else None
+        })
 
         # 2. 初始化环境工作者 (EnvWorker)
         thread_idx = 0
@@ -167,10 +181,22 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                 system_prompt=system_prompt,
             )
             
+            steps_count = len(trajectory.steps) if trajectory else 0
+            debug_log(self.config, "api_explore_done", {
+                "data_id": data_id,
+                "sandbox_id": real_sandbox_id,
+                "steps_count": steps_count,
+                "status": "success"
+            })
             return [trajectory]
 
         except Exception as e:
             logger.error(f"[ApiDriven] Explore failed on Sandbox {real_sandbox_id}: {e}")
+            debug_log(self.config, "api_explore_error", {
+                "data_id": data_id,
+                "sandbox_id": real_sandbox_id,
+                "error": str(e)
+            })
             return [Trajectory(steps=[])]
 
     # ================= 总结逻辑 =================
@@ -181,15 +207,22 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         返回 List[TaskObjective] 以支持批量生成。
         """
         if not trajectory or not trajectory.steps:
+            debug_log(self.config, "api_summarize_skipped", {"reason": "empty_trajectory"})
             return []
 
         phase = task.metrics.get("phase", "unknown")
-        results = []
+        debug_log(self.config, "api_summarize_start", {"phase": phase, "task_id": task.task_id})
         
+        results = []
         if phase == "intra":
             results = self.summarize_intra(task, trajectory)
         elif phase == "extra":
             results = self.summarize_cross(task, trajectory)
+        
+        debug_log(self.config, "api_summarize_result", {
+            "phase": phase, 
+            "generated_objectives": len(results)
+        })
         
         # 如果 summarize 子方法返回 None 或空列表，则返回空
         return results if results else []
@@ -226,6 +259,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                 target_api_name = random.choice(list(apis.keys())) if apis else None
 
         if not target_api_name:
+            debug_log(self.config, "api_gen_intra_skip", {"reason": "no_target_api", "app_name": app_name})
             return None
 
         target_api_def = apis.get(target_api_name)
@@ -276,6 +310,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         
         available_apps = [app for app in app_list if app in self.api_knowledge]
         if len(available_apps) < 2:
+            debug_log(self.config, "api_gen_cross_skip", {"reason": "insufficient_apps", "count": len(available_apps)})
             return None
         
         # 去重逻辑
@@ -362,7 +397,9 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             res_json = extract_json_from_str(response.content)
             user_query = res_json.get("user_query", "")
             target_action = res_json.get("target_action_api", "")
-        except Exception: return None
+        except Exception as e:
+            debug_log(self.config, "api_gen_cross_error", {"error": f"json_extract_failed: {e}", "content": response.content})
+            return None
         
         # [Fix Logic] 赋值给 query
         task.instruction = user_query
@@ -389,6 +426,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         
         # 1. 前置检查：如果目标 API 未被调用，视为探索失败，不生成总结
         if not self._check_api_called(trajectory, target_api):
+            debug_log(self.config, "api_sum_intra_fail", {"reason": "target_api_not_called", "target_api": target_api})
             return []
             
         # 2. 构造 LLM 函数
@@ -483,6 +521,11 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         called_exec = self._check_api_called(trajectory, target_api)
         
         if not (called_info and called_exec):
+            debug_log(self.config, "api_sum_cross_fail", {
+                "reason": "missing_app_usage",
+                "called_info_app": called_info, 
+                "called_target_api": called_exec
+            })
             return []
             
         # 2. 构造 LLM 函数
@@ -512,7 +555,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         # 5. 生成 Prompt
         env_profile_obj = self._get_env_profile_obj()
         system_prompt, user_prompt = get_task_summarize_prompt(
-            [masked_trajectory], old_objectives, env_profile_obj
+            [masked_trajectory], old_objectives=[], env_profile=env_profile_obj
         )
         
         messages = [
@@ -633,6 +676,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
     def _save_intra_memory(self, app_name: str):
         # 注意：此方法应在锁保护下调用，或内部加锁。目前上层 summarise 方法已加锁。
         # 为安全起见，这里不需要额外加锁，只要保证调用方正确。
+        debug_log(self.config, "api_memory_save_intra", {"app_name": app_name})
         os.makedirs(os.path.dirname(self.intra_memory_path), exist_ok=True)
         current_data = self._load_json(self.intra_memory_path)
         current_apps = set(current_data.get("explored_apps", []))
@@ -641,6 +685,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             json.dump({"explored_apps": list(current_apps)}, f, indent=2)
 
     def _save_cross_memory(self, metadata: Dict):
+        debug_log(self.config, "api_memory_save_cross", {"synthesized_query": metadata.get("synthesized_user_query")})
         os.makedirs(os.path.dirname(self.cross_memory_path), exist_ok=True)
         current_data = self._load_json(self.cross_memory_path)
         if "logs" not in current_data: current_data["logs"] = []
