@@ -76,21 +76,23 @@ class DashScopeClient:
         """
         self.model_name = model_name
 
-    def chat(self, messages: list[dict[str, str]], sampling_params: dict[str, Any]) -> str:
+    def chat(self, messages: list[dict[str, str]], sampling_params: dict[str, Any] = None, **kwargs) -> str:
         """
-        Sends a chat request to the LLM, aggregates the streaming responses, and returns the complete response.
-
-        Args:
-            messages (list[dict[str, str]]): A list of message dictionaries, each containing 'role' and 'content'.
-            sampling_params (dict[str, Any]): Parameters for controlling the sampling behavior of the LLM.
-
-        Returns:
-            str: The complete response from the LLM as a single string.
+        Sends a chat request to the LLM.
+        Modified to support optional sampling_params and additional kwargs (like response_format).
         """
-        res = ""
-        for x in self.chat_stream(messages, sampling_params):
-            res += x
-        return res
+        # 1. 合并参数：优先使用传入的 kwargs，同时兼容旧的 sampling_params
+        params = sampling_params.copy() if sampling_params else {}
+        params.update(kwargs)
+        
+        # 2. 直接调用 chat_completion 的非流式模式
+        # 这样可以将 response_format 等参数直接透传给 API
+        result = self.chat_completion(messages, stream=False, **params)
+        
+        # 3. 确保返回字符串 (chat_completion 在出错时可能返回 generator 或空字符串)
+        if isinstance(result, str):
+            return result
+        return ""
 
     def chat_stream(self, messages: list[dict[str, str]], sampling_params: dict[str, Any]) -> Generator[str, None, None]:
         """

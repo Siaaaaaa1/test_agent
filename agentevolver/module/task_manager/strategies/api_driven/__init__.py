@@ -616,13 +616,30 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         return None
 
     def _chat_with_retry(self, messages: List[Dict], **kwargs) -> Optional[Any]:
+        from types import SimpleNamespace # 用于快速创建带属性的对象
+
         for i in range(self._max_llm_retries):
             try:
+                # 调用 LLM 客户端
                 response = self.llm_client.chat(messages=messages, **kwargs)
-                if response and response.content: return response
+                
+                #情况 A: Client 返回字符串 (如 DashScopeClient)
+                if isinstance(response, str):
+                    if response.strip(): # 确保内容不为空
+                        # 包装成对象，使其具有 .content 属性，兼容调用方的 response.content
+                        return SimpleNamespace(content=response)
+                
+                # 情况 B: Client 返回对象 (如标准 OpenAI Client)
+                elif response and hasattr(response, 'content') and response.content:
+                    return response
+                    
             except Exception as e:
                 logger.warning(f"LLM call failed: {e}. Retry {i+1}...")
-            time.sleep(2 ** i)
+            
+            # 指数退避重试
+            if i < self._max_llm_retries - 1:
+                time.sleep(2 ** i)
+                
         return None
 
     def _load_sandbox_task_ids(self, path: str) -> List[str]:
