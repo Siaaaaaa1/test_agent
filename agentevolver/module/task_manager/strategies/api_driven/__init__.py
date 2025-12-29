@@ -76,7 +76,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         self.intra_memory_path = kwargs.get("intra_memory_path", os.path.join(base_memory_dir, "intra_domain_success.json"))
         self.cross_memory_path = kwargs.get("cross_memory_path", os.path.join(base_memory_dir, "cross_domain_success.json"))
         
-        self.active_apps = set(kwargs.get("active_apps", []))
+        self.active_apps = set(kwargs.get("active_apps", ['amazon','gmail','spotify','venmo','simple_note','todoist','splitwise','phone','file_system']))
         
         # 加载数据
         self.api_knowledge = self._load_json(self.api_knowledge_path)
