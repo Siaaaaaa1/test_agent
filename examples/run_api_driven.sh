@@ -96,6 +96,7 @@ python3 -m agentevolver.main_ppo \
     task_manager.exploration_strategy_args.a=5 \
     task_manager.exploration_strategy_args.b=10 \
     task_manager.strategy=api_driven \
+    task_manager.exploration_strategy_args.active_apps="['amazon','gmail','spotify','venmo','simple_note','todoist','splitwise','phone','file_system','supervisor','api_docs']" \
     debug_log=True \
     2>&1 | tee "$log_file"
 
