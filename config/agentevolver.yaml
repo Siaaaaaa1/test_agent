@@ -178,6 +178,7 @@ task_manager:
       - "file_system"
       - "supervisor"
       - "api_docs"
+    task_labels_path: "./environments/appworld/data/datasets/train.jsonl"
 
 exp_manager:
   # rollout mode on dev/test set: ["mixed", "all", "woexp"]
