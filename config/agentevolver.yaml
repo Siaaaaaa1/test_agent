@@ -179,6 +179,7 @@ task_manager:
       - "supervisor"
       - "api_docs"
     task_labels_path: "./environments/appworld/data/datasets/train.jsonl"
+    api_knowledge_path: "./agentevolver/preprocess/output/appworld_tool_manual.json"
 
 exp_manager:
   # rollout mode on dev/test set: ["mixed", "all", "woexp"]

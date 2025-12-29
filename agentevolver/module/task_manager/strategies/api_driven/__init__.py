@@ -65,11 +65,11 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         # --- 路径与文件配置 ---
         self.api_knowledge_path = kwargs.get(
             "api_knowledge_path", 
-            "agentevolver/preprocess/output/appworld_tool_manual.json"
+            "./agentevolver/preprocess/output/appworld_tool_manual.json"
         )
         self.task_labels_path = kwargs.get(
             "task_labels_path", 
-            "agentevolver/preprocess/output/task_app_labels_train.json"
+            "./agentevolver/preprocess/output/task_app_labels_train.json"
         )
         
         base_memory_dir = "data/memory/api_driven"
