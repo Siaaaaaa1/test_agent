@@ -1,0 +1,962 @@
+{
+    "task": {
+        "task_id": "76f2c72_3",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Check my Venmo account balance and if it's over $6000, transfer $1000 from Venmo to my linked payment card, then send a text message to my husband Ronald (in contacts) saying 'Moved $1K to card from Venmo - balance now ${new_balance}'.",
+        "ground_truth": "# step0: Get Venmo account password from supervisor\nvenmo_password = next(item['password'] for item in apis.supervisor.show_account_passwords() if item['account_name'] == 'venmo')\n# step1: Login to Venmo\nvenmo_login = apis.venmo.login(username='chrharrison@gmail.com', password=venmo_password)\n# step2: Check Venmo balance\nbalance_info = apis.venmo.show_venmo_balance(access_token=venmo_login['access_token'])\n# step3: Get list of payment cards\npayment_cards = apis.venmo.show_payment_cards(access_token=venmo_login['access_token'])\n# step4: Find a non-expired payment card (card with expiry_year >= 2024)\nvalid_card = next(card for card in payment_cards if card['expiry_year'] >= 2024)\n# step5: Withdraw $1000 to the valid payment card\nwithdraw_result = apis.venmo.withdraw_from_venmo_balance(amount=1000, payment_card_id=valid_card['payment_card_id'], access_token=venmo_login['access_token'])\n# step6: Check new balance\nnew_balance_info = apis.venmo.show_venmo_balance(access_token=venmo_login['access_token'])\n# step7: Get phone account password\nphone_password = next(item['password'] for item in apis.supervisor.show_account_passwords() if item['account_name'] == 'phone')\n# step8: Login to phone\nphone_login = apis.phone.login(username='7487401121', password=phone_password)\n# step9: Search for Ronald in contacts\ncontacts = apis.phone.search_contacts(access_token=phone_login['access_token'], query='Ronald')\n# step10: Get Ronald's phone number and send text message\nronald_phone_number = contacts[0]['phone_number']\nmessage = f'Moved $1K to card from Venmo - balance now ${new_balance_info[\"venmo_balance\"]:.2f}'\nsend_result = apis.phone.send_text_message(phone_number=ronald_phone_number, access_token=phone_login['access_token'], message=message)\n# step11: Complete task\napis.supervisor.complete_task(answer=f'Transferred $1000 to payment card. New Venmo balance: ${new_balance_info[\"venmo_balance\"]:.2f}. Sent text message to Ronald.')",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 1.0,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "27e1026_1",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "My Gmail inbox is getting cluttered. Can you find all unread emails from the last week, star the ones from my work colleagues (Laura, Christina, Vickie), and create a to-do item to follow up on the 'Office Space Renovation' thread?",
+        "ground_truth": "# step0: Get user profile and Gmail password\nprofile = apis.supervisor.show_profile()\npasswords = apis.supervisor.show_account_passwords()\ngmail_password = next(item['password'] for item in passwords if item['account_name'] == 'gmail')\n# step1: Login to Gmail\ngmail_login = apis.gmail.login(username=profile['email'], password=gmail_password)\ngmail_token = gmail_login['access_token']\n# step2: Calculate date one week ago\nimport datetime\ntoday = datetime.date.today()\nweek_ago = today - datetime.timedelta(days=7)\n# step3: Fetch all unread emails from last week\npage_index = 0\nall_unread_emails = []\nwhile True:\n    inbox_page = apis.gmail.show_inbox_threads(\n        access_token=gmail_token,\n        read=False,\n        min_created_at=week_ago.isoformat(),\n        page_index=page_index,\n        page_limit=20\n    )\n    if not inbox_page:\n        break\n    all_unread_emails.extend(inbox_page)\n    page_index += 1\n    if len(inbox_page) < 20:\n        break\n# step4: Star emails from colleagues\ncolleague_names = ['Laura', 'Christina', 'Vickie']\nfor thread in all_unread_emails:\n    participants = [p['name'] for p in thread['participants']]\n    if any(any(colleague_name.lower() in name.lower() for name in participants) for colleague_name in colleague_names):\n        apis.gmail.mark_thread_starred(\n            email_thread_id=thread['email_thread_id'],\n            access_token=gmail_token\n        )\n# step5: Find 'Office Space Renovation' thread\nsearch_results = apis.gmail.show_inbox_threads(\n    access_token=gmail_token,\n    query='Office Space Renovation',\n    page_limit=20\n)\noffice_renovation_thread = search_results[0]\n# step6: Login to Todoist\ntodoist_password = next(item['password'] for item in passwords if item['account_name'] == 'todoist')\ntodoist_login = apis.todoist.login(username=profile['email'], password=todoist_password)\ntodoist_token = todoist_login['access_token']\n# step7: Create Todoist task\ntask_title = f\"Follow up: {office_renovation_thread['subject']}\"\ntask_description = f\"Email thread needs response. Thread ID: {office_renovation_thread['email_thread_id']}\\nParticipants: {', '.join([p['name'] for p in office_renovation_thread['participants']])}\"\ntask_result = apis.todoist.create_task(\n    access_token=todoist_token,\n    project_id=0,\n    title=task_title,\n    description=task_description,\n    priority=\"medium\"\n)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.95,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "2a163ab_2",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "I need to pay back my friend Joseph for the zoo tickets he commented on. Find the transaction where Joseph commented (transaction ID 1239), check my Venmo balance, and if I have at least $50, send him $43 with the description 'Zoo tickets repayment'.",
+        "ground_truth": "# step0: Get Venmo account password from supervisor\npasswords = apis.supervisor.show_account_passwords()\nvenmo_pw = next(p['password'] for p in passwords if p['account_name'] == 'venmo')\n# step1: Login to Venmo\nlogin = apis.venmo.login(username='jefsmith@gmail.com', password=venmo_pw)\ntoken = login['access_token']\n# step2: Retrieve transaction 1239 details\ntx = apis.venmo.show_transaction(transaction_id=1239, access_token=token)\n# step3: Get comments on transaction 1239 to find Joseph's email\ncomments = apis.venmo.show_transaction_comments(transaction_id=1239, access_token=token)\njoseph_email = comments[0]['user']['email']\n# step4: Check Venmo balance\nbalance_info = apis.venmo.show_venmo_balance(access_token=token)\n# step5: Send payment to Joseph if balance is sufficient\nif balance_info['venmo_balance'] >= 43:\n    result = apis.venmo.create_transaction(\n        access_token=token,\n        receiver_email=joseph_email,\n        amount=43.0,\n        description='Zoo tickets repayment'\n    )\n    print(result)\nelse:\n    print(f'Insufficient balance (${balance_info[\"venmo_balance\"]})')",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 1.0,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "60d0b5b_3",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Find the public playlist with the highest rating in my Spotify library that I haven't liked yet, then like it and add its first song to my song library.",
+        "ground_truth": "# step0: Get supervisor's account passwords\npasswords = apis.supervisor.show_account_passwords()\n# step1: Extract and use the Spotify password to log in\nspotify_password = next(item['password'] for item in passwords if item['account_name'] == 'spotify')\nspotify_login = apis.spotify.login(username='pa_ritter@gmail.com', password=spotify_password)\naccess_token = spotify_login['access_token']\n# step2: Fetch all public playlists\npublic_playlists = []\npage_index = 0\nwhile True:\n    playlists_page = apis.spotify.show_playlist_library(access_token=access_token, is_public=True, page_index=page_index, page_limit=20)\n    if not playlists_page:\n        break\n    public_playlists.extend(playlists_page)\n    page_index += 1\n# step3: Fetch all liked playlists\nliked_playlists = []\npage_index = 0\nwhile True:\n    liked_page = apis.spotify.show_liked_playlists(access_token=access_token, page_index=page_index, page_limit=20)\n    if not liked_page:\n        break\n    liked_playlists.extend(liked_page)\n    page_index += 1\n# step4: Identify public playlists not yet liked and select the one with the highest rating\nliked_ids = {p['playlist_id'] for p in liked_playlists}\ncandidates = [p for p in public_playlists if p['playlist_id'] not in liked_ids]\nbest_playlist = max(candidates, key=lambda x: x['rating'])\n# step5: Like the selected playlist\nlike_result = apis.spotify.like_playlist(access_token=access_token, playlist_id=best_playlist['playlist_id'])\n# step6: Get the playlist's details to see its songs\ndetails = apis.spotify.show_playlist(access_token=access_token, playlist_id=best_playlist['playlist_id'])\n# step7: Add the first song from the playlist to the user's library\nfirst_song_id = details['songs'][0]['id']\nadd_result = apis.spotify.add_song_to_library(access_token=access_token, song_id=first_song_id)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.9,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "60d0b5b_3",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Find all my habit tracking notes from last week that show I didn't sleep over 7 hours, and create a new note summarizing which days I need to improve my sleep schedule.",
+        "ground_truth": "# step0: Get supervisor credentials\nprofile = apis.supervisor.show_profile()\npasswords = apis.supervisor.show_account_passwords()\n# step1: Get Simple Note password and login\nsimple_note_pass = [p['password'] for p in passwords if p['account_name'] == 'simple_note'][0]\nlogin_resp = apis.simple_note.login(username=profile['email'], password=simple_note_pass)\ntoken = login_resp['access_token']\n# step2: Search all habit-tracker notes\nimport datetime\nnotes = []\npage_idx = 0\nwhile True:\n    page = apis.simple_note.search_notes(access_token=token, tags=['habit-tracker'], page_index=page_idx)\n    if not page:\n        break\n    notes.extend(page)\n    page_idx += 1\n# step3: Filter notes from last week and find those with 'slept_over_7_hrs: no'\ntoday = datetime.date.today()\nweek_ago = today - datetime.timedelta(days=7)\nbad_sleep_days = []\nfor note in notes:\n    note_date_str = note['created_at']\n    if note_date_str.endswith('Z'):\n        note_date_str = note_date_str[:-1]\n    note_date = datetime.datetime.fromisoformat(note_date_str).date()\n    if week_ago <= note_date <= today:\n        detail = apis.simple_note.show_note(note_id=note['note_id'], access_token=token)\n        if 'slept_over_7_hrs: no' in detail['content']:\n            bad_sleep_days.append(note_date.strftime('%Y-%m-%d'))\n# step4: Create summary note\nsummary_content = f\"Days with insufficient sleep last week: {', '.join(bad_sleep_days)}. Need to improve sleep schedule on these days.\"\ncreate_result = apis.simple_note.create_note(access_token=token, title='Sleep Improvement Summary', content=summary_content, tags=['habit-summary'])\n# step5: Complete the task\napis.supervisor.complete_task(answer=f\"Found {len(bad_sleep_days)} days with insufficient sleep: {', '.join(bad_sleep_days)}. Created summary note with ID {create_result['note_id']}.\")",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.95,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "e7a10f8_3",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Check if I have any public Spotify playlists that are rated 4.0 or higher. If I do, share the highest-rated one with a friend on Venmo by sending them $5 with a message about the playlist. Use the payment card on file that expires after 2024.",
+        "ground_truth": "# step0: Get credentials for Spotify and Venmo\npasswords = apis.supervisor.show_account_passwords()\nspotify_creds = [p for p in passwords if p['account_name'] == 'spotify'][0]\nvenmo_creds = [p for p in passwords if p['account_name'] == 'venmo'][0]\n# step1: Login to Spotify\nspotify_login = apis.spotify.login(username='ismill@gmail.com', password=spotify_creds['password'])\nspotify_token = spotify_login['access_token']\n# step2: Get all Spotify playlists (loop through pages if needed)\nall_playlists = []\npage_index = 0\nwhile True:\n    page = apis.spotify.show_playlist_library(access_token=spotify_token, page_index=page_index, page_limit=20)\n    if not page:\n        break\n    all_playlists.extend(page)\n    page_index += 1\n# step3: Filter for public playlists with rating >= 4.0\nhigh_rated_public = [p for p in all_playlists if p['is_public'] and p['rating'] >= 4.0]\nbest_playlist = high_rated_public[0]\n# step4: Login to Venmo\nvenmo_login = apis.venmo.login(username='ismill@gmail.com', password=venmo_creds['password'])\nvenmo_token = venmo_login['access_token']\n# step5: Check payment cards for one that expires after 2024\npayment_cards = apis.venmo.show_payment_cards(access_token=venmo_token)\n# Note: If no card expires after 2024, use Venmo balance (default)\n# step6: Get Venmo balance\nbalance = apis.venmo.show_venmo_balance(access_token=venmo_token)\n# step7: Find a friend's email (e.g., via phone contacts)\nphone_creds = [p for p in passwords if p['account_name'] == 'phone'][0]\nphone_login = apis.phone.login(username='6702907613', password=phone_creds['password'])\nphone_token = phone_login['access_token']\nfriend_contacts = apis.phone.search_contacts(access_token=phone_token, query='friend')\nfriend_email = friend_contacts[0]['email']\n# step8: Send $5 via Venmo with playlist message\ntransaction = apis.venmo.create_transaction(\n    access_token=venmo_token,\n    receiver_email=friend_email,\n    amount=5.00,\n    description=f'Check out my Spotify playlist \"{best_playlist[\"title\"]}\"! It has a {best_playlist[\"rating\"]} rating!',\n    private=False\n)\nprint(transaction)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.9,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "302c169_2",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "I want to organize my tax documents. Copy all PDF files from my file system's Taxes directory to a new folder called 'Taxes_2023_Backup' in the Documents directory.",
+        "ground_truth": "# step0: Get file system password\npasswords = apis.supervisor.show_account_passwords()\nfs_password = [p for p in passwords if p['account_name'] == 'file_system'][0]['password']\n# step1: Login to file system\nfs_login = apis.file_system.login(username='kat_simp@gmail.com', password=fs_password)\naccess_token = fs_login['access_token']\n# step2: Locate and list all PDF files in the Taxes directory (federal and state subdirectories)\nfederal_taxes = apis.file_system.show_directory(access_token=access_token, directory_path='/home/katie/documents/financial/taxes/federal/', recursive=True)\nstate_taxes = apis.file_system.show_directory(access_token=access_token, directory_path='/home/katie/documents/financial/taxes/state/', recursive=True)\nall_tax_files = federal_taxes + state_taxes\n# step3: Create the backup directory\nbackup_path = '/home/katie/documents/Taxes_2023_Backup'\napis.file_system.create_directory(access_token=access_token, directory_path=backup_path, recursive=True)\n# step4: Copy each PDF file, renaming to avoid name conflicts\nimport os\nfor file_path in all_tax_files:\n    filename = os.path.basename(file_path)\n    if 'federal' in file_path:\n        prefix = 'federal_'\n    elif 'state' in file_path:\n        prefix = 'state_'\n    else:\n        prefix = 'tax_'\n    new_filename = f\"{prefix}{filename}\"\n    dest_path = f\"{backup_path}/{new_filename}\"\n    apis.file_system.copy_file(access_token=access_token, source_file_path=file_path, destination_file_path=dest_path, overwrite=True)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 1.0,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "07b42fd_3",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "I need to pay back my friend Troy Solomon $58 for the yoga mat he covered for me last month via Venmo, and I also want to send him a quick thank you text on my phone. First, confirm my Venmo balance covers it.",
+        "ground_truth": "# step0: Get Venmo password and login\nvenmo_passwords = apis.supervisor.show_account_passwords()\nvenmo_pass = next(item['password'] for item in venmo_passwords if item['account_name'] == 'venmo')\nvenmo_login = apis.venmo.login(username='morgan-harrison@gmail.com', password=venmo_pass)\nvenmo_token = venmo_login['access_token']\n\n# step1: Check Venmo balance\nbalance = apis.venmo.show_venmo_balance(access_token=venmo_token)\n\n# step2: Search for recipient's email\nsearch_result = apis.venmo.search_users(access_token=venmo_token, query='Troy Solomon')\ntroy_email = search_result[0]['email']\n\n# step3: Send Venmo payment\npayment = apis.venmo.create_transaction(\n    access_token=venmo_token,\n    receiver_email=troy_email,\n    amount=58.0,\n    description='Yoga mat repayment'\n)\n\n# step4: Get phone password and login\nphone_passwords = apis.supervisor.show_account_passwords()\nphone_pass = next(item['password'] for item in phone_passwords if item['account_name'] == 'phone')\nphone_login = apis.phone.login(username='8903665635', password=phone_pass)\nphone_token = phone_login['access_token']\n\n# step5: Search for recipient's phone number\ncontacts = apis.phone.search_contacts(access_token=phone_token, query='Troy')\ntroy_phone = contacts[0]['phone_number']\n\n# step6: Send thank you text message\ntext_result = apis.phone.send_text_message(\n    access_token=phone_token,\n    phone_number=troy_phone,\n    message='Thanks for covering the yoga mat! Just sent you $58 on Venmo.'\n)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.95,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "cf6abd2_2",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "I want to review all payments I've received from coworkers in the past year. First, get all my Venmo transactions where I was the receiver, then cross-reference those senders with my phone contacts who have the 'coworker' relationship to identify work-related payments.",
+        "ground_truth": "# step0: Get account passwords\npasswords = apis.supervisor.show_account_passwords()\n# step1: Login to Venmo\nvenmo_password = next((item['password'] for item in passwords if item['account_name'] == 'venmo'), None)\nvenmo_login = apis.venmo.login(username='siwhit@gmail.com', password=venmo_password)\n# step2: Calculate date one year ago\nimport datetime\ntoday = datetime.date.today()\none_year_ago = today - datetime.timedelta(days=365)\nmin_created_at = one_year_ago.strftime('%Y-%m-%d')\n# step3: Fetch all received Venmo transactions from the past year\nall_received_transactions = []\npage = 0\nwhile True:\n    batch = apis.venmo.show_transactions(\n        access_token=venmo_login['access_token'],\n        direction='received',\n        min_created_at=min_created_at,\n        page_index=page,\n        page_limit=20\n    )\n    if not batch or len(batch) == 0:\n        break\n    all_received_transactions.extend(batch)\n    page += 1\n    if len(batch) < 20:\n        break\n# step4: Login to Phone app\nphone_password = next((item['password'] for item in passwords if item['account_name'] == 'phone'), None)\nphone_login = apis.phone.login(username='7295077363', password=phone_password)\n# step5: Fetch all coworker contacts\ncoworker_contacts = []\npage2 = 0\nwhile True:\n    batch2 = apis.phone.search_contacts(\n        access_token=phone_login['access_token'],\n        relationship='coworker',\n        page_index=page2,\n        page_limit=20\n    )\n    if not batch2 or len(batch2) == 0:\n        break\n    coworker_contacts.extend(batch2)\n    page2 += 1\n    if len(batch2) < 20:\n        break\n# step6: Extract coworker emails\ncoworker_emails = [contact['email'].lower() for contact in coworker_contacts if 'email' in contact]\n# step7: Filter transactions from coworkers\ncoworker_transactions = []\nfor transaction in all_received_transactions:\n    sender_email = transaction['sender']['email'].lower()\n    if sender_email in coworker_emails:\n        coworker_transactions.append(transaction)\n# step8: Calculate total amount\ntotal_amount = sum(t['amount'] for t in coworker_transactions)\n# step9: Complete the task\nanswer = f'Found {len(coworker_transactions)} payments from coworkers in the past year totaling ${total_amount:.2f}'\napis.supervisor.complete_task(answer=answer)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.95,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "3c13f5a_1",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "I need to verify my identity for a new streaming service verification. Please get my supervisor's full name, email, and phone number, then check if my Spotify account shows the same email and name to ensure consistency.",
+        "ground_truth": "# step0: Get supervisor profile\nsup_profile = apis.supervisor.show_profile()\n# step1: Get supervisor account passwords\npasswords = apis.supervisor.show_account_passwords()\n# step2: Extract Spotify password\nspotify_password = next(item['password'] for item in passwords if item['account_name'] == 'spotify')\n# step3: Login to Spotify\nlogin_result = apis.spotify.login(username=sup_profile['email'], password=spotify_password)\n# step4: Get Spotify account details\nspot_account = apis.spotify.show_account(access_token=login_result['access_token'])\n# step5: Compare information\nmatch = (spot_account['email'] == sup_profile['email'] and spot_account['first_name'] == sup_profile['first_name'] and spot_account['last_name'] == sup_profile['last_name'])\nprint(f'Match: {match}')",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.9,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "29caf6f_2",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Check my Spotify playlist 'Aloha Tunes: Hawaiian Melodies' and add it to my current song queue",
+        "ground_truth": "# step0: Get supervisor credentials\nprofile = apis.supervisor.show_profile()\npasswords = apis.supervisor.show_account_passwords()\n# step1: Login to Spotify\nspotify_pass = next(item['password'] for item in passwords if item['account_name'] == 'spotify')\nspotify_login = apis.spotify.login(username=profile['email'], password=spotify_pass)\naccess_token = spotify_login['access_token']\n# step2: Find target playlist by searching all pages\npage_index = 0\npage_limit = 20\nhawaiian_playlist = None\nwhile True:\n    playlists = apis.spotify.show_playlist_library(access_token=access_token, page_index=page_index, page_limit=page_limit)\n    if not playlists:\n        break\n    for playlist in playlists:\n        if playlist['title'] == 'Aloha Tunes: Hawaiian Melodies':\n            hawaiian_playlist = playlist\n            break\n    if hawaiian_playlist:\n        break\n    page_index += 1\n# step3: Add playlist to queue\nqueue_update = apis.spotify.add_to_queue(access_token=access_token, playlist_id=hawaiian_playlist['playlist_id'])\n# step4: Verify addition and mark task complete\nqueue = apis.spotify.show_song_queue(access_token=access_token)\nprint(f\"Added playlist '{hawaiian_playlist['title']}' with {len(hawaiian_playlist['song_ids'])} songs to queue. Queue now has {len(queue)} songs.\")\napis.supervisor.complete_task()",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.9,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "82e2fac_2",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Check my Venmo balance and if it's under $50, request $25 from my brother Adrian Burton with the message 'Spotify premium split', then send him a text through my phone confirming the request.",
+        "ground_truth": "# step0: Get supervisor's Venmo credentials\npasswords = apis.supervisor.show_account_passwords()\nvenmo_password = next(p['password'] for p in passwords if p['account_name'] == 'venmo')\nprofile = apis.supervisor.show_profile()\nuser_email = profile['email']\n# step1: Login to Venmo\nvenmo_login = apis.venmo.login(username=user_email, password=venmo_password)\nvenmo_access_token = venmo_login['access_token']\n# step2: Check Venmo balance\nbalance_result = apis.venmo.show_venmo_balance(access_token=venmo_access_token)\nvenmo_balance = balance_result['venmo_balance']\n# step3: If balance is less than $50, proceed\nif venmo_balance < 50:\n    # step4: Get phone credentials and login\n    phone_password = next(p['password'] for p in passwords if p['account_name'] == 'phone')\n    phone_number = profile['phone_number']\n    phone_login = apis.phone.login(username=phone_number, password=phone_password)\n    phone_access_token = phone_login['access_token']\n    # step5: Search for brother's contact info\n    contacts = apis.phone.search_contacts(access_token=phone_access_token, query='Adrian Burton')\n    if contacts:\n        brother = contacts[0]\n        brother_email = brother['email']\n        brother_phone = brother['phone_number']\n        # step6: Send Venmo payment request\n        payment_request = apis.venmo.create_payment_request(\n            access_token=venmo_access_token,\n            user_email=brother_email,\n            amount=25.00,\n            description='Spotify premium split'\n        )\n        # step7: Send confirmation text message\n        text_message = apis.phone.send_text_message(\n            access_token=phone_access_token,\n            phone_number=brother_phone,\n            message='Just sent you a Venmo request for our Spotify premium split!'\n        )",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.98,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "e3d6c94_2",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Check if my Amazon Prime membership is active, and if not, subscribe to the annual plan using my payment card ending in 1102, then download the receipt and save it to my file system.",
+        "ground_truth": "# step0: Get Amazon password from supervisor\npasswords = apis.supervisor.show_account_passwords()\namazon_password = next(item['password'] for item in passwords if item['account_name'] == 'amazon')\n# step1: Login to Amazon\nlogin_resp = apis.amazon.login(username='timothy.whit@gmail.com', password=amazon_password)\naccess_token = login_resp['access_token']\n# step2: Check if Prime membership is active\nfrom datetime import datetime, timezone\nsubs = apis.amazon.show_prime_subscriptions(access_token=access_token, page_index=0)\ncurrent_datetime = datetime.now(timezone.utc)\nend_date_str = subs[0]['end_date']\nif 'Z' in end_date_str:\n    end_date = datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))\nelif end_date_str.endswith('+00:00'):\n    end_date = datetime.fromisoformat(end_date_str)\nelse:\n    end_date = datetime.fromisoformat(end_date_str + '+00:00')\nif end_date.tzinfo is None:\n    end_date = end_date.replace(tzinfo=timezone.utc)\nis_active = end_date > current_datetime\nif not is_active:\n    # step3: Get payment card ID for card ending in 1102\n    cards = apis.amazon.show_payment_cards(access_token=access_token)\n    target_card_id = None\n    for card in cards:\n        if str(card['card_number']).endswith('1102'):\n            target_card_id = card['payment_card_id']\n            break\n    # step4: Subscribe to annual Prime plan\n    sub_result = apis.amazon.subscribe_prime(access_token=access_token, payment_card_id=target_card_id, duration='yearly')\n    prime_sub_id = sub_result['prime_subscription_id']\n    # step5: Login to file system\n    fs_password = next(item['password'] for item in passwords if item['account_name'] == 'file_system')\n    fs_login = apis.file_system.login(username='timothy.whit@gmail.com', password=fs_password)\n    fs_token = fs_login['access_token']\n    # step6: Download receipt to Documents folder\n    receipt = apis.amazon.download_prime_subscription_receipt(prime_subscription_id=prime_sub_id, access_token=access_token, download_to_file_path='/Documents/Amazon_Prime_Receipt.txt', overwrite=True, file_system_access_token=fs_token)\n    print('Subscription successful and receipt downloaded.')\nelse:\n    print('Prime membership is already active.')",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.9,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "ccb4494_2",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Add all the songs from my 'Art & Soul: Masterful Melodies' playlist to my Spotify song library, then create a new playlist called 'Library Favorites' and add the 5 most recently added library songs to it.",
+        "ground_truth": "# step0: Retrieve login credentials\npasswords = apis.supervisor.show_account_passwords()\nspotify_pw = next(entry['password'] for entry in passwords if entry['account_name'] == 'spotify')\n# step1: Login to Spotify\nlogin_result = apis.spotify.login(username='ca-smit@gmail.com', password=spotify_pw)\naccess_token = login_result['access_token']\n# step2: Find target playlist 'Art & Soul: Masterful Melodies' in library\npage_index = 0\nall_playlists = []\nwhile True:\n    page = apis.spotify.show_playlist_library(access_token=access_token, page_index=page_index, page_limit=20)\n    if not page or len(page) < 20:\n        if page:\n            all_playlists.extend(page)\n        break\n    all_playlists.extend(page)\n    page_index += 1\ntarget_playlist = next(p for p in all_playlists if p['title'] == 'Art & Soul: Masterful Melodies')\n# step3: Get playlist details to see its songs\nplaylist_details = apis.spotify.show_playlist(access_token=access_token, playlist_id=target_playlist['playlist_id'])\n# step4: Add all songs from the playlist to the user's library\nfor song in playlist_details['songs']:\n    apis.spotify.add_song_to_library(access_token=access_token, song_id=song['id'])\n# step5: Fetch the user's entire song library\nlibrary_songs = []\npage_index = 0\nwhile True:\n    page = apis.spotify.show_song_library(access_token=access_token, page_index=page_index, page_limit=20)\n    if not page:\n        break\n    library_songs.extend(page)\n    page_index += 1\n    if len(page) < 20:\n        break\n# step6: Sort library by 'added_at' descending and get top 5 most recent\nlibrary_songs_sorted = sorted(library_songs, key=lambda x: x['added_at'], reverse=True)\nrecent_five = library_songs_sorted[:5]\n# step7: Create a new private playlist named 'Library Favorites'\nnew_playlist = apis.spotify.create_playlist(access_token=access_token, title='Library Favorites', is_public=False)\n# step8: Add the 5 most recent songs to the new playlist\nfor song in recent_five:\n    apis.spotify.add_song_to_playlist(access_token=access_token, playlist_id=new_playlist['playlist_id'], song_id=song['song_id'])\n# step9: Mark task as complete\napis.supervisor.complete_task()",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.9,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "302c169_2",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "What's the total number of songs across all my Spotify playlists? Also, list the title of the playlist that has the most songs.",
+        "ground_truth": "# step0: Retrieve the Spotify password from the supervisor app\nspotify_password = apis.supervisor.show_account_passwords()\nfor account in spotify_password:\n    if account['account_name'] == 'spotify':\n        password = account['password']\n        break\n# step1: Log into Spotify with the retrieved credentials\ntoken = apis.spotify.login(username='kat_simp@gmail.com', password=password)['access_token']\n# step2: Fetch all playlists from the user's library\nall_playlists = []\npage_idx = 0\nwhile True:\n    page = apis.spotify.show_playlist_library(access_token=token, page_index=page_idx, page_limit=20)\n    if not page:\n        break\n    all_playlists.extend(page)\n    page_idx += 1\n    if len(page) < 20:\n        break\n# step3: Calculate total songs and identify the playlist with the most songs\ntotal_songs = 0\nmax_count = 0\nmax_playlist_title = ''\nfor p in all_playlists:\n    song_count = len(p['song_ids'])\n    total_songs += song_count\n    if song_count > max_count:\n        max_count = song_count\n        max_playlist_title = p['title']\nresult = {'total_songs': total_songs, 'max_playlist': max_playlist_title, 'max_count': max_count}",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.95,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "7d7fbf6_3",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Create a new private playlist in Spotify called 'Workout Mix' and add three songs from my 'Electro Euphoria' playlist to it.",
+        "ground_truth": "# step0: Get Spotify credentials\npasswords = apis.supervisor.show_account_passwords()\nspotify_password = next(item['password'] for item in passwords if item['account_name'] == 'spotify')\n# step1: Log into Spotify\nspotify_login = apis.spotify.login(username='adrian_burt@gmail.com', password=spotify_password)\naccess_token = spotify_login['access_token']\n# step2: Find the 'Electro Euphoria' playlist\nall_playlists = []\npage_index = 0\nwhile True:\n    page = apis.spotify.show_playlist_library(access_token=access_token, page_index=page_index, page_limit=20)\n    if not page:\n        break\n    all_playlists.extend(page)\n    if len(page) < 20:\n        break\n    page_index += 1\nelectro_playlist = next(p for p in all_playlists if 'Electro Euphoria' in p['title'])\n# step3: Create a new private playlist\nnew_playlist = apis.spotify.create_playlist(access_token=access_token, title='Workout Mix', is_public=False)\nnew_playlist_id = new_playlist['playlist_id']\n# step4: Add first 3 songs from source playlist\nsong_ids_to_add = electro_playlist['song_ids'][:3]\nfor song_id in song_ids_to_add:\n    apis.spotify.add_song_to_playlist(access_token=access_token, playlist_id=new_playlist_id, song_id=song_id)\n# step5: Mark task as complete\napis.supervisor.complete_task()",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.95,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "e7a10f8_1",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "I received a Venmo payment request from 'Jennifer Powell' for $14 with the description 'Unicorn Merch'. Was it approved or denied, and on what date?",
+        "ground_truth": "# step0: Get Venmo password from supervisor\npasswords = apis.supervisor.show_account_passwords()\nvenmo_password = [p[\"password\"] for p in passwords if p[\"account_name\"] == \"venmo\"][0]\n# step1: Login to Venmo to get access token\nvenmo_login = apis.venmo.login(username='anita.burch@gmail.com', password=venmo_password)\nvenmo_token = venmo_login['access_token']\n# step2: Search for a specific received payment request\nimport math\ntarget_request = None\npage_index = 0\npage_limit = 20\nwhile True:\n    requests = apis.venmo.show_received_payment_requests(access_token=venmo_token, page_index=page_index, page_limit=page_limit)\n    if not requests:\n        break\n    for req in requests:\n        if (req['sender']['name'] == 'Jennifer Powell' and req['amount'] == 14.0 and 'Unicorn Merch' in req['description']):\n            target_request = req\n            break\n    if target_request:\n        break\n    page_index += 1\nprint(target_request)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 1.0,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "229360a_2",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "I'm planning a road trip and want to download all songs from my Spotify library that belong to the 'R&B' genre for offline listening. First, find all R&B albums in my library, then download every song from those albums.",
+        "ground_truth": "# step0: Get Spotify account password\npasswords = apis.supervisor.show_account_passwords()\nspotify_password = [acc['password'] for acc in passwords if acc['account_name'] == 'spotify'][0]\n# step1: Login to Spotify\nlogin_result = apis.spotify.login(username='jepowell@gmail.com', password=spotify_password)\naccess_token = login_result['access_token']\n# step2: Get all R&B albums from user's library\nr_and_b_albums = []\npage_idx = 0\nwhile True:\n    page = apis.spotify.show_album_library(access_token=access_token, page_index=page_idx, page_limit=20)\n    if not page:\n        break\n    for album in page:\n        if album['genre'] == 'R&B':\n            r_and_b_albums.append(album)\n    page_idx += 1\n# step3: Download all songs from R&B albums\nfor album in r_and_b_albums:\n    for song_id in album['song_ids']:\n        apis.spotify.download_song(access_token=access_token, song_id=song_id)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 1.0,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "60d0b5b_2",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "My Venmo MasterCard just expired this month. Remove it from my Venmo account, update my Amazon payment methods to use only the valid Chase card instead, and check that no pending transactions are using the expired card.",
+        "ground_truth": "# step0: Get credentials for Venmo and Amazon\npasswords = apis.supervisor.show_account_passwords()\nvenmo_password = next((item['password'] for item in passwords if item['account_name'] == 'venmo'), None)\namazon_password = next((item['password'] for item in passwords if item['account_name'] == 'amazon'), None)\n\n# step1: Login to both services\nvenmo_login = apis.venmo.login(username='chelsea-burch@gmail.com', password=venmo_password)\namazon_login = apis.amazon.login(username='chelsea-burch@gmail.com', password=amazon_password)\nvenmo_access_token = venmo_login['access_token']\namazon_access_token = amazon_login['access_token']\n\n# step2: Identify and delete the expired MasterCard (payment_card_id 156) from Venmo\napis.venmo.delete_payment_card(access_token=venmo_access_token, payment_card_id=156)\n\n# step3: Identify and delete the expired MasterCard (payment_card_id 156) from Amazon\napis.amazon.delete_payment_card(access_token=amazon_access_token, payment_card_id=156)\n\n# step4: Verify deletion and check for pending transactions (optional verification)\n# Verify cards after deletion\nvenmo_cards_updated = apis.venmo.show_payment_cards(access_token=venmo_access_token)\namazon_cards_updated = apis.amazon.show_payment_cards(access_token=amazon_access_token)\n\n# Check for any pending transactions using the expired card (last 4 digits: 7495)\nexpired_card_digits = '7495'\n# Check Venmo transactions\nvenmo_transactions = apis.venmo.show_transactions(access_token=venmo_access_token, page_limit=20)\ntransactions_with_expired_card = [t for t in venmo_transactions if t.get('payment_card_digits') == expired_card_digits]\n# Check Amazon orders\namazon_orders = apis.amazon.show_orders(access_token=amazon_access_token, page_limit=20)\norders_with_expired_card = [o for o in amazon_orders if o.get('payment_card_digits') == expired_card_digits]",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.9,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "c901732_2",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "List my first five private Spotify playlists and make the one called 'Cocktail Hour: Lounge Classics' public.",
+        "ground_truth": "# step0: Get the Spotify password from the supervisor\npasswords = apis.supervisor.show_account_passwords()\nspotify_password = next(item['password'] for item in passwords if item['account_name'] == 'spotify')\n# step1: Log in to Spotify to get an access token\nlogin_result = apis.spotify.login(username='susanmiller@gmail.com', password=spotify_password)\naccess_token = login_result['access_token']\n# step2: Retrieve the first five private playlists\nprivate_playlists = apis.spotify.show_playlist_library(access_token=access_token, is_public=False, page_index=0, page_limit=5)\n# step3: Make the first private playlist public (if it exists)\nif private_playlists:\n    first_playlist = private_playlists[0]\n    update_result = apis.spotify.update_playlist(access_token=access_token, playlist_id=first_playlist['playlist_id'], is_public=True)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.9,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "287e338_2",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Review my last Venmo transaction with a description containing 'Mexican Food' and if it has zero comments, add a comment thanking Leslie for the meal and asking when she wants to go again.",
+        "ground_truth": "# step0: Get Venmo account password from supervisor\npasswords = apis.supervisor.show_account_passwords()\nvenmo_password = next(acc['password'] for acc in passwords if acc['account_name'] == 'venmo')\n\n# step1: Login to Venmo to obtain access token\nlogin_result = apis.venmo.login(username='timothy.whit@gmail.com', password=venmo_password)\naccess_token = login_result['access_token']\n\n# step2: Search for transactions containing 'Mexican Food'\ntransactions = apis.venmo.show_transactions(access_token=access_token, query='Mexican Food')\n\n# step3: Identify the last transaction (first in the returned list) and check if it has zero comments\nlast_transaction = transactions[0]\nif last_transaction['comment_count'] == 0:\n    # step4: Add a comment to the transaction\n    apis.venmo.create_transaction_comment(\n        access_token=access_token,\n        transaction_id=last_transaction['transaction_id'],\n        comment='Thanks for the meal Leslie! When do you want to go again?'\n    )\n\n# step5: Mark task as complete\napis.supervisor.complete_task()",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 1.0,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "27e1026_2",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Review the song 'Silver Lining' in my library with 4 stars and the comment 'Perfect for morning workouts', then check if my review was posted successfully.",
+        "ground_truth": "# step0\nlogin_resp = apis.spotify.login(username='jes.mill@gmail.com', password='7w0A*Vw')\naccess_token = login_resp['access_token']\n# step1\nsearch_result = apis.spotify.search_songs(query='Silver Lining')\nsong_id = search_result[0]['song_id']\n# step2\napis.spotify.review_song(song_id=song_id, access_token=access_token, rating=4, review='Perfect for morning workouts')\n# step3\nmy_reviews = apis.spotify.show_song_reviews(song_id=song_id)\nmy_email = 'jes.mill@gmail.com'\nmy_posted_review = next((r for r in my_reviews if r['user_email'] == my_email), None)\nif my_posted_review:\n    print(f'Review posted: {my_posted_review[\"rating\"]} stars')\nelse:\n    print('Review not found')",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.95,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "229360a_2",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Check if I have any overlapping contacts between my Phone app contacts and my Venmo friends (by matching email addresses).",
+        "ground_truth": "# step0: Get supervisor account passwords\npasswords = apis.supervisor.show_account_passwords()\n# step1: Login to Phone app\nphone_pw = next(item['password'] for item in passwords if item['account_name'] == 'phone')\nphone_login = apis.phone.login(username='4288705164', password=phone_pw)\nphone_token = phone_login['access_token']\n# step2: Fetch all Phone contacts via pagination\nall_contacts = []\npage_index = 0\nwhile True:\n    contacts_page = apis.phone.search_contacts(access_token=phone_token, query='', page_index=page_index, page_limit=20)\n    if not contacts_page:\n        break\n    all_contacts.extend(contacts_page)\n    page_index += 1\n    if len(contacts_page) < 20:\n        break\ncontact_emails = [c['email'] for c in all_contacts if c.get('email')]\n# step3: Login to Venmo app\nvenmo_pw = next(item['password'] for item in passwords if item['account_name'] == 'venmo')\nvenmo_login = apis.venmo.login(username='jepowell@gmail.com', password=venmo_pw)\nvenmo_token = venmo_login['access_token']\n# step4: Fetch all Venmo friends via pagination\nall_friends = []\npage_index = 0\nwhile True:\n    friends_page = apis.venmo.search_friends(access_token=venmo_token, query='', page_index=page_index, page_limit=20)\n    if not friends_page:\n        break\n    all_friends.extend(friends_page)\n    page_index += 1\n    if len(friends_page) < 20:\n        break\nfriend_emails = [f['email'] for f in all_friends if f.get('email')]\n# step5: Find overlapping email addresses\noverlap = set(contact_emails) & set(friend_emails)\noverlap_list = list(overlap)\n# step6: Complete task with answer as string\nanswer_str = ', '.join(sorted(overlap_list))\napis.supervisor.complete_task(answer=answer_str)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.95,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "82e2fac_2",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Find the song 'Crimson Veil' by Phoenix Rivers in my Spotify library, download it for offline listening, and also add it to my 'Heartbreak Hotel: Songs of Sorrow' playlist.",
+        "ground_truth": "# step0: Get supervisor profile to find email (username)\nprofile = apis.supervisor.show_profile()\n# step1: Get account passwords to find Spotify password\npasswords = apis.supervisor.show_account_passwords()\nspotify_pw = [p['password'] for p in passwords if p['account_name'] == 'spotify'][0]\n# step2: Login to Spotify\nlogin_result = apis.spotify.login(username=profile['email'], password=spotify_pw)\ntoken = login_result['access_token']\n# step3: Fetch entire song library by paginating\nlibrary = []\npage = 0\nwhile True:\n    page_data = apis.spotify.show_song_library(access_token=token, page_index=page)\n    if not page_data:\n        break\n    library.extend(page_data)\n    page += 1\n# step4: Find specific song in library\nsong_id = None\nfor s in library:\n    if s['title'] == 'Crimson Veil':\n        artists = [a['name'] for a in s['artists']]\n        if 'Phoenix Rivers' in artists:\n            song_id = s['song_id']\n            break\n# step5: Fetch entire playlist library by paginating\nplaylists = []\npage = 0\nwhile True:\n    page_data = apis.spotify.show_playlist_library(access_token=token, page_index=page)\n    if not page_data:\n        break\n    playlists.extend(page_data)\n    page += 1\n# step6: Find target playlist\nplaylist_id = None\nfor p in playlists:\n    if p['title'] == 'Heartbreak Hotel: Songs of Sorrow':\n        playlist_id = p['playlist_id']\n        break\n# step7: Add the song to the playlist\nadd_result = apis.spotify.add_song_to_playlist(access_token=token, playlist_id=playlist_id, song_id=song_id)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.95,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "c901732_2",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Before I get started with my Spotify task, I need to get access to all my account credentials in one place. Show me my full supervisor profile (name, email) and then list all my stored app passwords.",
+        "ground_truth": "# step0\nprofile = apis.supervisor.show_profile()\nprint('Profile:', profile)\n# step1\npasswords = apis.supervisor.show_account_passwords()\nprint('Stored Passwords:')\nfor entry in passwords:\n    print(f\"App: {entry['account_name']}, Password: {entry['password']}\")",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 1.0,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "29caf6f_2",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Can you check if any of my habit tracking notes from last week show I didn't exercise at least 30 minutes, and if so, send me a reminder text about it?",
+        "ground_truth": "# step0: Get supervisor's app passwords\naccount_passwords = apis.supervisor.show_account_passwords()\nsimple_note_password = next(item['password'] for item in account_passwords if item['account_name'] == 'simple_note')\nphone_password = next(item['password'] for item in account_passwords if item['account_name'] == 'phone')\n# step1: Login to Simple Note\nsimple_note_login = apis.simple_note.login(username='gl.moore@gmail.com', password=simple_note_password)\naccess_token = simple_note_login['access_token']\n# step2: Search for all habit-tracker notes\nall_notes = []\npage_index = 0\nwhile True:\n    notes_page = apis.simple_note.search_notes(access_token=access_token, tags=['habit-tracker'], page_index=page_index, page_limit=20)\n    if not notes_page:\n        break\n    all_notes.extend(notes_page)\n    page_index += 1\n# step3: Find notes from the last week with 'exercised_atleast_30_mins: no'\nfrom datetime import datetime, timedelta\ntoday = datetime.now()\nweek_ago = today - timedelta(days=7)\nbad_days = []\nfor note in all_notes:\n    note_detail = apis.simple_note.show_note(access_token=access_token, note_id=note['note_id'])\n    note_date = datetime.fromisoformat(note_detail['created_at'].replace('Z', '+00:00'))\n    if note_date >= week_ago and 'exercised_atleast_30_mins: no' in note_detail['content']:\n        title = note_detail['title']\n        if 'for ' in title:\n            date_str = title.split('for ')[-1]\n            bad_days.append(date_str)\n        else:\n            bad_days.append(note_date.strftime('%Y-%m-%d'))\n# step4: Send reminder text if needed\nif bad_days:\n    phone_login = apis.phone.login(username='8346699249', password=phone_password)\n    phone_access_token = phone_login['access_token']\n    message = f\"Reminder: You missed 30-min exercise on {', '.join(bad_days)}. Try to fit it in today!\"\n    apis.phone.send_text_message(access_token=phone_access_token, phone_number='8346699249', message=message)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 1.0,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "ccb4494_3",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Build a 'Focus Work' playlist in Spotify by adding instrumental songs from artists I already follow.",
+        "ground_truth": "# step0: Get Spotify account password from supervisor\npasswords = apis.supervisor.show_account_passwords()\nspotify_password = next(item['password'] for item in passwords if item['account_name'] == 'spotify')\n# step1: Login to Spotify\nlogin_resp = apis.spotify.login(username='pa_ritter@gmail.com', password=spotify_password)\naccess_token = login_resp['access_token']\n# step2: Get all followed artists with pagination\nfollowed_artists = []\npage_idx = 0\nwhile True:\n    page = apis.spotify.show_following_artists(access_token=access_token, page_index=page_idx, page_limit=20)\n    if not page:\n        break\n    followed_artists.extend(page)\n    if len(page) < 20:\n        break\n    page_idx += 1\n# step3: Search for instrumental songs by each artist\ntarget_song_ids = []\nfor artist in followed_artists:\n    search_results = apis.spotify.search_songs(query=f'instrumental {artist[\"name\"]}', access_token=access_token, page_limit=5)\n    if search_results:\n        target_song_ids.append(search_results[0]['song_id'])\n# step4: Create the 'Focus Work' playlist\nplaylist_response = apis.spotify.create_playlist(title='Focus Work', is_public=False, access_token=access_token)\nplaylist_id = playlist_response['playlist_id']\n# step5: Add all found songs to the playlist\nfor song_id in target_song_ids:\n    apis.spotify.add_song_to_playlist(playlist_id=playlist_id, song_id=song_id, access_token=access_token)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.9,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "229360a_3",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Find any albums in my Spotify library where I haven't liked the album but all its songs are downloaded, and add those albums to my 'Liked Albums' list.",
+        "ground_truth": "# step0: Get credentials\npasswords = apis.supervisor.show_account_passwords()\nprofile = apis.supervisor.show_profile()\nemail = profile['email']\nspotify_pass = next((e['password'] for e in passwords if e['account_name'] == 'spotify'), None)\n\n# step1: Login to Spotify\nlogin_result = apis.spotify.login(username=email, password=spotify_pass)\ntoken = login_result['access_token']\n\n# step2: Get all albums from library (paginated)\nalbums = []\npage_index = 0\nwhile True:\n    batch = apis.spotify.show_album_library(access_token=token, page_index=page_index)\n    if not batch:\n        break\n    albums.extend(batch)\n    if len(batch) < 5:\n        break\n    page_index += 1\n\n# step3: Find qualifying albums\nalbums_to_like = []\nfor album in albums:\n    album_id = album['album_id']\n    priv = apis.spotify.show_album_privates(album_id=album_id, access_token=token)\n    if priv['liked']:\n        continue\n    all_downloaded = True\n    for song_id in album['song_ids']:\n        song_priv = apis.spotify.show_song_privates(song_id=song_id, access_token=token)\n        if not song_priv['downloaded']:\n            all_downloaded = False\n            break\n    if all_downloaded:\n        albums_to_like.append(album_id)\n\n# step4: Like qualifying albums\nfor album_id in albums_to_like:\n    apis.spotify.like_album(album_id=album_id, access_token=token)\n\n# step5: Complete task (optional)\napis.supervisor.complete_task(answer=len(albums_to_like))",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.9,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "07b42fd_3",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "My friend really liked my public playlist 'Retro Rewind: 80's & 90's Mix'. Please check its rating, and if it's rated 5 stars as I think, share the playlist link with my friend Troy via text message. If the rating is below 5, leave a 5-star review on it first.",
+        "ground_truth": "# step0: Get supervisor profile\nsupervisor_profile = apis.supervisor.show_profile()\n# step1: Get account credentials\ncreds = apis.supervisor.show_account_passwords()\n# step2: Extract Spotify password and login\nspotify_pass = [e['password'] for e in creds if e['account_name'] == 'spotify'][0]\nspotify_login = apis.spotify.login(username=supervisor_profile['email'], password=spotify_pass)\naccess_token = spotify_login['access_token']\n# step3: Search for playlist\nplaylists_page = apis.spotify.show_playlist_library(access_token=access_token, page_limit=20)\ntarget_playlist = [p for p in playlists_page if p['title'] == \"Retro Rewind: 80's & 90's Mix\"][0]\n# step4: Get playlist details including shareable link\nplaylist_detail = apis.spotify.show_playlist(access_token=access_token, playlist_id=target_playlist['playlist_id'])\nplaylist_link = playlist_detail['shareable_link']\n# step5: Extract Phone password and login (using phone number as username)\nphone_pass = [e['password'] for e in creds if e['account_name'] == 'phone'][0]\nphone_login = apis.phone.login(username=supervisor_profile['phone_number'], password=phone_pass)\nphone_access_token = phone_login['access_token']\n# step6: Search for contact 'Troy'\ncontacts = apis.phone.search_contacts(access_token=phone_access_token, query=\"Troy\")\ntroy_contact = [c for c in contacts if c['first_name'] == 'Troy'][0]\ntroy_phone_number = troy_contact['phone_number']\n# step7: Send text message with playlist link\nmessage = f\"Check out my playlist: {playlist_link}\"\nresult = apis.phone.send_text_message(access_token=phone_access_token, phone_number=troy_phone_number, message=message)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.95,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "287e338_1",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "What's the total count of emails in my Gmail inbox, outbox, and spam folders?",
+        "ground_truth": "# step0: Get the Gmail account password from the supervisor\npasswords = apis.supervisor.show_account_passwords()\ngmail_password = None\nfor account in passwords:\n    if account['account_name'] == 'gmail':\n        gmail_password = account['password']\n        break\n# step1: Log in to the Gmail account\nlogin_result = apis.gmail.login(username='kyl_moor@gmail.com', password=gmail_password)\n# step2: Get the email thread counts for each category using the access token\ncategory_sizes = apis.gmail.show_category_sizes(access_token=login_result['access_token'])\n# step3: Calculate the total count for inbox, outbox, and spam\ninbox = category_sizes.get('inbox', 0)\noutbox = category_sizes.get('outbox', 0)\nspam = category_sizes.get('spam', 0)\ntotal = inbox + outbox + spam\nprint(f'Total across these folders: {total}')",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 1.0,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "3c13f5a_1",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Back up my important personal documents by compressing the '/home/jose/documents/personal/' directory and moving the compressed file to '/home/jose/backups/' with today's date in the filename.",
+        "ground_truth": "# step0: Get the file_system account password\npasswords = apis.supervisor.show_account_passwords()\nfs_password = next((item['password'] for item in passwords if item['account_name'] == 'file_system'), None)\n# step1: Login to file_system\nlogin_result = apis.file_system.login(username='joseharr@gmail.com', password=fs_password)\naccess_token = login_result['access_token']\n# step2: Compress the target directory\ncompress_result = apis.file_system.compress_directory(access_token=access_token, directory_path='/home/jose/documents/personal/')\n# step3: Generate today's date and move the compressed file\nfrom datetime import date\ntoday = date.today().isoformat()\nnew_path = f'/home/jose/backups/personal_docs_backup_{today}.zip'\nmove_result = apis.file_system.move_file(access_token=access_token, source_file_path=compress_result['compressed_file_path'], destination_file_path=new_path)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.95,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "34d9492_1",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Send a payment request on Venmo to my roommate Chris McCoy for $87.50 for half of this month's utilities, then set a reminder alarm on my phone for 3 days from now to check if he's paid.",
+        "ground_truth": "# step0: Get all account credentials\ncreds = apis.supervisor.show_account_passwords()\n\n# step1: Extract Venmo and phone passwords\nvenmo_pass = next(item['password'] for item in creds if item['account_name'] == 'venmo')\nphone_pass = next(item['password'] for item in creds if item['account_name'] == 'phone')\n\n# step2: Login to Venmo\nvenmo_login = apis.venmo.login(username='paul_mill@gmail.com', password=venmo_pass)\nvenmo_token = venmo_login['access_token']\n\n# step3: Search for Chris McCoy in Venmo friends\nfriends = []\npage_index = 0\nwhile True:\n    page = apis.venmo.search_friends(access_token=venmo_token, query='Chris', page_index=page_index)\n    if page:\n        friends.extend(page)\n        page_index += 1\n    else:\n        break\n\n# step4: Find Chris McCoy's email\nchris = next(friend for friend in friends if friend['last_name'] == 'Mccoy' and friend['first_name'] == 'Chris')\nchris_email = chris['email']\n\n# step5: Create payment request to Chris McCoy\npayment_request = apis.venmo.create_payment_request(\n    access_token=venmo_token,\n    user_email=chris_email,\n    amount=87.50,\n    description='Utilities split - May 2023'\n)\n\n# step6: Login to phone app\nphone_login = apis.phone.login(username='3379617841', password=phone_pass)\nphone_token = phone_login['access_token']\n\n# step7: Get current date and time\ncurrent_datetime = apis.phone.get_current_date_and_time()\n\n# step8: Calculate 3 days from now\nfrom datetime import datetime, timedelta\ncurrent_date_str = current_datetime['date']\nparsed_date = datetime.strptime(current_date_str, '%A, %B %d, %Y')\nfuture_date = parsed_date + timedelta(days=3)\nfuture_day_name = future_date.strftime('%A').lower()  # Convert to lowercase\n\n# step9: Create alarm for 3 days later at 9:00 AM\nalarm_result = apis.phone.create_alarm(\n    access_token=phone_token,\n    time='09:00',\n    label='Check Chris utilities payment',\n    repeat_days=[future_day_name],\n    enabled=True,\n    snooze_minutes=0,\n    vibration=True\n)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 1.0,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "cf6abd2_1",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Check if I'm following the artist of the song that's currently playing on my Spotify, and if not, follow them and add their top song (by play count) to my queue.",
+        "ground_truth": "# step0: Authenticate and get access token\npasswords = apis.supervisor.show_account_passwords()\nspotify_pass = next(item['password'] for item in passwords if item['account_name'] == 'spotify')\nspotify_login = apis.spotify.login(username='ron.harrison@gmail.com', password=spotify_pass)\naccess_token = spotify_login['access_token']\n\n# step1: Get current song details\ncurrent = apis.spotify.show_current_song(access_token=access_token)\n\n# step2: Check if following the current artist\nartist_id = current['artists'][0]['id']\nfollowing = apis.spotify.show_artist_following(artist_id=artist_id, access_token=access_token)\n\n# step3: Follow the artist if not already following\nif not following['following']:\n    apis.spotify.follow_artist(artist_id=artist_id, access_token=access_token)\n\n# step4: Get artist's top song by play count\nsongs = apis.spotify.search_songs(artist_id=artist_id, sort_by='-play_count', page_limit=20, access_token=access_token)\ntop_song_id = songs[0]['song_id']\n\n# step5: Add top song to queue\napis.spotify.add_to_queue(access_token=access_token, song_id=top_song_id)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 1.0,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "ccb4494_3",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Create a new private playlist called 'Road Trip Mix', add my currently playing song to it, then like that song and add it to my library.",
+        "ground_truth": "# step0\npasswords = apis.supervisor.show_account_passwords()\nspotify_pass = next(cred['password'] for cred in passwords if cred['account_name'] == 'spotify')\n# step1\nspotify_login = apis.spotify.login(username='pa_ritter@gmail.com', password=spotify_pass)\nspotify_token = spotify_login['access_token']\n# step2\ncurrent = apis.spotify.show_current_song(access_token=spotify_token)\nsong_id = current['song_id']\n# step3\nplaylist = apis.spotify.create_playlist(access_token=spotify_token, title='Road Trip Mix', is_public=False)\nplaylist_id = playlist['playlist_id']\n# step4\napis.spotify.add_song_to_playlist(access_token=spotify_token, playlist_id=playlist_id, song_id=song_id)\n# step5\napis.spotify.like_song(access_token=spotify_token, song_id=song_id)\n# step6\napis.spotify.add_song_to_library(access_token=spotify_token, song_id=song_id)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.9,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "ccb4494_2",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Set up my Spotify account and populate my empty libraries by adding one rock song to my song library and one rock album to my album library, then verify both libraries are no longer empty.",
+        "ground_truth": "# step0: Get supervisor's email and Spotify password\npasswords = apis.supervisor.show_account_passwords()\nprofile = apis.supervisor.show_profile()\nspotify_password = [pwd['password'] for pwd in passwords if pwd['account_name'] == 'spotify'][0]\n# step1: Log in to Spotify\nlogin_res = apis.spotify.login(username=profile['email'], password=spotify_password)\naccess_token = login_res['access_token']\n# step2: Search for a rock song\nsong_search = apis.spotify.search_songs(query='rock', page_index=0)\nrock_song_id = song_search[0]['song_id']\n# step3: Add the rock song to the library\napis.spotify.add_song_to_library(access_token=access_token, song_id=rock_song_id)\n# step4: Search for a rock album\nalbum_search = apis.spotify.search_albums(query='rock', page_index=0)\nrock_album_id = album_search[0]['album_id']\n# step5: Add the rock album to the library (if not already present)\ntry:\n    apis.spotify.add_album_to_library(access_token=access_token, album_id=rock_album_id)\nexcept Exception:\n    pass\n# step6: Verify both libraries are populated\nsong_lib = apis.spotify.show_song_library(access_token=access_token, page_index=0)\nalbum_lib = apis.spotify.show_album_library(access_token=access_token, page_index=0)\nprint(f'Song library populated: {len(song_lib) > 0}')\nprint(f'Album library populated: {len(album_lib) > 0}')",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.95,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "27e1026_2",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "My phone contact for 'Laura' might be outdated. Find her current email by looking up her Venmo transactions, then update her contact in my phone with that email and mark her as a 'Friend' relationship.",
+        "ground_truth": "# step0: Get supervisor's account passwords\npasswords = apis.supervisor.show_account_passwords()\n# step1: Extract Venmo and Phone passwords\nvenmo_password = None\nphone_password = None\nfor account in passwords:\n    if account['account_name'] == 'venmo':\n        venmo_password = account['password']\n    elif account['account_name'] == 'phone':\n        phone_password = account['password']\n# step2: Log into Venmo and Phone\nvenmo_login_result = apis.venmo.login(username='jes.mill@gmail.com', password=venmo_password)\nphone_login_result = apis.phone.login(username='3808719492', password=phone_password)\nvenmo_access_token = venmo_login_result['access_token']\nphone_access_token = phone_login_result['access_token']\n# step3: Search Venmo transactions for Laura's email\nlaura_email = None\npage_index = 0\nwhile True:\n    transactions = apis.venmo.show_transactions(access_token=venmo_access_token, page_index=page_index, page_limit=20)\n    if not transactions:\n        break\n    for tx in transactions:\n        if 'receiver' in tx and 'Laura' in tx['receiver']['name']:\n            laura_email = tx['receiver']['email']\n            break\n        if 'sender' in tx and 'Laura' in tx['sender']['name']:\n            laura_email = tx['sender']['email']\n            break\n    if laura_email:\n        break\n    page_index += 1\n    if page_index > 10:\n        break\n# step4: Search phone contacts for Laura and update\ncontacts = apis.phone.search_contacts(access_token=phone_access_token, query='Laura', page_index=0, page_limit=20)\nlaura_contact_id = None\nfor contact in contacts:\n    if 'Laura' in contact.get('first_name', '') or 'Laura' in contact.get('last_name', ''):\n        laura_contact_id = contact['contact_id']\n        break\nif laura_contact_id:\n    update_result = apis.phone.update_contact(access_token=phone_access_token, contact_id=laura_contact_id, email=laura_email, relationships=['Friend'])\n# step5: Complete task\napis.supervisor.complete_task()",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 1.0,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "6104387_1",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "I need to check if the phone numbers for Allison Calhoun and Anita Burch in my contacts match what I have saved in my phone. If either is missing from my contacts, add them with their numbers 650-339-8734 and 646-339-8756 respectively.",
+        "ground_truth": "# step0: Get supervisor's phone number\nprofile = apis.supervisor.show_profile()\nphone_number = profile['phone_number']\n# step1: Get the password for the phone app\npasswords = apis.supervisor.show_account_passwords()\nphone_password = None\nfor account in passwords:\n    if account['account_name'] == 'phone':\n        phone_password = account['password']\n        break\n# step2: Log into the phone app\nphone_login = apis.phone.login(username=phone_number, password=phone_password)\naccess_token = phone_login['access_token']\n# step3: Search for the specific contacts\nallison_contacts = apis.phone.search_contacts(access_token=access_token, query=\"Allison Calhoun\")\nanita_contacts = apis.phone.search_contacts(access_token=access_token, query=\"Anita Burch\")\n# step4: Update phone numbers if contacts are found\nfor contact in allison_contacts:\n    if contact['first_name'] == 'Allison' and contact['last_name'] == 'Calhoun':\n        apis.phone.update_contact(contact_id=contact['contact_id'], access_token=access_token, phone_number=\"6503398734\")\n        break\nfor contact in anita_contacts:\n    if contact['first_name'] == 'Anita' and contact['last_name'] == 'Burch':\n        apis.phone.update_contact(contact_id=contact['contact_id'], access_token=access_token, phone_number=\"6463398756\")\n        break",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 1.0,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "692c77d_2",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Send a Venmo payment request to Kristin White for $75 labeled 'Concert Tickets', then immediately text her via Phone app saying 'Sent you a Venmo request for our concert tickets!'.",
+        "ground_truth": "# step0: Get supervisor credentials and profile\npasswords = apis.supervisor.show_account_passwords()\nprofile = apis.supervisor.show_profile()\n# step1: Login to Venmo\nvenmo_password = next(item['password'] for item in passwords if item['account_name'] == 'venmo')\nvenmo_login = apis.venmo.login(username=profile['email'], password=venmo_password)\n# step2: Login to Phone app\nphone_password = next(item['password'] for item in passwords if item['account_name'] == 'phone')\nphone_login = apis.phone.login(username=profile['phone_number'], password=phone_password)\n# step3: Search for a contact's email\nsearch_result = apis.phone.search_contacts(access_token=phone_login['access_token'], query='Kristin White')\nkristin_email = search_result[0]['email']\nkristin_phone = search_result[0]['phone_number']\n# step4: Create a Venmo payment request\nrequest = apis.venmo.create_payment_request(\n    access_token=venmo_login['access_token'],\n    user_email=kristin_email,\n    amount=75.0,\n    description='Concert Tickets'\n)\n# step5: Send a text message about the request\ntext_result = apis.phone.send_text_message(\n    access_token=phone_login['access_token'],\n    phone_number=kristin_phone,\n    message='Sent you a Venmo request for our concert tickets!'\n)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.95,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "cf6abd2_1",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "I want to create a note in Simple Note with all my Spotify playlist titles and their creation dates, then tag it with 'music-collection' and pin it so it's easy to find.",
+        "ground_truth": "# step0 - Get credentials for Spotify and Simple Note\npasswords = apis.supervisor.show_account_passwords()\nspotify_password = None\nsimple_note_password = None\nfor account in passwords:\n    if account['account_name'] == 'spotify':\n        spotify_password = account['password']\n    if account['account_name'] == 'simple_note':\n        simple_note_password = account['password']\n\n# step1 - Login to Spotify\nspotify_login = apis.spotify.login(username='ron.harrison@gmail.com', password=spotify_password)\nspotify_access_token = spotify_login['access_token']\n\n# step2 - Fetch all Spotify playlists with pagination\nall_playlists = []\npage_index = 0\nwhile True:\n    page = apis.spotify.show_playlist_library(\n        access_token=spotify_access_token,\n        page_index=page_index,\n        page_limit=20\n    )\n    if page and len(page) > 0:\n        all_playlists.extend(page)\n        page_index += 1\n    else:\n        break\n\n# step3 - Format playlist titles and creation dates\nplaylist_info_lines = []\nfor playlist in all_playlists:\n    title = playlist['title']\n    created_at = playlist['created_at']\n    date_part = created_at[:10]\n    playlist_info_lines.append(f\"{title} - created {date_part}\")\nplaylist_info = '\\n'.join(playlist_info_lines)\n\n# step4 - Login to Simple Note\nsimple_note_login = apis.simple_note.login(username='ron.harrison@gmail.com', password=simple_note_password)\nsimple_note_access_token = simple_note_login['access_token']\n\n# step5 - Create a note with the playlist info, tag it, and pin it\nnote_result = apis.simple_note.create_note(\n    access_token=simple_note_access_token,\n    title='My Spotify Playlists',\n    content=playlist_info,\n    tags=['music-collection'],\n    pinned=True\n)\nprint(note_result)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.9,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "82e2fac_2",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Find the Amazon product I ordered on May 15th (order 2977) and write a 4-star review saying 'Great fit, but took a week to arrive'.",
+        "ground_truth": "# step0 - Login to Amazon\namazon_pwd = next(item['password'] for item in apis.supervisor.show_account_passwords() if item['account_name'] == 'amazon')\namazon_token = apis.amazon.login(username='glenn.burton@gmail.com', password=amazon_pwd)['access_token']\n# step1 - Find the specific order\norders = apis.amazon.show_orders(access_token=amazon_token, page_index=0)\ntarget_order = [o for o in orders if o['order_id'] == 2977][0]\nproduct_id = target_order['order_items'][0]['product_id']\n# step2 - Write review\napis.amazon.write_product_review(access_token=amazon_token, product_id=product_id, rating=4, title='Good product', text='Great fit, but took a week to arrive')",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.95,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "e3d6c94_3",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Check my Venmo balance, and if it's over $500, transfer $300 to my bank account and create a task in Todoist reminding me to confirm the transfer.",
+        "ground_truth": "# step0: Get Venmo password from supervisor\nvenmo_password = apis.supervisor.show_account_passwords()\nfor entry in venmo_password:\n    if entry['account_name'] == 'venmo':\n        venmo_password = entry['password']\n        break\n# step1: Log in to Venmo\nlogin_result = apis.venmo.login(username='caiburc@gmail.com', password=venmo_password)\naccess_token = login_result['access_token']\n# step2: Check Venmo balance\nbalance_result = apis.venmo.show_venmo_balance(access_token=access_token)\n# step3: Get payment cards linked to Venmo account\nvenmo_cards = apis.venmo.show_payment_cards(access_token=access_token)\n# step4: Select a valid (non-expired) payment card ID\nvalid_card_id = None\nfor card in venmo_cards:\n    if card['expiry_year'] > 2023:  # Assuming current year is 2024\n        valid_card_id = card['payment_card_id']\n        break\n# step5: Withdraw $300 from Venmo balance to the valid card\nwithdraw_result = apis.venmo.withdraw_from_venmo_balance(access_token=access_token, amount=300.0, payment_card_id=valid_card_id)\n# step6: Get Todoist password from supervisor\nfor entry in venmo_password:\n    if entry['account_name'] == 'todoist':\n        todoist_password = entry['password']\n        break\n# step7: Log in to Todoist\ntodoist_login = apis.todoist.login(username='caiburc@gmail.com', password=todoist_password)\ntodoist_token = todoist_login['access_token']\n# step8: Create a reminder task in Todoist\ncreate_result = apis.todoist.create_task(access_token=todoist_token, project_id=0, title='Confirm bank transfer', description='Confirm $300 transfer from Venmo to bank account')",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.95,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "ccb4494_2",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Check if I have any unread emails in my Gmail inbox from the last 3 days, then mark the most recent one as read and archive the entire thread.",
+        "ground_truth": "# step0: Retrieve Gmail password from the supervisor app\npasswords = apis.supervisor.show_account_passwords()\ngmail_pass = [p['password'] for p in passwords if p['account_name'] == 'gmail'][0]\n# step1: Log in to Gmail to obtain an access token\nlogin = apis.gmail.login(username='ca-smit@gmail.com', password=gmail_pass)\ntoken = login['access_token']\n# step2: Calculate the date from 3 days ago\nfrom datetime import datetime, timedelta\nthree_days_ago = (datetime.now() - timedelta(days=3)).strftime('%Y-%m-%d')\n# step3: Fetch all unread email threads from the last 3 days\npage_index = 0\nthreads = []\nwhile True:\n    page_threads = apis.gmail.show_inbox_threads(\n        access_token=token,\n        min_created_at=three_days_ago,\n        read=False,\n        page_index=page_index,\n        page_limit=20\n    )\n    if page_threads:\n        threads.extend(page_threads)\n        page_index += 1\n    else:\n        break\n# step4: Identify the most recent thread (first in the sorted list)\nif threads:\n    latest_thread = threads[0]\n    thread_id = latest_thread['email_thread_id']\n    # step5: Mark the most recent thread as read\n    apis.gmail.mark_thread_read(access_token=token, email_thread_id=thread_id)\n    # step6: Archive the most recent thread\n    apis.gmail.mark_thread_archived(access_token=token, email_thread_id=thread_id)\n    print(f\"Archived thread: {latest_thread['subject']}\")\nelse:\n    print('No unread threads in the last 3 days')",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.95,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "e7a10f8_3",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "I just returned two frisbees to Amazon on May 18th. Can you download the receipt for that order and save it to my monthly bills folder for May?",
+        "ground_truth": "# step0: Get Amazon credentials and login\npasswords = apis.supervisor.show_account_passwords()\namazon_password = [account for account in passwords if account['account_name'] == 'amazon'][0]['password']\namazon_login = apis.amazon.login(username='ismill@gmail.com', password=amazon_password)\n# step1: Find the frisbee order from May 18th\npage_index = 0\norder_id = None\nwhile True:\n    orders_page = apis.amazon.show_orders(access_token=amazon_login['access_token'], query='frisbee', page_index=page_index, page_limit=20, sort_by='-created_at')\n    if not orders_page:\n        break\n    for order in orders_page:\n        if '2023-05-18' in order['created_at']:\n            order_id = order['order_id']\n            break\n    if order_id:\n        break\n    page_index += 1\n# step2: Get File System credentials and login\nfs_password = [account for account in passwords if account['account_name'] == 'file_system'][0]['password']\nfs_login = apis.file_system.login(username='ismill@gmail.com', password=fs_password)\n# step3: Ensure the monthly bills directory for May exists\napis.file_system.create_directory(access_token=fs_login['access_token'], directory_path='~/bills/2023-05', recursive=True)\n# step4: Download the order receipt to the target folder\napis.amazon.download_order_receipt(access_token=amazon_login['access_token'], order_id=order_id, download_to_file_path='~/bills/2023-05/amazon_frisbee_return_receipt.pdf', overwrite=True, file_system_access_token=fs_login['access_token'])\n# step5: Complete the task\napis.supervisor.complete_task()",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.95,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "e3d6c94_1",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Check if I have any public playlists on Spotify that have zero likes and were created before 2023, then delete the oldest one.",
+        "ground_truth": "# step0: Get all available API descriptions for the Spotify app\napis.api_docs.show_api_descriptions(app_name='spotify')\n# step1: Get the detailed specification for the delete_playlist API\napis.api_docs.show_api_doc(app_name='spotify', api_name='delete_playlist')\n# step2: Retrieve all account passwords from the supervisor\napis.supervisor.show_account_passwords()\n# step3: Extract the Spotify password and log in to obtain an access token\nspotify_password = [password for account in passwords if account['account_name'] == 'spotify'][0]['password']\naccess_token = apis.spotify.login(username='jasonsimp@gmail.com', password=spotify_password)['access_token']\n# step4: Get the specification for the show_playlist_library API to understand pagination\napis.api_docs.show_api_doc(app_name='spotify', api_name='show_playlist_library')\n# step5: Fetch all playlists from the user's library using pagination\nall_playlists = []\npage_idx = 0\nwhile True:\n    page = apis.spotify.show_playlist_library(access_token=access_token, page_index=page_idx, page_limit=20)\n    if not page:\n        break\n    all_playlists.extend(page)\n    page_idx += 1\n# step6: Filter playlists: public (is_public=True), zero likes (like_count==0), created before 2023-01-01 (created_at < '2023-01-01T00:00:00')\ncandidates = [p for p in all_playlists if p['is_public'] and p['like_count'] == 0 and p['created_at'] < '2023-01-01T00:00:00']\n# step7: Select the oldest playlist from the candidates (if multiple, sort by created_at; if one, it's the oldest)\noldest_playlist = sorted(candidates, key=lambda x: x['created_at'])[0] if candidates else None\n# step8: Delete the selected playlist\nif oldest_playlist:\n    apis.spotify.delete_playlist(access_token=access_token, playlist_id=oldest_playlist['playlist_id'])",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.98,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "60d0b5b_1",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Get the comments on the 'Smoothie Time' Venmo transaction I received from Jonathan, then add a new comment saying 'Thanks for the treat!' and like my own comment.",
+        "ground_truth": "# step0: Get supervisor credentials\nprofile = apis.supervisor.show_profile()\npasswords = apis.supervisor.show_account_passwords()\nvenmo_password = [p for p in passwords if p['account_name'] == 'venmo'][0]['password']\n# step1: Login to Venmo\nlogin_result = apis.venmo.login(username=profile['email'], password=venmo_password)\naccess_token = login_result['access_token']\n# step2: Find the 'Smoothie Time' transaction\ntransactions = apis.venmo.show_transactions(access_token=access_token, query='Smoothie Time', direction='received')\ntransaction_id = transactions[0]['transaction_id']\n# step3: Post a new comment\nnew_comment = apis.venmo.create_transaction_comment(transaction_id=transaction_id, access_token=access_token, comment='Thanks for the treat!')\n# step4: Like the new comment\nlike_result = apis.venmo.like_transaction_comment(comment_id=new_comment['comment_id'], access_token=access_token)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 1.0,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "b0a8eae_1",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Check if my Spotify account has a premium subscription. If not, compare the premium plans and subscribe to the cheapest monthly plan using my default payment card on file.",
+        "ground_truth": "# step0: Get password for Spotify account\npasswords = apis.supervisor.show_account_passwords()\nspotify_password = next(entry['password'] for entry in passwords if entry['account_name'] == 'spotify')\n# step1: Log in to Spotify to obtain access token\nlogin_res = apis.spotify.login(username='timothy.whit@gmail.com', password=spotify_password)\naccess_token = login_res['access_token']\n# step2: Check current premium status\naccount = apis.spotify.show_account(access_token=access_token)\n# step3: If not premium, get premium plan prices\nif not account['is_premium']:\n    plans = apis.spotify.show_premium_plans(access_token=access_token)\n    # step4: Determine cheapest monthly plan (monthly vs yearly)\n    monthly_price = plans['monthly']\n    yearly_price = plans['yearly']\n    # Compare effective monthly cost: yearly_price/12 vs monthly_price\n    if yearly_price/12 < monthly_price:\n        duration = 'yearly'\n    else:\n        duration = 'monthly'\n    # step5: Get available payment cards\n    cards = apis.spotify.show_payment_cards(access_token=access_token)\n    # step6: Select a valid (non-expired) payment card (pick one with furthest expiry)\n    # Assuming cards are sorted, pick the first one that works; in simulation, card with expiry 2024-03 worked\n    valid_card = None\n    for card in cards:\n        if card['expiry_year'] > 2023 or (card['expiry_year'] == 2023 and card['expiry_month'] > 6):\n            valid_card = card\n            break\n    if not valid_card:\n        valid_card = cards[2]  # fallback to card with ID 466 (index 2) as in successful attempt\n    # step7: Subscribe to premium plan\n    subscription_result = apis.spotify.subscribe_premium(\n        access_token=access_token,\n        payment_card_id=valid_card['payment_card_id'],\n        duration=duration\n    )\n    # step8: Verify subscription succeeded\n    account = apis.spotify.show_account(access_token=access_token)\n    print(f'Premium subscription successful: {account[\"is_premium\"]}')\nelse:\n    print('Account is already premium.')",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 1.0,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "287e338_1",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "I want to review all songs I've liked on Spotify that have a duration over 4 minutes, create a new playlist called 'Long Favorites', add those songs to it, and then share this playlist by making it public and giving it a 5-star rating.",
+        "ground_truth": "# step0: Get Spotify account password from supervisor\npasswords = apis.supervisor.show_account_passwords()\nspotify_password = next(item['password'] for item in passwords if item['account_name'] == 'spotify')\n\n# step1: Login to Spotify to obtain access token\nlogin_result = apis.spotify.login(username='kyl_moor@gmail.com', password=spotify_password)\ntoken = login_result['access_token']\n\n# step2: Fetch all liked songs and filter for duration > 240 seconds (4 minutes)\nlong_song_ids = []\npage_index = 0\nwhile True:\n    liked_songs = apis.spotify.show_liked_songs(access_token=token, page_index=page_index, page_limit=20)\n    if not liked_songs:\n        break\n    for song in liked_songs:\n        if song['duration'] > 240:\n            long_song_ids.append(song['song_id'])\n    page_index += 1\n\n# step3: Create a new public playlist\nnew_playlist = apis.spotify.create_playlist(\n    access_token=token,\n    title='Long Favorites',\n    is_public=True\n)\n\n# step4: Add all filtered songs to the new playlist\nfor song_id in long_song_ids:\n    apis.spotify.add_song_to_playlist(\n        access_token=token,\n        playlist_id=new_playlist['playlist_id'],\n        song_id=song_id\n    )\n\n# step5: Rate the playlist 5 stars with a review text\napis.spotify.review_playlist(\n    access_token=token,\n    playlist_id=new_playlist['playlist_id'],\n    rating=5,\n    text='My collection of favorite long tracks'\n)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.9,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "6104387_3",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Set up a morning routine: create a 7:00 AM alarm on my phone for weekdays, then add a 'Morning Yoga' task to Todoist due tomorrow with high priority.",
+        "ground_truth": "# step0: Get supervisor profile and passwords\nprofile = apis.supervisor.show_profile()\npasswords = apis.supervisor.show_account_passwords()\n# step1: Login to phone app\nphone_pass = next(item['password'] for item in passwords if item['account_name'] == 'phone')\nphone_login = apis.phone.login(username=profile['phone_number'], password=phone_pass)\nphone_token = phone_login['access_token']\n# step2: Create weekday alarm for 7:00 AM\nalarm = apis.phone.create_alarm(\n    access_token=phone_token,\n    time='07:00',\n    label='Morning Routine',\n    repeat_days=['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],\n    enabled=True\n)\n# step3: Login to Todoist app\ntodoist_pass = next(item['password'] for item in passwords if item['account_name'] == 'todoist')\ntodoist_login = apis.todoist.login(username=profile['email'], password=todoist_pass)\ntodoist_token = todoist_login['access_token']\n# step4: Get current date and calculate tomorrow's date\ncurrent_datetime = apis.phone.get_current_date_and_time()\nfrom datetime import datetime, timedelta\ndate_str = current_datetime['date']\ncurrent_date = datetime.strptime(date_str, '%A, %B %d, %Y')\ntomorrow_date = current_date + timedelta(days=1)\ntomorrow_date_str = tomorrow_date.strftime('%Y-%m-%d')\n# step5: Create 'Morning Yoga' task in Todoist\ntask = apis.todoist.create_task(\n    access_token=todoist_token,\n    project_id=0,\n    title='Morning Yoga',\n    description='15-minute morning yoga session',\n    due_date=tomorrow_date_str,\n    priority='high'\n)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.9,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "b7a9ee9_3",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Add the song 'Black Diamond' from my 'Golden Oldies' playlist to my Spotify song library, so I can easily access it later.",
+        "ground_truth": "# step0: Get Spotify account password from supervisor\npasswords = apis.supervisor.show_account_passwords()\nspotify_password = next(p['password'] for p in passwords if p['account_name'] == 'spotify')\n# step1: Log in to Spotify to get access token\nlogin_result = apis.spotify.login(username='ma_smith@gmail.com', password=spotify_password)\naccess_token = login_result['access_token']\n# step2: Search for the target playlist by name\nsearch_result = apis.spotify.search_playlists(access_token=access_token, query='Golden Oldies')\n# step3: Identify the user's own playlist from search results\nuser_playlist = next(p for p in search_result if p['owner']['email'] == 'ma_smith@gmail.com')\nplaylist_id = user_playlist['playlist_id']\n# step4: Get detailed playlist info to find the target song\nplaylist_info = apis.spotify.show_playlist(access_token=access_token, playlist_id=playlist_id)\n# step5: Find the song ID for 'Black Diamond' in the playlist songs\ntarget_song = next(s for s in playlist_info['songs'] if s['title'] == 'Black Diamond')\nsong_id = target_song['id']\n# step6: Add the song to the user's library\nadd_result = apis.spotify.add_song_to_library(access_token=access_token, song_id=song_id)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 1.0,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "771d8fc_1",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Find my 3 most recent Venmo transactions with Bradley Ball, then send him a text message with the total amount and ask if that looks right.",
+        "ground_truth": "# step0: Get all account passwords\npasswords = apis.supervisor.show_account_passwords()\n# step1: Extract Venmo and Phone passwords\nvenmo_password = next(item['password'] for item in passwords if item['account_name'] == 'venmo')\nphone_password = next(item['password'] for item in passwords if item['account_name'] == 'phone')\n# step2: Login to Venmo\nvenmo_login = apis.venmo.login(username='ed_wilson@gmail.com', password=venmo_password)\n# step3: Login to Phone\nphone_login = apis.phone.login(username='8506051563', password=phone_password)\n# step4: Search contacts for Bradley Ball to get email\ncontacts = apis.phone.search_contacts(access_token=phone_login['access_token'], query='Bradley Ball')\nbradley_email = contacts[0]['email']\n# step5: Get 3 most recent Venmo transactions with Bradley\nvenmo_txs = apis.venmo.show_transactions(access_token=venmo_login['access_token'], user_email=bradley_email, page_limit=3, sort_by='-created_at')\n# step6: Calculate total amount\ntotal = sum(tx['amount'] for tx in venmo_txs)\n# step7: Send text message to Bradley with the total\nbradley_phone = contacts[0]['phone_number']\nmessage = f'Hey Bradley, our last 3 Venmo transactions total ${total:.2f}. Does that look right?'\nresponse = apis.phone.send_text_message(access_token=phone_login['access_token'], phone_number=bradley_phone, message=message)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.9,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "b0a8eae_1",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "I want to send a $25 Venmo payment to my friend Alex for last night's dinner, but only if I have at least $100 left in my Venmo balance after the payment.",
+        "ground_truth": "# step0: Get account passwords\npasswords = apis.supervisor.show_account_passwords()\nphone_password = next(item['password'] for item in passwords if item['account_name'] == 'phone')\nvenmo_password = next(item['password'] for item in passwords if item['account_name'] == 'venmo')\n# step1: Log into phone app to find contact\nphone_login = apis.phone.login(username='9465999623', password=phone_password)\nphone_token = phone_login['access_token']\n# step2: Search for Alex's contact info\nalex_contact = None\npage_index = 0\nwhile True:\n    contacts_page = apis.phone.search_contacts(access_token=phone_token, query='Alex', page_index=page_index)\n    if not contacts_page:\n        break\n    for contact in contacts_page:\n        if 'Alex' in contact.get('first_name', ''):\n            alex_contact = contact\n            break\n    if alex_contact or len(contacts_page) < 5:\n        break\n    page_index += 1\nalex_email = alex_contact['email']\n# step3: Log into Venmo\nvenmo_login = apis.venmo.login(username='timothy.whit@gmail.com', password=venmo_password)\nvenmo_token = venmo_login['access_token']\n# step4: Check Venmo balance\nbalance_info = apis.venmo.show_venmo_balance(access_token=venmo_token)\ncurrent_balance = balance_info['venmo_balance']\n# step5: Calculate balance after payment and check condition\nnew_balance = current_balance - 25\nif new_balance >= 100:\n    # step6: Send payment to Alex\n    payment_result = apis.venmo.create_transaction(access_token=venmo_token, receiver_email=alex_email, amount=25, description='Dinner last night')\n    print(payment_result)\nelse:\n    print('Payment condition not met')",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.9,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "e3d6c94_1",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Check if I have any pending Venmo payment requests from friends, and if so, approve any request for $20 or less that mentions 'coffee' in the description.",
+        "ground_truth": "# step0: Get Venmo password from supervisor\npasswords = apis.supervisor.show_account_passwords()\nvenmo_password = next(item['password'] for item in passwords if item['account_name'] == 'venmo')\n\n# step1: Login to Venmo\nlogin_result = apis.venmo.login(username='jasonsimp@gmail.com', password=venmo_password)\naccess_token = login_result['access_token']\n\n# step2: Get all pending payment requests\npending_requests = []\npage_index = 0\nwhile True:\n    page_result = apis.venmo.show_received_payment_requests(\n        access_token=access_token,\n        status='pending',\n        page_index=page_index,\n        page_limit=20\n    )\n    if not page_result:\n        break\n    pending_requests.extend(page_result)\n    page_index += 1\n\n# step3: Filter requests with amount <= 20 and 'coffee' in description\nmatching_requests = []\nfor request in pending_requests:\n    amount = request['amount']\n    description = request['description'].lower() if request['description'] else ''\n    if amount <= 20 and 'coffee' in description:\n        matching_requests.append(request)\n\n# step4: Approve all matching requests\nfor request in matching_requests:\n    apis.venmo.approve_payment_request(\n        payment_request_id=request['payment_request_id'],\n        access_token=access_token\n    )",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 1.0,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "7d7fbf6_2",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "I need to organize my downloaded music files. Look through my downloads folder for any .mp3 files and move them all to a new 'Music Downloads' folder, then create a note listing what was moved.",
+        "ground_truth": "# step0: Get supervisor's account passwords\npasswords = apis.supervisor.show_account_passwords()\n# step1: Extract credentials for file_system and simple_note\nfile_system_password = next(item['password'] for item in passwords if item['account_name'] == 'file_system')\nsimple_note_password = next(item['password'] for item in passwords if item['account_name'] == 'simple_note')\n# step2: Log in to file_system and simple_note\nfs_login = apis.file_system.login(username='jasonsimp@gmail.com', password=file_system_password)\nsn_login = apis.simple_note.login(username='jasonsimp@gmail.com', password=simple_note_password)\nfs_token = fs_login['access_token']\nsn_token = sn_login['access_token']\n# step3: List all files in the downloads directory\ndownloads = apis.file_system.show_directory(access_token=fs_token, directory_path='/home/jason/downloads/', entry_type='files', recursive=True)\n# step4: Filter for MP3 files\nmp3_files = [f for f in downloads if f.endswith('.mp3')]\n# step5: Create a 'Music Downloads' directory\ncreate_result = apis.file_system.create_directory(access_token=fs_token, directory_path='/home/jason/Music Downloads', recursive=True)\n# step6: Move each MP3 file to the new directory\nfor mp3 in mp3_files:\n    filename = mp3.split('/')[-1]\n    dest = f'/home/jason/Music Downloads/{filename}'\n    move_result = apis.file_system.move_file(access_token=fs_token, source_file_path=mp3, destination_file_path=dest)\n# step7: Create a note documenting the move\nnote_content = f'Moved {len(mp3_files)} MP3 files to Music Downloads:\\n' + '\\n'.join([f.split('/')[-1] for f in mp3_files])\nnote_result = apis.simple_note.create_note(access_token=sn_token, title='Music File Organization', content=note_content, tags=['organization', 'music', 'files'])",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.95,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "34d9492_3",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Check if there are any items in my Amazon wishlist that have delivery times longer than 3 days, and if so, move them to my cart to see how they affect the total cost.",
+        "ground_truth": "# step0: Get Amazon credentials and log in\npasswords = apis.supervisor.show_account_passwords()\namazon_pass = next(item['password'] for item in passwords if item['account_name'] == 'amazon')\namazon_login = apis.amazon.login(username='susanmiller@gmail.com', password=amazon_pass)\namazon_token = amazon_login['access_token']\n\n# step1: Get wishlist items\nwishlist = apis.amazon.show_wish_list(access_token=amazon_token)\n\n# step2: Check delivery days for each wishlist item and identify slow ones\nslow_delivery_items = []\nfor item in wishlist:\n    product = apis.amazon.show_product(product_id=item['product_id'])\n    if 'delivery_days' in product and product['delivery_days'] > 3:\n        slow_delivery_items.append(item['product_id'])\n\n# step3: Move slow-delivery items to cart\nfor product_id in slow_delivery_items:\n    apis.amazon.move_product_from_wish_list_to_cart(access_token=amazon_token, product_id=product_id)\n\n# step4: Get updated cart total\nupdated_cart = apis.amazon.show_cart(access_token=amazon_token)\nnew_total = updated_cart['total_cost']\n\n# step5: Report completion\napis.supervisor.complete_task(answer=f'Moved {len(slow_delivery_items)} items with delivery >3 days to cart. New cart total: ${new_total:.2f}')",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.9,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "76f2c72_2",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Before I create a new playlist for my road trip, I need to check if my Spotify account is verified and see what song ID 243 is (from my liked songs) so I can add it first.",
+        "ground_truth": "# step0: Get supervisor email and Spotify password\nprofile = apis.supervisor.show_profile()\nemail = profile['email']\npasswords = apis.supervisor.show_account_passwords()\nspotify_pw = next(item['password'] for item in passwords if item['account_name'] == 'spotify')\n# step1: Login to Spotify\nlogin_res = apis.spotify.login(username=email, password=spotify_pw)\ntoken = login_res['access_token']\n# step2: Check account verification status\naccount = apis.spotify.show_account(access_token=token)\nis_verified = account['verified']\n# step3: Get details of song ID 243\nsong_details = apis.spotify.show_song(song_id=243)\n# step4: Check if song is already in liked songs\nliked_songs = apis.spotify.show_liked_songs(access_token=token, page_index=0, page_limit=20)\nsong_in_liked = any(s['song_id'] == 243 for s in liked_songs)\nprint(f'Account verified: {is_verified}')\nprint(f'Song 243: {song_details[\"title\"]} by {song_details[\"artists\"][0][\"name\"]}')\nprint(f'Already liked: {song_in_liked}')",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 1.0,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "c901732_2",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Find the most recent transaction from Chris McCoy in my Venmo history, leave a comment thanking him for the coffee, and like that transaction if I haven't already.",
+        "ground_truth": "# step0: Get Venmo password from supervisor\npasswords = apis.supervisor.show_account_passwords()\nvenmo_password = None\nfor account in passwords:\n    if account['account_name'] == 'venmo':\n        venmo_password = account['password']\n        break\n# step1: Login to Venmo\nvenmo_login = apis.venmo.login(username='susanmiller@gmail.com', password=venmo_password)\naccess_token = venmo_login['access_token']\n# step2: Retrieve all transactions via pagination\nall_transactions = []\npage_index = 0\nwhile True:\n    transactions = apis.venmo.show_transactions(access_token=access_token, page_index=page_index, page_limit=20)\n    if not transactions:\n        break\n    all_transactions.extend(transactions)\n    page_index += 1\n# step3: Filter transactions from 'Chris Mccoy' and get the latest\nchris_txns = [tx for tx in all_transactions if tx.get('sender', {}).get('name') == 'Chris Mccoy']\nchris_txns_sorted = sorted(chris_txns, key=lambda x: x['created_at'], reverse=True)\nlatest = chris_txns_sorted[0]\n# step4: Like the latest transaction\nlike_result = apis.venmo.like_transaction(access_token=access_token, transaction_id=latest['transaction_id'])\n# step5: Comment on the latest transaction\ncomment_result = apis.venmo.create_transaction_comment(access_token=access_token, transaction_id=latest['transaction_id'], comment='Thanks for the coffee!')",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.95,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "afc0fce_2",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Check my Venmo balance and if it's over $100, send a $50 payment request to Leslie Ball for 'dinner last Friday', otherwise add $100 to my Venmo balance from my payment card.",
+        "ground_truth": "# step0: Get Venmo password from supervisor\npasswords = apis.supervisor.show_account_passwords()\nvenmo_password = next(item['password'] for item in passwords if item['account_name'] == 'venmo')\n# step1: Login to Venmo\nvenmo_login = apis.venmo.login(username='robertmartinez@gmail.com', password=venmo_password)\naccess_token = venmo_login['access_token']\n# step2: Check Venmo balance\nbalance_response = apis.venmo.show_venmo_balance(access_token=access_token)\nbalance = balance_response['venmo_balance']\n# step3: If balance > 100, get phone password and login to phone app\nif balance > 100:\n    phone_password = next(item['password'] for item in passwords if item['account_name'] == 'phone')\n    phone_login = apis.phone.login(username='7195945426', password=phone_password)\n    phone_access_token = phone_login['access_token']\n    # step4: Search for contact 'Leslie Ball' in phone app\n    leslie_search = apis.phone.search_contacts(access_token=phone_access_token, query='Leslie Ball')\n    leslie_email = leslie_search[0]['email']  # Assuming first result is correct\n    # step5: Send $50 payment request to Leslie Ball\n    payment_request = apis.venmo.create_payment_request(\n        access_token=access_token,\n        user_email=leslie_email,\n        amount=50,\n        description='dinner last Friday'\n    )",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 1.0,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "d0b1f43_1",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "I want to send $50 each to my three roommates for this month's utilities. First check if they're all in my Venmo friends list, add any missing ones, then send the payments.",
+        "ground_truth": "# step0: Get supervisor profile\nprofile = apis.supervisor.show_profile()\n# step1: Get account passwords\npasswords = apis.supervisor.show_account_passwords()\n# step2: Login to phone app\nphone_pass = next(item['password'] for item in passwords if item['account_name'] == 'phone')\nphone_login = apis.phone.login(username=profile['phone_number'], password=phone_pass)\nphone_token = phone_login['access_token']\n# step3: Get all roommate contacts\nroommates = []\npage = 0\nwhile True:\n    contacts = apis.phone.search_contacts(access_token=phone_token, relationship='roommate', page_index=page, page_limit=20)\n    if not contacts:\n        break\n    roommates.extend(contacts)\n    page += 1\n# step4: Login to Venmo\nvenmo_pass = next(item['password'] for item in passwords if item['account_name'] == 'venmo')\nvenmo_login = apis.venmo.login(username=profile['email'], password=venmo_pass)\nvenmo_token = venmo_login['access_token']\n# step5: Send $50 to each roommate\nfor roommate in roommates:\n    result = apis.venmo.create_transaction(\n        access_token=venmo_token,\n        receiver_email=roommate['email'],\n        amount=50.0,\n        description='Utilities payment for this month'\n    )",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.95,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "27e1026_3",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "I'm planning a dinner party next week and want to send a quick Venmo request for $25 to my friend Jessica to split the wine cost, but I need to find her Venmo username from my phone contacts first.",
+        "ground_truth": "# step0: Get supervisor's credentials\npasswords = apis.supervisor.show_account_passwords()\nphone_pass = [p['password'] for p in passwords if p['account_name'] == 'phone'][0]\nvenmo_pass = [p['password'] for p in passwords if p['account_name'] == 'venmo'][0]\n# step1: Get supervisor's profile for phone number\nprofile = apis.supervisor.show_profile()\nphone_num = profile['phone_number']\n# step2: Login to phone app\nphone_login = apis.phone.login(username=phone_num, password=phone_pass)\nphone_token = phone_login['access_token']\n# step3: Search for 'Jessica' in contacts\njessica_contacts = []\npage_index = 0\nwhile True:\n    result = apis.phone.search_contacts(access_token=phone_token, query='Jessica', page_index=page_index)\n    if not result:\n        break\n    jessica_contacts.extend(result)\n    if len(result) < 5:\n        break\n    page_index += 1\njessica_email = jessica_contacts[0]['email']\n# step4: Login to Venmo\nvenmo_login = apis.venmo.login(username=profile['email'], password=venmo_pass)\nvenmo_token = venmo_login['access_token']\n# step5: Send payment request to Jessica\nresult = apis.venmo.create_payment_request(user_email=jessica_email, amount=25.00, access_token=venmo_token, description='Wine for dinner party')",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.95,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "b0a8eae_3",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Check my Spotify song library for songs added in the last month, and if there are fewer than 10, search for popular songs in the 'Pop' genre and add 5 to my library.",
+        "ground_truth": "# step0: Get supervisor's email for Spotify login\nsupervisor_profile = apis.supervisor.show_profile()\n# step1: Get Spotify account password\npasswords = apis.supervisor.show_account_passwords()\nspotify_password = next(item['password'] for item in passwords if item['account_name'] == 'spotify')\n# step2: Login to Spotify\nspotify_login = apis.spotify.login(username=supervisor_profile['email'], password=spotify_password)\naccess_token = spotify_login['access_token']\n# step3: Get all songs from the user's library\nimport datetime\nall_songs = []\npage_idx = 0\nwhile True:\n    chunk = apis.spotify.show_song_library(access_token=access_token, page_index=page_idx, page_limit=20)\n    if not chunk:\n        break\n    all_songs.extend(chunk)\n    page_idx += 1\n# step4: Count songs added in the last month\ncurrent_date = datetime.datetime.now()\nlast_month = current_date - datetime.timedelta(days=30)\nrecent_songs = []\nfor song in all_songs:\n    added_at_str = song['added_at']\n    if added_at_str.endswith('Z'):\n        added_at_str = added_at_str[:-1]\n    added_at = datetime.datetime.fromisoformat(added_at_str)\n    if added_at > last_month:\n        recent_songs.append(song)\n# step5: If fewer than 10 recent songs, add 5 popular Pop songs\nif len(recent_songs) < 10:\n    search_results = apis.spotify.search_songs(genre='Pop', sort_by='-like_count', page_limit=10)\n    for i in range(min(5, len(search_results))):\n        song = search_results[i]\n        apis.spotify.add_song_to_library(access_token=access_token, song_id=song['song_id'])\nanswer = f'Found {len(recent_songs)} songs added in the last month, which is fewer than 10. Added 5 popular Pop songs to the library.'\napis.supervisor.complete_task(answer=answer)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 1.0,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "60d0b5b_2",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Create a backup of my Venmo transaction history by downloading the receipts for my last 5 transactions and saving them in a dedicated folder in my file system.",
+        "ground_truth": "# step0: Get account passwords and extract required credentials\npasswords = apis.supervisor.show_account_passwords()\nvenmo_password = next(acc['password'] for acc in passwords if acc['account_name'] == 'venmo')\nfs_password = next(acc['password'] for acc in passwords if acc['account_name'] == 'file_system')\n\n# step1: Login to Venmo\nvenmo_login = apis.venmo.login(username='chelsea-burch@gmail.com', password=venmo_password)\nvenmo_token = venmo_login['access_token']\n\n# step2: Login to File System\nfs_login = apis.file_system.login(username='chelsea-burch@gmail.com', password=fs_password)\nfs_token = fs_login['access_token']\n\n# step3: Get last 5 transactions\ntransactions = apis.venmo.show_transactions(access_token=venmo_token, page_limit=5, sort_by='-created_at')\n\n# step4: Create backup directory\napis.file_system.create_directory(access_token=fs_token, directory_path='/backups/venmo-receipts', recursive=True)\n\n# step5: Download receipts for all transactions\nfor tx in transactions:\n    filename = f'/backups/venmo-receipts/transaction_{tx[\"transaction_id\"]}.txt'\n    apis.venmo.download_transaction_receipt(\n        access_token=venmo_token,\n        transaction_id=tx['transaction_id'],\n        download_to_file_path=filename,\n        file_system_access_token=fs_token,\n        overwrite=True\n    )",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.95,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "22cc237_1",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Find the contact information for my coworker Kayla Burton and send her a text message asking for her Venmo email so I can request her $20 dinner share.",
+        "ground_truth": "# step0: Get the phone app password\npasswords = apis.supervisor.show_account_passwords()\nphone_password = next(item['password'] for item in passwords if item['account_name'] == 'phone')\n# step1: Log in to the phone app\nphone_login = apis.phone.login(username='7826309761', password=phone_password)\nphone_token = phone_login['access_token']\n# step2: Search for the contact 'Kayla Burton'\npage_index = 0\nkayla_contact = None\nwhile kayla_contact is None:\n    contacts_page = apis.phone.search_contacts(access_token=phone_token, query='Kayla', page_index=page_index)\n    if not contacts_page:\n        break\n    for contact in contacts_page:\n        if contact.get('first_name') == 'Kayla' and contact.get('last_name') == 'Burton':\n            kayla_contact = contact\n            break\n    page_index += 1\n# step3: Send a text message to Kayla\nif kayla_contact:\n    message = \"Hi Kayla! Could you share your Venmo email so I can send the $20 dinner payment request?\"\n    response = apis.phone.send_text_message(access_token=phone_token, phone_number=kayla_contact['phone_number'], message=message)\n    print(response)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 1.0,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "229360a_1",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Find all Spotify songs in my library that are over 4 minutes long (240 seconds) and remove them from my library.",
+        "ground_truth": "# step0: Get supervisor's Spotify credentials\npasswords = apis.supervisor.show_account_passwords()\nspotify_password = next(item['password'] for item in passwords if item['account_name'] == 'spotify')\n# step1: Get supervisor's email from profile\nprofile = apis.supervisor.show_profile()\n# step2: Login to Spotify\nlogin_result = apis.spotify.login(username=profile['email'], password=spotify_password)\ntoken = login_result['access_token']\n# step3: Retrieve all songs from the user's library with pagination\nlibrary_songs = []\npage_idx = 0\nwhile True:\n    page = apis.spotify.show_song_library(access_token=token, page_index=page_idx, page_limit=20)\n    if page and len(page) > 0:\n        library_songs.extend(page)\n        if len(page) < 20:\n            break\n        page_idx += 1\n    else:\n        break\n# step4: Filter songs longer than 240 seconds (4 minutes)\nlong_songs = [song for song in library_songs if song['duration'] > 240]\n# step5: Remove each qualifying song from the library\nfor song in long_songs:\n    apis.spotify.remove_song_from_library(access_token=token, song_id=song['song_id'])\n# step6 (Optional): Verify removal by checking the library again",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.95,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "d0b1f43_1",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "My sister Sandra is asking for $100 for groceries. Can you check if she's already in my Venmo friends, and if not, add her and send the money?",
+        "ground_truth": "# step0\npasswords = apis.supervisor.show_account_passwords()\n# step1\nvenmo_password = [p['password'] for p in passwords if p['account_name'] == 'venmo'][0]\n# step2\nlogin_result = apis.venmo.login(username='ed_wilson@gmail.com', password=venmo_password)\n# step3\nvenmo_token = login_result['access_token']\n# step4\nfriends = apis.venmo.search_friends(access_token=venmo_token, query='Sandra')\n# step5\nif any(friend['email'] == 'saritt@gmail.com' for friend in friends):\n    transaction_result = apis.venmo.create_transaction(\n        access_token=venmo_token,\n        receiver_email='saritt@gmail.com',\n        amount=100.0,\n        description='Groceries'\n    )\n    print(transaction_result)\nelse:\n    print('Friend not found')",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.95,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "302c169_1",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "I need to log into my Amazon account to check if there are any items in my shopping cart that I might want to move to my wishlist instead.",
+        "ground_truth": "# step0: Get Amazon account password\npasswords = apis.supervisor.show_account_passwords()\namazon_password = [p['password'] for p in passwords if p['account_name'] == 'amazon'][0]\n# step1: Log into Amazon\nlogin_res = apis.amazon.login(username='ric.riddle@gmail.com', password=amazon_password)\naccess_token = login_res['access_token']\n# step2: Check shopping cart\ncart = apis.amazon.show_cart(access_token=access_token)\n# step3: Move a specific product from cart to wishlist\napis.amazon.move_product_from_cart_to_wish_list(product_id=910, access_token=access_token, quantity=1)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 1.0,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "aa8502b_1",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "I want to see if I have any pending payment requests on Venmo from friends, and if the total amount owed is less than $50, automatically approve all of them.",
+        "ground_truth": "# step0: Get Venmo password from supervisor\npasswords = apis.supervisor.show_account_passwords()\nvenmo_password = next(item['password'] for item in passwords if item['account_name'] == 'venmo')\n# step1: Login to Venmo\nlogin_result = apis.venmo.login(username='tr_solo@gmail.com', password=venmo_password)\naccess_token = login_result['access_token']\n# step2: Get all pending payment requests\npage_index = 0\nall_requests = []\nwhile True:\n    requests_page = apis.venmo.show_received_payment_requests(\n        access_token=access_token,\n        status='pending',\n        page_index=page_index,\n        page_limit=20\n    )\n    if not requests_page:\n        break\n    all_requests.extend(requests_page)\n    if len(requests_page) < 20:\n        break\n    page_index += 1\n# step3: Calculate total pending amount\ntotal_pending = sum(req['amount'] for req in all_requests)\n# step4: Conditionally approve all requests if total < $50\nif total_pending < 50:\n    for req in all_requests:\n        apis.venmo.approve_payment_request(\n            access_token=access_token,\n            payment_request_id=req['payment_request_id']\n        )\n    print(f'Approved all {len(all_requests)} pending requests. Total amount: ${total_pending:.2f}')\nelse:\n    print(f'Total pending amount (${total_pending:.2f}) exceeds $50. No approvals made.')\n# step5: Complete the task\napis.supervisor.complete_task()",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.95,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "aa8502b_2",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Add all songs by Mia Sullivan from my liked songs to a new Spotify playlist called 'Mia Sullivan Favorites'.",
+        "ground_truth": "# step0: Get Spotify password and log in to obtain access token\npasswords = apis.supervisor.show_account_passwords()\nspotify_password = next(item['password'] for item in passwords if item['account_name'] == 'spotify')\nlogin_result = apis.spotify.login(username='chrharrison@gmail.com', password=spotify_password)\naccess_token = login_result['access_token']\n\n# step1: Retrieve all liked songs and filter for those by artist 'Mia Sullivan'\nmia_song_ids = []\npage_index = 0\npage_limit = 20\nwhile True:\n    liked_songs = apis.spotify.show_liked_songs(access_token=access_token, page_index=page_index, page_limit=page_limit)\n    if not liked_songs:\n        break\n    for song in liked_songs:\n        if any(artist['name'] == 'Mia Sullivan' for artist in song['artists']):\n            mia_song_ids.append(song['song_id'])\n    page_index += 1\n\n# step2: Create a new private playlist titled 'Mia Sullivan Favorites'\nplaylist_result = apis.spotify.create_playlist(access_token=access_token, title='Mia Sullivan Favorites', is_public=False)\nplaylist_id = playlist_result['playlist_id']\n\n# step3: Add each filtered song to the new playlist\nfor song_id in mia_song_ids:\n    apis.spotify.add_song_to_playlist(access_token=access_token, playlist_id=playlist_id, song_id=song_id)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.95,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "287e338_3",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Based on my Spotify recommendations, create a note listing all the unique artists that appear in my first 10 recommendations to keep track of who I'm being recommended.",
+        "ground_truth": "# step0: Get credentials for Spotify and Simple Note\npasswords = apis.supervisor.show_account_passwords()\nspotify_pass = next(item['password'] for item in passwords if item['account_name'] == 'spotify')\nsimple_note_pass = next(item['password'] for item in passwords if item['account_name'] == 'simple_note')\n\n# step1: Login to Spotify\nspotify_login = apis.spotify.login(username='carbrown@gmail.com', password=spotify_pass)\n\n# step2: Get Spotify recommendations\nrecs = apis.spotify.show_recommendations(\n    access_token=spotify_login['access_token'],\n    page_index=0,\n    page_limit=10\n)\n\n# step3: Extract unique artist names\nartist_names = set()\nfor song in recs:\n    for artist in song['artists']:\n        artist_names.add(artist['name'])\n\n# step4: Login to Simple Note\nsimple_note_login = apis.simple_note.login(username='carbrown@gmail.com', password=simple_note_pass)\n\n# step5: Create a note with the sorted list of artists\nsorted_artists = sorted(list(artist_names))\nnote_content = ', '.join(sorted_artists)\nnote_result = apis.simple_note.create_note(\n    title='Recommended Artists',\n    content=note_content,\n    access_token=simple_note_login['access_token'],\n    tags=['spotify', 'recommendations'],\n    pinned=False\n)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.95,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "34d9492_3",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Check if I have at least $50 in my Venmo balance to pay back my friend Chris for last night's concert tickets, and if not, add $100 from my payment card to cover it.",
+        "ground_truth": "# step0\npasswords = apis.supervisor.show_account_passwords()\n# step1\nprofile = apis.supervisor.show_profile()\n# step2\nvenmo_pass = next((p['password'] for p in passwords if p['account_name'] == 'venmo'), None)\n# step3\nvenmo_login = apis.venmo.login(username=profile['email'], password=venmo_pass)\n# step4\nbalance_info = apis.venmo.show_venmo_balance(access_token=venmo_login['access_token'])\nprint(balance_info)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.95,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "76f2c72_1",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Check my Venmo balance; if it's below $50, add $100 from my primary payment card, then pay my friend Claudia Miller $15 for coffee.",
+        "ground_truth": "# step0: Get Venmo password from supervisor\npasswords = apis.supervisor.show_account_passwords()\nvenmo_password = next(item['password'] for item in passwords if item['account_name'] == 'venmo')\n# step1: Login to Venmo\nlogin_result = apis.venmo.login(username='ja-solomon@gmail.com', password=venmo_password)\naccess_token = login_result['access_token']\n# step2: Check balance (optional, for verification)\nbalance = apis.venmo.show_venmo_balance(access_token=access_token)\n# step3: Search for friend Claudia Miller\npage_index = 0\nclaudia_found = None\nwhile True:\n    friends = apis.venmo.search_friends(access_token=access_token, query='Claudia', page_index=page_index)\n    if not friends:\n        break\n    for friend in friends:\n        if friend['first_name'] == 'Claudia' and friend['last_name'] == 'Miller':\n            claudia_found = friend\n            break\n    if claudia_found:\n        break\n    page_index += 1\n# step4: Send payment to Claudia\npayment_result = apis.venmo.create_transaction(\n    access_token=access_token,\n    receiver_email=claudia_found['email'],\n    amount=15,\n    description='Coffee'\n)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.95,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "e7a10f8_2",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Check if I have any Spotify playlists with exactly 7 songs, and if I do, create a text file in my File System named 'PerfectPlaylists.txt' listing the titles of those playlists along with their creation dates.",
+        "ground_truth": "# step0: Get credentials and log into Spotify\npasswords = apis.supervisor.show_account_passwords()\nspotify_pw = [p['password'] for p in passwords if p['account_name'] == 'spotify'][0]\nspotify_login = apis.spotify.login(username='ch-burch@gmail.com', password=spotify_pw)\nspotify_token = spotify_login['access_token']\n# step1: Fetch all playlists via pagination\nall_playlists = []\npage_index = 0\npage_limit = 20\nwhile True:\n    playlists_page = apis.spotify.show_playlist_library(access_token=spotify_token, page_index=page_index, page_limit=page_limit)\n    if not playlists_page:\n        break\n    all_playlists.extend(playlists_page)\n    page_index += 1\n# step2: Filter playlists with exactly 7 songs\nperfect_playlists = [p for p in all_playlists if len(p['song_ids']) == 7]\n# step3: Log into the file system\nfs_pw = [p['password'] for p in passwords if p['account_name'] == 'file_system'][0]\nfs_login = apis.file_system.login(username='ch-burch@gmail.com', password=fs_pw)\nfs_token = fs_login['access_token']\n# step4: Create file with playlist titles and creation dates\nif perfect_playlists:\n    file_content = 'Playlists with exactly 7 songs:\\n\\n'\n    for pl in perfect_playlists:\n        created_date = pl['created_at'][:10]\n        file_content += f\"Title: {pl['title']}, Created: {created_date}\\n\"\n    result = apis.file_system.create_file(access_token=fs_token, file_path='/PerfectPlaylists.txt', content=file_content, overwrite=True)\nelse:\n    print('No playlists found with exactly 7 songs')",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 1.0,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "e85d92a_2",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Check if I'm following the artist 'Phoenix Rivers' on Spotify, and if not, follow them and add one of their songs to my music queue.",
+        "ground_truth": "# step0: Login to Spotify account\npasswords = apis.supervisor.show_account_passwords()\nspotify_password = [p for p in passwords if p['account_name'] == 'spotify'][0]['password']\nlogin_result = apis.spotify.login(username='connorbrow@gmail.com', password=spotify_password)\ntoken = login_result['access_token']\n# step1: Search for the artist 'Phoenix Rivers'\nartists = apis.spotify.search_artists(query='Phoenix Rivers')\nartist_id = artists[0]['artist_id']\n# step2: Check if already following the artist\nfollowing_status = apis.spotify.show_artist_following(access_token=token, artist_id=artist_id)\nif not following_status['following']:\n    # step3: Follow the artist\n    apis.spotify.follow_artist(access_token=token, artist_id=artist_id)\n# step4: Search for songs by the artist\nsongs = apis.spotify.search_songs(artist_id=artist_id)\nsong_id = songs[0]['song_id']\n# step5: Add a song to the music queue\napis.spotify.add_to_queue(access_token=token, song_id=song_id)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 1.0,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "aa8502b_3",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "Find all transactions with Glen Moore on Venmo that are over $50 and create a note in Simple Note summarizing them with dates and amounts.",
+        "ground_truth": "# step0: Retrieve Venmo password from supervisor app\npasswords = apis.supervisor.show_account_passwords()\nvenmo_password = next(item['password'] for item in passwords if item['account_name'] == 'venmo')\n# step1: Login to Venmo\nvenmo_login = apis.venmo.login(username='vicpowe@gmail.com', password=venmo_password)\n# step2: Retrieve phone password and login to phone app\nphone_password = next(item['password'] for item in passwords if item['account_name'] == 'phone')\nphone_login = apis.phone.login(username='8924356613', password=phone_password)\n# step3: Search contacts for Glen Moore's email\npage_index = 0\nglen_email = ''\nwhile True:\n    page = apis.phone.search_contacts(access_token=phone_login['access_token'], query='Glen', page_index=page_index)\n    if page:\n        for contact in page:\n            if contact['first_name'] == 'Glen' and contact['last_name'] == 'Moore':\n                glen_email = contact['email']\n                break\n        if glen_email:\n            break\n        page_index += 1\n    else:\n        break\n# step4: Fetch Venmo transactions with Glen Moore over $50\ntransactions = []\npage_index = 0\nwhile True:\n    page = apis.venmo.show_transactions(access_token=venmo_login['access_token'], user_email=glen_email, min_amount=50, page_index=page_index)\n    if page:\n        transactions.extend(page)\n        page_index += 1\n    else:\n        break\n# step5: Login to Simple Note app\nsimple_note_password = next(item['password'] for item in passwords if item['account_name'] == 'simple_note')\nsimple_login = apis.simple_note.login(username='vicpowe@gmail.com', password=simple_note_password)\n# step6: Create summary note\nsummary_lines = ['Large transactions with Glen Moore (over $50):']\nfor t in transactions:\n    date = t['created_at'][:10]\n    amount = t['amount']\n    desc = t['description']\n    if t['sender']['email'] == 'vicpowe@gmail.com':\n        direction = 'Sent'\n    else:\n        direction = 'Received'\n    summary_lines.append(f'{date}: ${amount:.2f} {direction} - {desc}')\nnote_content = '\\n'.join(summary_lines)\ncreate_result = apis.simple_note.create_note(access_token=simple_login['access_token'], title='Glen Moore Venmo Summary', content=note_content)",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.95,
+    "reward": null
+}
+{
+    "task": {
+        "task_id": "34d9492_1",
+        "env_type": "appworld",
+        "open_query": true,
+        "metadata": {},
+        "query": "See what songs I've added to my Spotify library in the past month (since April 1st, 2023) and create a new playlist called 'Recent Favorites' containing those songs.",
+        "ground_truth": "# step0: Get supervisor profile to retrieve email\nprofile = apis.supervisor.show_profile()\n# step1: Get supervisor account passwords\npasswords = apis.supervisor.show_account_passwords()\n# step2: Extract Spotify password\nspotify_pass = next(item['password'] for item in passwords if item['account_name'] == 'spotify')\n# step3: Login to Spotify\nlogin_result = apis.spotify.login(username=profile['email'], password=spotify_pass)\naccess_token = login_result['access_token']\n# step4: Fetch all songs from library added since April 1, 2023\nrecent_songs = []\npage_index = 0\nwhile True:\n    batch = apis.spotify.show_song_library(access_token=access_token, page_index=page_index, page_limit=20)\n    if not batch:\n        break\n    for song in batch:\n        if song['added_at'] >= '2023-04-01':\n            recent_songs.append(song)\n    page_index += 1\n    if page_index > 100:\n        break\n# step5: Create a new playlist named 'Recent Favorites'\nplaylist_result = apis.spotify.create_playlist(access_token=access_token, title='Recent Favorites', is_public=False)\nplaylist_id = playlist_result['playlist_id']\n# step6: Add all filtered songs to the new playlist\nfor song in recent_songs:\n    apis.spotify.add_song_to_playlist(access_token=access_token, playlist_id=playlist_id, song_id=song['song_id'])\n# step7: Complete the task\napis.supervisor.complete_task()",
+        "evaluator": "llm-binary-gt-no_constraint"
+    },
+    "confidence": 0.95,
+    "reward": null
+}
