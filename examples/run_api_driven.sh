@@ -1,5 +1,9 @@
 # ---- Start Environment Service ----
 
+rm -f ./.generate_task_api.intra.json
+rm -f ./.generate_task_api.extra.json
+rm -f ./tasks_explored/tasks_explored.train.json
+
 # 1. 确保 conda 可以在脚本中使用 (这一步非常关键)
 # 尝试找到 conda.sh 的位置并 source 它。根据你的安装路径可能需要调整，这里是常见的路径。
 CONDA_BASE=$(conda info --base 2>/dev/null || echo "$HOME/anaconda3")
