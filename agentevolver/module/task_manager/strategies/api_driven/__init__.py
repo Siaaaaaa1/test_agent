@@ -434,10 +434,10 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         client = getattr(self, "llm_client_summarize", self.llm_client)
         llm_fn = self._get_llm_chat_fn(
             client,
-            sampling_params={
-                "temperature": self.config.get("exploration_llm_temperature", 1.0),
-                "top_p": self.config.get("exploration_llm_top_p", 1.0),
-                "top_k": self.config.get("exploration_llm_top_k", -1),
+            sampling_params = {
+                "temperature": self.config.get("exploration_llm_temperature", 0.5),
+                "top_p": self.config.get("exploration_llm_top_p", 0.9),
+                "top_k": self.config.get("exploration_llm_top_k", 0),
             }
         )
         
@@ -532,10 +532,10 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         client = getattr(self, "llm_client_summarize", self.llm_client)
         llm_fn = self._get_llm_chat_fn(
             client,
-            sampling_params={
-                "temperature": self.config.get("exploration_llm_temperature", 1.0),
-                "top_p": self.config.get("exploration_llm_top_p", 1.0),
-                "top_k": self.config.get("exploration_llm_top_k", -1),
+            sampling_params = {
+                "temperature": self.config.get("exploration_llm_temperature", 0.5),
+                "top_p": self.config.get("exploration_llm_top_p", 0.9),
+                "top_k": self.config.get("exploration_llm_top_k", 0),
             }
         )
         
