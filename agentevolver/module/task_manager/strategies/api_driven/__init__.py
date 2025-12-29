@@ -656,7 +656,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
     def _check_api_called(self, trajectory: Trajectory, api_name: str) -> bool:
         if not trajectory or not trajectory.steps: return False
         for step in trajectory.steps:
-            if step.role == "tool" and not step.error:
+            if step.get('role') == "tool" and not step.error:
                 if api_name in step.tool_name: return True
         return False
 
@@ -664,7 +664,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         if not trajectory or not trajectory.steps: return False
         app_apis = self.api_knowledge.get(app_name, {}).get("apis", {}).keys()
         for step in trajectory.steps:
-            if step.role == "tool":
+            if step.get('role') == "tool":
                 if app_name.lower() in step.tool_name.lower(): return True
                 for api in app_apis:
                     if api in step.tool_name: return True
@@ -673,10 +673,10 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
     def _extract_tool_trace(self, trajectory: Trajectory) -> str:
         trace = []
         for step in trajectory.steps:
-            if step.role == "assistant" and step.tool_calls:
+            if step.get('role') == "assistant" and step.tool_calls:
                 for tc in step.tool_calls:
                     trace.append(f"Action: {tc['name']} args={tc['arguments']}")
-            elif step.role == "tool":
+            elif step.get('role') == "tool":
                 content = str(step.content)
                 if len(content) > 200: content = content[:200] + "..."
                 trace.append(f"Observation: {content}")
