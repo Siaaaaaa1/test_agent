@@ -1,0 +1,1248 @@
+[
+    {
+        "TaskID": "3d9a636_1",
+        "Query": "Reset friends on venmo to be the same as my friends in my phone. Befriend and unfriend as needed.",
+        "NeededApps": [
+            "venmo",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "3d9a636_2",
+        "Query": "Reset friends on venmo to be the same as my friends in my phone. Befriend and unfriend as needed.",
+        "NeededApps": [
+            "venmo",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "3d9a636_3",
+        "Query": "Reset friends on venmo to be the same as my friends in my phone. Befriend and unfriend as needed.",
+        "NeededApps": [
+            "venmo",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "fd1f8fa_1",
+        "Query": "Remove all the songs that I have liked from my Spotify queue, and then start the player.",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "fd1f8fa_2",
+        "Query": "Remove all the songs that I have not liked from my Spotify queue, and then start the player.",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "fd1f8fa_3",
+        "Query": "Remove all the songs that I have liked from my Spotify queue, and then start the player.",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "325d6ec_1",
+        "Query": "Keep going to the previous song on Spotify until you reach a song I have already liked.",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "325d6ec_2",
+        "Query": "Keep going to the next song on Spotify until you reach a song I have already downloaded.",
+        "NeededApps": [
+            "spotify",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "325d6ec_3",
+        "Query": "Keep going to the next song on Spotify until you reach a song I have already liked.",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "29a7b7e_1",
+        "Query": "My work meeting files are available in the \"~/documents/work/meetings/\" directory in my file system. Currently, they are organized as \"<date><file_name>.<extension>\". Reorganize them in this format, \"<file_name>/<date>.<extension>\".",
+        "NeededApps": [
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "29a7b7e_2",
+        "Query": "My work meeting files are available in the \"~/documents/work/meetings_files/\" directory in my file system. Currently, they are organized as \"<date><file_name>.<extension>\". Reorganize them in this format, \"<file_name>/<date>.<extension>\".",
+        "NeededApps": [
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "29a7b7e_3",
+        "Query": "My work meeting files are available in the \"~/documents/work/meetings_data/\" directory in my file system. Currently, they are organized as \"<date>__<file_name>.<extension>\". Reorganize them in this format, \"<file_name>/<date>.<extension>\".",
+        "NeededApps": [
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "21abae1_1",
+        "Query": "How much money have I sent to others on venmo this month so far?",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "21abae1_2",
+        "Query": "How much money have I received from others on venmo this month so far?",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "21abae1_3",
+        "Query": "How much money have I sent to or received from others on venmo this month so far?",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "634f342_1",
+        "Query": "Go through all my Spotify playlists and remove all the songs from them that are in \"~/documents/personal/old_songs.txt\" from my file system and put them in a new playlist named \"Archived Songs\".",
+        "NeededApps": [
+            "spotify",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "634f342_2",
+        "Query": "Go through all my Spotify playlists and remove all the songs from them that are in \"~/documents/personal/songs_to_archive.txt\" from my file system and put them in a new playlist named \"Old Songs\".",
+        "NeededApps": [
+            "spotify",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "634f342_3",
+        "Query": "Go through all my Spotify playlists and remove all the songs from them that are in \"~/documents/personal/list_of_old_songs.txt\" from my file system and put them in a new playlist named \"Archived Playlist Songs\".",
+        "NeededApps": [
+            "spotify",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "8749218_1",
+        "Query": "Reset my Spotify queue with all of its recommended songs, shuffle it, and play it.",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "8749218_2",
+        "Query": "Reset my Spotify queue with all of its recommended songs, shuffle it, and play it.",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "8749218_3",
+        "Query": "Reset my Spotify queue with all of its recommended songs, shuffle it, and play it.",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "2d9f728_1",
+        "Query": "My roommates and I went for a dinner yesterday. I paid for the taxi back and forth (total $60) and Nancy paid for everyone's food (total $128). Both food and commute are supposed to be shared equally among all. Make necessary payment requests with a note \"For Taxi\", and a payment to Nancy with a note \"For Food\", on venmo.",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "2d9f728_2",
+        "Query": "My roommates and I went for a dinner yesterday. I paid for the taxi back and forth (total $73) and Nancy paid for everyone's food (total $122). Both food and commute are supposed to be shared equally among all. Make necessary payment requests with a note \"Taxi Fare\", and a payment to Nancy with a note \"Dinner Bill\", on venmo.",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "2d9f728_3",
+        "Query": "My roommates and I went for a dinner yesterday. I paid for the taxi back and forth (total $40) and Nancy paid for everyone's food (total $166). Both food and commute are supposed to be shared equally among all. Make necessary payment requests with a note \"Commute\", and a payment to Nancy with a note \"Dinner\", on venmo.",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "6f4b9a5_1",
+        "Query": "I keep a log of all my liked songs and respective artists in a note in simple_note. I want to add release month information for them as well. I have added it for the first few songs. Add it for the rest.",
+        "NeededApps": [
+            "simple_note",
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "6f4b9a5_2",
+        "Query": "I keep a log of all my liked songs and respective artists in a note in simple_note. I want to add release month information for them as well. I have added it for the first few songs. Add it for the rest.",
+        "NeededApps": [
+            "simple_note",
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "6f4b9a5_3",
+        "Query": "I keep a log of all my liked songs and respective artists in a note in simple_note. I want to add release month information for them as well. I have added it for the first few songs. Add it for the rest.",
+        "NeededApps": [
+            "simple_note",
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "d6ac34d_1",
+        "Query": "Add a new habit tracking log note for today in my Simple Note account. It should be the same as yesterday, except I had a good posture today.",
+        "NeededApps": [
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "d6ac34d_2",
+        "Query": "Add a new habit tracking log note for today in my Simple Note account. It should be the same as yesterday, except I did not meditate today.",
+        "NeededApps": [
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "d6ac34d_3",
+        "Query": "Add a new habit tracking log note for today in my Simple Note account. It should be the same as yesterday, except I ate home-prepared meals today.",
+        "NeededApps": [
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "0d01c76_1",
+        "Query": "Import markdown notes in the \"~/documents/personal/notes/\" directory of my file system to my Simple Note account. Each markdown file should become a separate note in the Simple Note account. The title of each note should be taken from the name of the source file (excluding the directory path and file extension), replacing underscores in it with blank spaces.",
+        "NeededApps": [
+            "file_system",
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "0d01c76_2",
+        "Query": "Import markdown notes in the \"~/documents/personal/simple_note/\" directory of my file system to my Simple Note account. Each markdown file should become a separate note in the Simple Note account. The title of each note should be taken from the name of the source file (excluding the directory path and file extension), replacing underscores in it with blank spaces.",
+        "NeededApps": [
+            "file_system",
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "0d01c76_3",
+        "Query": "Import markdown notes in the \"~/documents/personal/personal_notes/\" directory of my file system to my Simple Note account. Each markdown file should become a separate note in the Simple Note account. The title of each note should be taken from the name of the source file (excluding the directory path and file extension), replacing underscores in it with blank spaces.",
+        "NeededApps": [
+            "file_system",
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "ff58e36_1",
+        "Query": "Add all my friends and roommates as friends on venmo, if they are not already.",
+        "NeededApps": [
+            "venmo",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "ff58e36_2",
+        "Query": "Add all my coworkers and friends as friends on venmo, if they are not already.",
+        "NeededApps": [
+            "venmo",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "ff58e36_3",
+        "Query": "Add all my coworkers and roommates as friends on venmo, if they are not already.",
+        "NeededApps": [
+            "venmo",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "d18139b_1",
+        "Query": "Approve all venmo payment requests from my roommates from this calendar month.",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "d18139b_2",
+        "Query": "Approve all venmo payment requests from my roommates from this calendar month.",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "d18139b_3",
+        "Query": "Approve all venmo payment requests from my roommates from this calendar month.",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "5a83b05_1",
+        "Query": "Delete all .pdf files from my file system ~/downloads folder.",
+        "NeededApps": [
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "5a83b05_2",
+        "Query": "Delete all .jpg files from my file system ~/downloads folder.",
+        "NeededApps": [
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "5a83b05_3",
+        "Query": "Delete all .pdf files from my file system ~/downloads folder.",
+        "NeededApps": [
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "042a9fc_1",
+        "Query": "My roommates and I are preparing a playlist for a roadtrip together. I prepared the initial playlist on Spotify and shared it with them on phone messages. They have replied with suggested changes. Please update this playlist accordingly.",
+        "NeededApps": [
+            "spotify",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "042a9fc_2",
+        "Query": "My siblings and I are preparing a playlist for a roadtrip together. I prepared the initial playlist on Spotify and shared it with them on phone messages. They have replied with suggested changes. Please update this playlist accordingly.",
+        "NeededApps": [
+            "spotify",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "042a9fc_3",
+        "Query": "My roommates and I are preparing a playlist for a roadtrip together. I prepared the initial playlist on Spotify and shared it with them on phone messages. They have replied with suggested changes. Please update this playlist accordingly.",
+        "NeededApps": [
+            "spotify",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "cef9191_1",
+        "Query": "Who is the most followed artist I follow on Spotify?",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "cef9191_2",
+        "Query": "Who is the least followed artist I follow on Spotify?",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "cef9191_3",
+        "Query": "Who is the most followed artist I follow on Spotify?",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "3b8fb7a_1",
+        "Query": "I went on a trip with friends to Maui recently. I have maintained a note of money I owe to others and others owe me from the trip in simple note. Make private venmo payments or requests accordingly. In the payments/requests, add a note, \"For Maui trip\".",
+        "NeededApps": [
+            "simple_note",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "3b8fb7a_2",
+        "Query": "I went on a trip with friends to Athens recently. I have maintained a note of money I owe to others and others owe me from the trip in simple note. Make private venmo payments or requests accordingly. In the payments/requests, add a note, \"For Athens trip\".",
+        "NeededApps": [
+            "simple_note",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "3b8fb7a_3",
+        "Query": "I went on a trip with friends to Miami recently. I have maintained a note of money I owe to others and others owe me from the trip in simple note. Make private venmo payments or requests accordingly. In the payments/requests, add a note, \"For Miami trip\".",
+        "NeededApps": [
+            "simple_note",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "afc4005_1",
+        "Query": "How long is my workout duration today, in minutes, as per my plan in Simple Note?",
+        "NeededApps": [
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "afc4005_2",
+        "Query": "How long was my workout duration yesterday, in minutes, as per my plan in Simple Note?",
+        "NeededApps": [
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "afc4005_3",
+        "Query": "How long is my workout duration on sundays, in minutes, as per my plan in Simple Note?",
+        "NeededApps": [
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "9dabbc9_1",
+        "Query": "My roommate requested me to pay for my share of the housing bill this month on venmo today. But they forgot about the 5% rent increase starting this month. So reject that payment request and send them the corrected amount of money with a note, \"You forgot about the 5% increase!\".",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "9dabbc9_2",
+        "Query": "My roommate requested me to pay for my share of the housing bill this month on venmo today. But they forgot about the 10% rent decrease starting this month. So reject that payment request and send them the corrected amount of money with a note, \"The rent decreased by 10% this month.\".",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "9dabbc9_3",
+        "Query": "My roommate requested me to pay for my share of the housing bill this month on venmo today. But they forgot about the 15% rent increase starting this month. So reject that payment request and send them the corrected amount of money with a note, \"Correcting for 15% rent increase.\".",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "425a494_1",
+        "Query": "Songs of which genre have I liked the most in my Spotify song library?",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "425a494_2",
+        "Query": "Songs of which genre have I liked the least in my Spotify album library?",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "425a494_3",
+        "Query": "Songs of which genre have I liked the most in my Spotify playlists?",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "a30375d_1",
+        "Query": "Give me a random funny quote from my SimpleNote note about it. Just the quote, nothing else.",
+        "NeededApps": [
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "a30375d_2",
+        "Query": "Give me a random inspirational quote from my SimpleNote note about it. Just the quote, nothing else.",
+        "NeededApps": [
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "a30375d_3",
+        "Query": "Give me a random movie quote from my SimpleNote note about it. Just the quote, nothing else.",
+        "NeededApps": [
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "09b0ee6_1",
+        "Query": "Give me 6 comma-separated artist names with the most songs in my Spotify playlists. If the same song is present in multiple playlists, count it once.",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "09b0ee6_2",
+        "Query": "Give me 4 comma-separated artist names with the least songs in my Spotify playlists. If the same song is present in multiple playlists, count it once.",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "09b0ee6_3",
+        "Query": "Give me 3 comma-separated artist names with the most songs in my Spotify playlists. If the same song is present in multiple playlists, count it once.",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "d194965_1",
+        "Query": "I jotted down some songs in Simple Note recently. Make a playlist titled \"Random Songs\" out of it.",
+        "NeededApps": [
+            "simple_note",
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "d194965_2",
+        "Query": "I jotted down some songs in Simple Note recently. Make a playlist titled \"Songs from Simple Note\" out of it.",
+        "NeededApps": [
+            "simple_note",
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "d194965_3",
+        "Query": "I jotted down some songs in Simple Note recently. Make a playlist titled \"Random Playlist\" out of it.",
+        "NeededApps": [
+            "simple_note",
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "7847649_1",
+        "Query": "How many activities are completed in my bucket list as per my SimpleNote note?",
+        "NeededApps": [
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "7847649_2",
+        "Query": "How many activities are left to do in my bucket list as per my SimpleNote note?",
+        "NeededApps": [
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "7847649_3",
+        "Query": "How many activities are done in my bucket list as per my SimpleNote note?",
+        "NeededApps": [
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "552869a_1",
+        "Query": "How much have I paid in phone bill on venmo this year so far?",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "552869a_2",
+        "Query": "How much have I paid in electricity bill on venmo this year so far?",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "552869a_3",
+        "Query": "How much have I paid in internet bill on venmo this year so far?",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "652485c_1",
+        "Query": "Make a new public playlist from all my liked songs from my Spotify song, album and playlist libraries, and share its URL with my husband via phone text message.",
+        "NeededApps": [
+            "spotify",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "652485c_2",
+        "Query": "Make a new public playlist from all my liked songs from my Spotify song, album and playlist libraries, and share its URL with my wife via phone text message.",
+        "NeededApps": [
+            "spotify",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "652485c_3",
+        "Query": "Make a new public playlist from all my liked songs from my Spotify song, album and playlist libraries, and share its URL with my husband via phone text message.",
+        "NeededApps": [
+            "spotify",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "ccf4b82_1",
+        "Query": "Approve all pending venmo payment requests I have received in this month, and withdraw the remaining venmo balance, if any, to my card ending in 8907.",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "ccf4b82_2",
+        "Query": "Approve all pending venmo payment requests I have received in this or the last month, and withdraw the remaining venmo balance, if any, to my card ending in 1102.",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "ccf4b82_3",
+        "Query": "Approve all pending venmo payment requests I have received in this month, and withdraw the remaining venmo balance, if any, to my card ending in 4184.",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "522e5e5_1",
+        "Query": "Befriend on Venmo anyone I have sent or received money from this month.",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "522e5e5_2",
+        "Query": "Befriend on Venmo anyone I have sent money to this month.",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "522e5e5_3",
+        "Query": "Befriend on Venmo anyone I have received money from this month.",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "0de03ea_1",
+        "Query": "I am going for a 15-minute drive without internet. Play an album from my Spotify library that already has enough downloaded songs for it, so I do not have to repeat.",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "0de03ea_2",
+        "Query": "I am going for a half-hour walk without internet. Play a playlist from my Spotify library that already has enough downloaded songs for it, so I do not have to repeat.",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "0de03ea_3",
+        "Query": "I am going for a 20-minute drive without internet. Play an album from my Spotify library that already has enough downloaded songs for it, so I do not have to repeat.",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "2c544f9_1",
+        "Query": "Send $250 on venmo to Catherine.",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "2c544f9_2",
+        "Query": "Send $427 on venmo to Anita.",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "2c544f9_3",
+        "Query": "Send $234 on venmo to Jack.",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "270f1ff_1",
+        "Query": "Today is my son's birthday. Venmo him twice the money I sent him on his last birthday, privately, with a description note, \"Happy Birthday\". Then leave him a phone text message, \"Happy Birthday son! Give a call when you are free.\".",
+        "NeededApps": [
+            "venmo",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "270f1ff_2",
+        "Query": "Today is my daughter's birthday. Venmo her thrice the money I sent her on her last birthday, privately, with a description note, \"Many happy returns of the day!\". Then leave her a phone text message, \"Happy Birthday daughter! Looking forward to meet you soon!\".",
+        "NeededApps": [
+            "venmo",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "270f1ff_3",
+        "Query": "Today is my son's birthday. Venmo him four times the money I sent him on his last birthday, privately, with a description note, \"Have a great day!\". Then leave him a phone text message, \"Happy Birthday son! Hope you have a great day!\".",
+        "NeededApps": [
+            "venmo",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "024c982_1",
+        "Query": "Request $13 publicly on Venmo from my friend, Stacy, with a note, \"For yesterday's meal\".",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "024c982_2",
+        "Query": "Request $28 privately on Venmo from my roommate, Melissa, with a note, \"For the movie tickets\".",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "024c982_3",
+        "Query": "Request $29 publicly on Venmo from my friend, Ronald, with a note, \"For the road trip\".",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "9ef798c_1",
+        "Query": "Chelsea and I have been carpooling to work this month. They have requested money for it on venmo. Accept it.",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "9ef798c_2",
+        "Query": "William and I have been carpooling to work this month. They have requested money for it on venmo. Accept it.",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "9ef798c_3",
+        "Query": "Sabrina and I have been carpooling to work this month. They have requested money for it on venmo. Accept it.",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "b9c5c9a_1",
+        "Query": "I have invited some of my friends to a reunion party via phone messages. I have made a CSV to track who is coming or not in \"~/documents/personal/\" in my file system. Please update RSVPs in it as per their latest replies.",
+        "NeededApps": [
+            "phone",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "b9c5c9a_2",
+        "Query": "I have invited some of my friends to a reunion party via phone messages. I have made a CSV to track who is coming or not in \"~/documents/personal_stuff/\" in my file system. Please update RSVPs in it as per their latest replies.",
+        "NeededApps": [
+            "phone",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "b9c5c9a_3",
+        "Query": "I have invited some of my friends to a reunion party via phone messages. I have made a CSV to track who is coming or not in \"~/documents/personal_files/\" in my file system. Please update RSVPs in it as per their latest replies.",
+        "NeededApps": [
+            "phone",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "90adc3f_1",
+        "Query": "I made venmo payment requests to some of my friends yesterday evening. Unfortunately, I have made a mistake in calculation. Each of them owes me $5 less than the requested amount. So delete those requests and make new ones with everything else the same, but with the corrected amount.",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "90adc3f_2",
+        "Query": "I made venmo payment requests to my roommates yesterday evening. Unfortunately, I have made a mistake in calculation. Each of them owes me $10 more than the requested amount. So delete those requests and make new ones with everything else the same, but with the corrected amount.",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "90adc3f_3",
+        "Query": "I made venmo payment requests to some of my friends yesterday evening. Unfortunately, I have made a mistake in calculation. Each of them owes me $15 less than the requested amount. So delete those requests and make new ones with everything else the same, but with the corrected amount.",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "c77c005_1",
+        "Query": "Befriend on Venmo anyone I have sent or received money from this month and unfriend everyone else.",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "c77c005_2",
+        "Query": "Befriend on Venmo anyone I have sent money to this month and unfriend everyone else.",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "c77c005_3",
+        "Query": "Befriend on Venmo anyone I have received money from this month and unfriend everyone else.",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "f323bae_1",
+        "Query": "I maintain my habit tracking logs in Simple Note. Export it in \"~/downloads/habit_tracker.csv\" in my file system. Its first header column should be \"date\" and the rest should be correspond to the habits I track as per my logs. The rows for date column should be in yyyy-mm-dd format and the rest should be yes or no as per my logs. The rows should be sorted in ascending order of the date from top to bottom, and habit columns as per their order in logs.",
+        "NeededApps": [
+            "simple_note",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "f323bae_2",
+        "Query": "I maintain my habit tracking logs in Simple Note. Export it in \"~/backups/habit_log.csv\" in my file system. Its first header column should be \"date\" and the rest should be correspond to the habits I track as per my logs. The rows for date column should be in yyyy-mm-dd format and the rest should be yes or no as per my logs. The rows should be sorted in descending order of the date from top to bottom, and habit columns as per their order in logs.",
+        "NeededApps": [
+            "simple_note",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "f323bae_3",
+        "Query": "I maintain my habit tracking logs in Simple Note. Export it in \"~/backups/simple_note/habits.csv\" in my file system. Its first header column should be \"date\" and the rest should be correspond to the habits I track as per my logs. The rows for date column should be in yyyy-mm-dd format and the rest should be yes or no as per my logs. The rows should be sorted in ascending order of the date from top to bottom, and habit columns as per their order in logs.",
+        "NeededApps": [
+            "simple_note",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "13547f5_1",
+        "Query": "Send a phone voice message to my all roommates, \"I have taken out the trash.\".",
+        "NeededApps": [
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "13547f5_2",
+        "Query": "Send a phone text message to my partner, \"The dishwasher is clean and ready to be emptied.\".",
+        "NeededApps": [
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "13547f5_3",
+        "Query": "Send a phone voice message to my husband, \"Don't forget to water the plants today.\".",
+        "NeededApps": [
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "1150ed6_1",
+        "Query": "Play any song released in 2022 from my Spotify song library.",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "1150ed6_2",
+        "Query": "Play any song released in 2021 from my Spotify album library.",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "1150ed6_3",
+        "Query": "Play any song released in 2020 from my Spotify playlists.",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "31dc501_1",
+        "Query": "Set my weekday wake up alarm snooze to 5 minutes.",
+        "NeededApps": [
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "31dc501_2",
+        "Query": "Set my weekend wake up alarm snooze to 15 minutes.",
+        "NeededApps": [
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "31dc501_3",
+        "Query": "Set my weekday wake up alarm snooze to 20 minutes.",
+        "NeededApps": [
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "59fae45_1",
+        "Query": "Update all my Spotify playlist titles with the most common song genre in that playlist in this format: \"<original_title> | <most_common_genre>\". Replace <original_title> and <most_common_genre> with the actual values.",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "59fae45_2",
+        "Query": "Update all my Spotify playlist titles with the most common song genre in that playlist in this format: \"<original_title> | <most_common_genre>\". Replace <original_title> and <most_common_genre> with the actual values.",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "59fae45_3",
+        "Query": "Update all my Spotify playlist titles with the most common song genre in that playlist in this format: \"<original_title> | <most_common_genre>\". Replace <original_title> and <most_common_genre> with the actual values.",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "b6d1104_1",
+        "Query": "I maintain a log of my monthly venmo expense in SimpleNote note. Update it with an entry for this month.",
+        "NeededApps": [
+            "venmo",
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "b6d1104_2",
+        "Query": "I maintain a log of my monthly venmo expense in SimpleNote note. Update it with an entry for this month.",
+        "NeededApps": [
+            "venmo",
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "b6d1104_3",
+        "Query": "I maintain a log of my monthly venmo expense in SimpleNote note. Update it with an entry for this month.",
+        "NeededApps": [
+            "simple_note",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "f861c32_1",
+        "Query": "Send $30 to each of my roommates via venmo with a note, \"For Drinks\". Refill venmo balance if you need to.",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "f861c32_2",
+        "Query": "Send $20 to each of my coworkers via venmo with a note, \"For Lunch\". Refill venmo balance if you need to.",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "f861c32_3",
+        "Query": "Send $20 to each of my friends via venmo with a note, \"For Karaoke\". Refill venmo balance if you need to.",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "0a9d82a_1",
+        "Query": "What is my longest practiced-good-posture habit streak, in number of days, as per my Simple Note habit tracking logs?",
+        "NeededApps": [
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "0a9d82a_2",
+        "Query": "What is my longest limited-screen-time-to-1-hr habit streak, in number of days, as per my Simple Note habit tracking logs?",
+        "NeededApps": [
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "0a9d82a_3",
+        "Query": "What is my longest ate-homemade-meals habit streak, in number of days, as per my Simple Note habit tracking logs?",
+        "NeededApps": [
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "166f4ff_1",
+        "Query": "How much money have I been requested on Venmo in the last 7 days (including today)? ",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "166f4ff_2",
+        "Query": "How much money have I been requested on Venmo in the last 10 days (including today)? ",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "166f4ff_3",
+        "Query": "How much money have I been requested on Venmo in the last 5 days (including today)? ",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "9016950_1",
+        "Query": "I need my parents to have a venmo account. Last time I checked none had one. Make an account for whoever that does not have it yet, using their email address and A}2Gm4r as password. Then send them a phone text message, \"I have created a venmo account for you. Please activate it, you should have received an email for it. I've set your password to be A}2Gm4r. Change it soon too.\".",
+        "NeededApps": [
+            "venmo",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "9016950_2",
+        "Query": "I need my roommates to have a venmo account. Last time I checked none had one. Make an account for whoever that does not have it yet, using their email address and -kO6&A as password. Then send them a phone text message, \"I made an account on venmo for you. You should have received an email for activation. Please do it soon. The temporary password is -kO6&A. Change it too.\".",
+        "NeededApps": [
+            "venmo",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "9016950_3",
+        "Query": "I need my parents to have a venmo account. Last time I checked none had one. Make an account for whoever that does not have it yet, using their email address and jy**-a3U as password. Then send them a phone text message, \"You have a venmo account now. Please activate it with the code you received in your email. Your password is jy**-a3U. Change it as well.\".",
+        "NeededApps": [
+            "venmo",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "dac78d9_1",
+        "Query": "How many venmo friends have I made since the start of January this year?",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "dac78d9_2",
+        "Query": "How many venmo friends have I made since the start of October last year?",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "dac78d9_3",
+        "Query": "How many venmo friends have I made since the start of March this year?",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "f3f60f0_1",
+        "Query": "Like all the songs and albums in my Spotify song and album library, respectively, that I have not liked yet.",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "f3f60f0_2",
+        "Query": "Like all the songs and albums in my Spotify song and album library, respectively, that I have not liked yet.",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "f3f60f0_3",
+        "Query": "Like all the songs and albums in my Spotify song and album library, respectively, that I have not liked yet.",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "ffe6d5e_1",
+        "Query": "My wife has asked me what I'd like for dinner on phone. Reply her with any one of my favorite recipes' name from my Simple Note account. Just the name, nothing else.",
+        "NeededApps": [
+            "phone",
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "ffe6d5e_2",
+        "Query": "My husband has asked me what I'd like for dinner on phone. Reply him with any one of my favorite recipes' name from my Simple Note account. Just the name, nothing else.",
+        "NeededApps": [
+            "phone",
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "ffe6d5e_3",
+        "Query": "My mother has asked me what I'd like for dinner on phone. Reply her with any one of my favorite recipes' name from my Simple Note account. Just the name, nothing else.",
+        "NeededApps": [
+            "phone",
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "8ce6779_1",
+        "Query": "At my job, we manage the tasks on todoist. But I am changing job soon, so for each task that is assigned to me and is incomplete yet, I have asked who can take it from me. See the discussion in comments and reassign based on it. Then, leave a comment there, \"Thank you <person_first_name>!\". Here <person_first_name> is the first name of the person who is reassigned the task. If no one has agreed to take the task, leave it as is.",
+        "NeededApps": [
+            "todoist"
+        ]
+    },
+    {
+        "TaskID": "8ce6779_2",
+        "Query": "At my job, we manage the tasks on todoist. But I am changing job soon, so for each task that is assigned to me and is incomplete yet, I have asked who can take it from me. See the discussion in comments and reassign based on it. Then, leave a comment there, \"Thanks <person_first_name>!\". Here <person_first_name> is the first name of the person who is reassigned the task. If no one has agreed to take the task, leave it as is.",
+        "NeededApps": [
+            "todoist"
+        ]
+    },
+    {
+        "TaskID": "8ce6779_3",
+        "Query": "At my job, we manage the tasks on todoist. But I am changing job soon, so for each task that is assigned to me and is incomplete yet, I have asked who can take it from me. See the discussion in comments and reassign based on it. Then, leave a comment there, \"Greatly appreciate it <person_first_name>!\". Here <person_first_name> is the first name of the person who is reassigned the task. If no one has agreed to take the task, leave it as is.",
+        "NeededApps": [
+            "todoist"
+        ]
+    },
+    {
+        "TaskID": "83a7951_1",
+        "Query": "I owed people some money. They put the associated expenses on Splitwise yesterday. I paid some of them up on Venmo today. Please record payments on Splitwise for each in their respective groups. Each payment should have a note, \"Sent on Venmo, see receipt.\", and an attached Venmo receipt of it as a proof.",
+        "NeededApps": [
+            "splitwise",
+            "venmo",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "83a7951_2",
+        "Query": "I owed people some money. They put the associated expenses on Splitwise yesterday. I paid some of them up on Venmo today. Please record payments on Splitwise for each in their respective groups. Each payment should have a note, \"Paid via Venmo, see attached receipt.\", and an attached Venmo receipt of it as a proof.",
+        "NeededApps": [
+            "splitwise",
+            "venmo",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "83a7951_3",
+        "Query": "I owed people some money. They put the associated expenses on Splitwise yesterday. I paid some of them up on Venmo today. Please record payments on Splitwise for each in their respective groups. Each payment should have a note, \"Payment made on Venmo, receipt attached.\", and an attached Venmo receipt of it as a proof.",
+        "NeededApps": [
+            "splitwise",
+            "venmo",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "3aa1a22_1",
+        "Query": "I got some Splitwise group invitations over phone text messages yesterday. If their number is in my phone contact book, accept it, otherwise delete those messages.",
+        "NeededApps": [
+            "phone",
+            "splitwise"
+        ]
+    },
+    {
+        "TaskID": "3aa1a22_2",
+        "Query": "I got some Splitwise group invitations over phone voice messages the day before yesterday. If their number is in my phone contact book, accept it, otherwise delete those messages.",
+        "NeededApps": [
+            "phone",
+            "splitwise"
+        ]
+    },
+    {
+        "TaskID": "3aa1a22_3",
+        "Query": "I got some Splitwise group invitations over phone text messages this week. If their number is in my phone contact book, accept it, otherwise delete those messages.",
+        "NeededApps": [
+            "phone",
+            "splitwise"
+        ]
+    },
+    {
+        "TaskID": "32616b5_1",
+        "Query": "I went on a few trips each with some of my friends. My Simple Note has information on who owes whom what from each trip. I have already created Splitwise groups for the trips. Record the expenses accordingly in the respective groups.",
+        "NeededApps": [
+            "simple_note",
+            "splitwise"
+        ]
+    },
+    {
+        "TaskID": "32616b5_2",
+        "Query": "I went on a few trips each with some of my coworkers. My Simple Note has information on who owes whom what from each trip. I have already created Splitwise groups for the trips. Record the expenses accordingly in the respective groups.",
+        "NeededApps": [
+            "simple_note",
+            "splitwise"
+        ]
+    },
+    {
+        "TaskID": "32616b5_3",
+        "Query": "I went on a few trips each with some of my friends. My Simple Note has information on who owes whom what from each trip. I have already created Splitwise groups for the trips. Record the expenses accordingly in the respective groups.",
+        "NeededApps": [
+            "simple_note",
+            "splitwise"
+        ]
+    },
+    {
+        "TaskID": "986aa4e_1",
+        "Query": "I am going on a trip to Beijing with some of my roommates. We are managing its planning on a Todoist project for it. One of the tasks in it is about preparing a Spotify playlist. I have made the playlist and shared it with others on the project. But they have made some suggestions in comments. Please incorporate them, leave a final comment, \"Incorporated changes.\", and mark it complete.",
+        "NeededApps": [
+            "todoist",
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "986aa4e_2",
+        "Query": "I am going on a trip to Edinburgh with some of my siblings. We are managing its planning on a Todoist project for it. One of the tasks in it is about preparing a Spotify playlist. I have made the playlist and shared it with others on the project. But they have made some suggestions in comments. Please incorporate them, leave a final comment, \"Done!\", and mark it complete.",
+        "NeededApps": [
+            "todoist",
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "986aa4e_3",
+        "Query": "I am going on a trip to Bangkok with some of my friends. We are managing its planning on a Todoist project for it. One of the tasks in it is about preparing a Spotify playlist. I have made the playlist and shared it with others on the project. But they have made some suggestions in comments. Please incorporate them, leave a final comment, \"Thanks! Updated.\", and mark it complete.",
+        "NeededApps": [
+            "todoist",
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "6b6ca61_1",
+        "Query": "I have a list of people I owe money to, including amounts and descriptions, in owe_list.csv. For each person, (1) If they have a Venmo account, send the money privately with the specified amount and description. (2) If not, create an individual (non-grouped) Splitwise expense with the same details so I remember to pay them later. For Splitwise expenses, attach the PDF receipt as well. They are in the same folder as the CSV file.",
+        "NeededApps": [
+            "file_system",
+            "venmo",
+            "splitwise"
+        ]
+    },
+    {
+        "TaskID": "6b6ca61_2",
+        "Query": "I have a list of people I owe money to, including amounts and descriptions, in debt_list.csv. For each person, (1) If they have a Venmo account, send the money publicly with the specified amount and description. (2) If not, create an individual (non-grouped) Splitwise expense with the same details so I remember to pay them later. For Splitwise expenses, attach the PDF receipt as well. They are in the same folder as the CSV file.",
+        "NeededApps": [
+            "file_system",
+            "venmo",
+            "splitwise"
+        ]
+    },
+    {
+        "TaskID": "6b6ca61_3",
+        "Query": "I have a list of people I owe money to, including amounts and descriptions, in list_of_debts.csv. For each person, (1) If they have a Venmo account, send the money privately with the specified amount and description. (2) If not, create an individual (non-grouped) Splitwise expense with the same details so I remember to pay them later. For Splitwise expenses, attach the PDF receipt as well. They are in the same folder as the CSV file.",
+        "NeededApps": [
+            "file_system",
+            "venmo",
+            "splitwise"
+        ]
+    },
+    {
+        "TaskID": "bde252e_1",
+        "Query": "I maintain my work schedule in SimpleNote and track my tasks in Todoist. Every night, I delete the completed tasks from my \"Today's Goal\" project. Then, I move the maximum number of incomplete tasks from my Inbox to the \"Today's Goal\" project. The maximum here is assuming I work back-to-back as per my schedule and I find time for the left overs from the current day first. I am busy tonight, please do it for me. Note that the moved tasks must be identical to the original ones.",
+        "NeededApps": [
+            "simple_note",
+            "todoist"
+        ]
+    },
+    {
+        "TaskID": "bde252e_2",
+        "Query": "I maintain my work schedule in SimpleNote and track my tasks in Todoist. Every night, I delete the completed tasks from my \"Today's Target\" project. Then, I move the maximum number of incomplete tasks from my Inbox to the \"Today's Target\" project. The maximum here is assuming I work back-to-back as per my schedule and I find time for the left overs from the current day first. I am busy tonight, please do it for me. Note that the moved tasks must be identical to the original ones.",
+        "NeededApps": [
+            "simple_note",
+            "todoist"
+        ]
+    },
+    {
+        "TaskID": "bde252e_3",
+        "Query": "I maintain my work schedule in SimpleNote and track my tasks in Todoist. Every night, I delete the completed tasks from my \"Today\" project. Then, I move the maximum number of incomplete tasks from my Inbox to the \"Today\" project. The maximum here is assuming I work back-to-back as per my schedule and I find time for the left overs from the current day first. I am busy tonight, please do it for me. Note that the moved tasks must be identical to the original ones.",
+        "NeededApps": [
+            "simple_note",
+            "todoist"
+        ]
+    }
+]

@@ -1,0 +1,3150 @@
+[
+    {
+        "TaskID": "5238afc_1",
+        "Query": "Place an order for all weightlifting benches in my amazon cart.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "5238afc_2",
+        "Query": "Place an order for all beach balls in my amazon cart.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "5238afc_3",
+        "Query": "Place an order for all staplers in my amazon cart.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "0d22252_1",
+        "Query": "Place an order for all wrench sets in my amazon wish list.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "0d22252_2",
+        "Query": "Place an order for all mouse pads in my amazon wish list.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "0d22252_3",
+        "Query": "Place an order for all handheld vacuum cleaners in my amazon wish list.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "9bf2c8a_1",
+        "Query": "Move all food processors from my amazon cart to wish list.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "9bf2c8a_2",
+        "Query": "Move all watches from my amazon wish list to cart.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "9bf2c8a_3",
+        "Query": "Move all sofas from my amazon cart to wish list.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "b3bdcc1_1",
+        "Query": "Buy me a air purifier on amazon from its highest-rated seller using my visa card for my home address.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "b3bdcc1_2",
+        "Query": "Buy me a watch on amazon from its highest-rated seller using my wells fargo card for my work address.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "b3bdcc1_3",
+        "Query": "Buy me a portable air conditioner on amazon from its highest-rated seller using my chase card for my home address.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "6474048_1",
+        "Query": "Buy me a microwave on amazon with at least 4.2 seller rating that will fit in my kitchen countertop of 17.3X15.3 (LxW) inches.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "6474048_2",
+        "Query": "Buy me a coffee grinder on amazon with at least 4.5 seller rating that will fit in my kitchen countertop area of 6.3X6.3 (LxW) inches.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "6474048_3",
+        "Query": "Buy me a cutting board on amazon with at least 4.1 seller rating that will fit in my kitchen drawer of 12.0X9.5 (LxW) inches.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "9871968_1",
+        "Query": "Buy everything on my amazon wishlist, and have it delivered to my work address.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "9871968_2",
+        "Query": "Buy everything on my amazon wishlist, and have it delivered to my home address.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "9871968_3",
+        "Query": "Buy everything on my amazon wishlist, and have it delivered to my work address.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "07bb666_1",
+        "Query": "Move all products with under 4.2 rating from my amazon cart to wish list.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "07bb666_2",
+        "Query": "Move all products with over 3.7 rating from my amazon wish list to cart.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "07bb666_3",
+        "Query": "Move all products with over 4.3 rating from my amazon cart to wish list.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "383a053_1",
+        "Query": "Buy me 2 desk organizers on amazon of at least 4.3 product rating and 4.1 seller rating for my work address. They do not have to be identical.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "383a053_2",
+        "Query": "Buy me 4 laundry hampers on amazon of at least 4.2 product rating and 4.0 seller rating for my home address. They do not have to be identical.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "383a053_3",
+        "Query": "Buy me 3 extension cords on amazon of at least 3.9 product rating and 4.0 seller rating for my work address. They do not have to be identical.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "7b97e6d_1",
+        "Query": "Make an order for as many things as possible with $400 from my amazon wishlist.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "7b97e6d_2",
+        "Query": "Make an order for as many things as possible with $500 from my amazon wishlist.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "7b97e6d_3",
+        "Query": "Make an order for as many things as possible with $600 from my amazon wishlist.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "9aae7da_1",
+        "Query": "How much does my amazon cart and wishlist cost in total, ignoring potential tax and delivery fees?",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "9aae7da_2",
+        "Query": "How much does my amazon cart and wishlist cost in total, ignoring potential tax and delivery fees?",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "9aae7da_3",
+        "Query": "How much does my amazon cart and wishlist cost in total, ignoring potential tax and delivery fees?",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "23d431c_1",
+        "Query": "Buy me a cutting board from amazon within $30 (excluding tax). Only trust sellers I have ordered from in the past.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "23d431c_2",
+        "Query": "Buy me a area rug from amazon within $150 (excluding tax). Only trust sellers I have ordered from in the past.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "23d431c_3",
+        "Query": "Buy me a watch from amazon within $110 (excluding tax). Only trust sellers I have ordered from in the past.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "690d51b_1",
+        "Query": "Buy me a kitchen timer on amazon within $10 (excluding tax) and have it delivered to my home address.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "690d51b_2",
+        "Query": "Buy me a coffee maker on amazon within $150 (excluding tax) and have it delivered to my work address.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "690d51b_3",
+        "Query": "Buy me a cooling fan on amazon within $20 (excluding tax) and have it delivered to my home address.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "d9987f6_1",
+        "Query": "Buy me a extension cord on amazon with a rating over 4.5 and have it delivered to my home address.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "d9987f6_2",
+        "Query": "Buy me a gaming console controller on amazon with a rating over 3.8 and have it delivered to my work address.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "d9987f6_3",
+        "Query": "Buy me a blender on amazon with a rating over 4.9 and have it delivered to my home address.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "b0934aa_1",
+        "Query": "Buy me a board game on amazon under $20 (excluding tax), over 3.9 rating, and over 4 reviews, and have it delivered to home address.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "b0934aa_2",
+        "Query": "Buy me a external hard drive on amazon under $50 (excluding tax), over 3.8 rating, and over 6 reviews, and have it delivered to work address.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "b0934aa_3",
+        "Query": "Buy me a hedge trimmer on amazon under $60 (excluding tax), over 3.9 rating, and over 5 reviews, and have it delivered to home address.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "245cb43_1",
+        "Query": "Buy me a dish rack from my amazon wishlist that will fit in my kitchen countertop of 15.3X13.3 (LxW) inches.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "245cb43_2",
+        "Query": "Buy me a cutting board from my amazon wishlist that will fit in my kitchen drawer of 12.0X9.6 (LxW) inches.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "245cb43_3",
+        "Query": "Buy me a compass from my amazon wishlist that will fit in my hiking backpack pocket of 4.0X2.5 (LxW) inches.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "a8f302f_1",
+        "Query": "I have a few things in my amazon cart. For each product type in it, buy the cheapest product and move the rest to the wish list.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "a8f302f_2",
+        "Query": "I have a few things in my amazon cart. For each product type in it, buy the cheapest product and move the rest to the wish list.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "a8f302f_3",
+        "Query": "I have a few things in my amazon cart. For each product type in it, buy the cheapest product and move the rest to the wish list.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "1c4bd27_1",
+        "Query": "Initiate returns via FedEx for everything in my last 2 amazon order.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "1c4bd27_2",
+        "Query": "Initiate returns via FedEx for everything in my last 3 amazon order.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "1c4bd27_3",
+        "Query": "Initiate returns via FedEx for everything in my last 4 amazon order.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "3650990_1",
+        "Query": "Have I returned any office desk on amazon in this month? Say yes or no.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "3650990_2",
+        "Query": "Have I returned any violin on amazon in this year? Say yes or no.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "3650990_3",
+        "Query": "Have I returned any crescent wrench on amazon in this or last month? Say yes or no.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "258796c_1",
+        "Query": "How many hours does the battery of ecobee SmartCamera last? Please answer as per its amazon reviews or questions/answers and and only trust information from its verified purchasers.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "258796c_2",
+        "Query": "How many hours does the battery of Kobo Clara HD eReader last? Please answer as per its amazon reviews or questions/answers and and only trust information from its verified purchasers.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "258796c_3",
+        "Query": "How many hours does the battery of HP Pavilion 15 Laptop last? Please answer as per its amazon reviews or questions/answers and and only trust information from its verified purchasers.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "4815c06_1",
+        "Query": "Place an amazon order for 1 quantity of 'Sony PlayStation 5', 1 quantity of 'Etekcity Food Kitchen Scale' and 1 quantity of 'Xbox Series S Console', and have it delivered to my home. Use Discover payment card if it's already in my account, otherwise use what I have in it. Also, I have important things in my cart, so revert its state to as it is now after the order.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "4815c06_2",
+        "Query": "Place an amazon order for 3 quantity of 'CamelBak Crux 3L Reservoir', 3 quantity of 'PlayStation 4 Pro Console' and 2 quantity of 'Dash Mini Waffle Maker', and have it delivered to my home. Use Visa payment card if it's already in my account, otherwise use what I have in it. Also, I have important things in my cart, so revert its state to as it is now after the order.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "4815c06_3",
+        "Query": "Place an amazon order for 1 quantity of 'Ascend Ultralight Hammock', 3 quantity of 'The Complete Mediterranean Cookbook' and 3 quantity of 'Athleta Studio Wrap', and have it delivered to my home. Use HSBC payment card if it's already in my account, otherwise use what I have in it. Also, I have important things in my cart, so revert its state to as it is now after the order.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "4242c97_1",
+        "Query": "Make an order for two same-colored Hanes Men's ComfortSoft Short Sleeve T-Shirt in extra-large size on Amazon. My color preference is, red > black > navy blue. Pick the most preferred color that is available.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "4242c97_2",
+        "Query": "Make an order for two same-colored Nordstrom Signature Cashmere Sweater in extra-small size on Amazon. My color preference is, yellow > orange > navy blue. Pick the most preferred color that is available.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "4242c97_3",
+        "Query": "Make an order for two same-colored Gildan Men's Ultra Cotton T-Shirt in large size on Amazon. My color preference is, brown > navy blue > black. Pick the most preferred color that is available.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "ec437da_1",
+        "Query": "Buy one Apple Watch Series 7 on Amazon. I need to get it gift wrapped. But I am not sure whether to get it gift wrapped via Amazon directly, or buy some gift wrapper on Amazon separately, and wrap it myself. Do whatever is cheaper.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "ec437da_2",
+        "Query": "Buy one Samsung Galaxy Buds Pro on Amazon. I need to get it gift wrapped. But I am not sure whether to get it gift wrapped via Amazon directly, or buy some gift wrapper on Amazon separately, and wrap it myself. Do whatever is cheaper.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "ec437da_3",
+        "Query": "Buy one Philips Norelco OneBlade Pro on Amazon. I need to get it gift wrapped. But I am not sure whether to get it gift wrapped via Amazon directly, or buy some gift wrapper on Amazon separately, and wrap it myself. Do whatever is cheaper.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "77bcb81_1",
+        "Query": "Place an order for everything in my amazon cart and wishlist for my home address.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "77bcb81_2",
+        "Query": "Place an order for everything in my amazon cart and wishlist for my work address.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "77bcb81_3",
+        "Query": "Place an order for everything in my amazon cart and wishlist for my home address.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "81be677_1",
+        "Query": "By when should everything from my yesterday's amazon order arrive? Tell me the date in DD-MM format.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "81be677_2",
+        "Query": "By when should everything from my today's amazon order arrive? Tell me the date in MM-DD format.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "81be677_3",
+        "Query": "By when should everything from my yesterday's amazon order arrive? Tell me the date in DD/MM format.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "7434096_1",
+        "Query": "I bought a few Hanes Men's Tagless Crewneck Undershirts on amazon this week. But only the one in extra-large size fits me well. Initiate a return for the rest. Prefer UPS as a deliverer, if available.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "7434096_2",
+        "Query": "I bought a few H&M Turtleneck Sweaters on amazon this week. But only the one in extra-small size fits me well. Initiate a return for the rest. Prefer USPS as a deliverer, if available.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "7434096_3",
+        "Query": "I bought a few Gildan Women's Softstyle Cotton T-Shirts on amazon this week. But only the one in large size fits me well. Initiate a return for the rest. Prefer FedEx as a deliverer, if available.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "6588a51_1",
+        "Query": "Post a question about the last t-shirt I ordered on amazon, \"Has anyone experienced the color fade after the first wash?\".",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "6588a51_2",
+        "Query": "Post a question about the last sweater I ordered on amazon, \"Are there any specific detergents or products you recommend for preserving colors?\".",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "6588a51_3",
+        "Query": "Post a question about the last t-shirt I ordered on amazon, \"Do these t-shirts bleed color onto other clothing items in the same wash?\".",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "7d26579_1",
+        "Query": "Based on the question I posted about my last t-shirt order on amazon, has anyone experienced color fading after the first wash? Say yes or no.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "7d26579_2",
+        "Query": "Based on the question I posted about my last sweater order on amazon, has anyone experienced color fading after the first wash? Say yes or no.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "7d26579_3",
+        "Query": "Based on the question I posted about my last t-shirt order on amazon, has anyone experienced color fading after the first wash? Say yes or no.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "cdf61bd_1",
+        "Query": "Change my amazon review about the grey t-shirt I ordered last calendar month. Make it 1 star with the title \"Shrunk and Misshaped After First Wash!\".",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "cdf61bd_2",
+        "Query": "Change my amazon review about the beige sweater I ordered last calendar month. Make it 2 star with the title \"Pills and Looks Worn Out Quickly.\".",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "cdf61bd_3",
+        "Query": "Change my amazon review about the pink t-shirt I ordered last calendar month. Make it 1 star with the title \"Stitching Fell Apart in the Washer!\".",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "9b2dc64_1",
+        "Query": "I liked that last t-shirt I bought on amazon. Place a new order for the same in navy blue and black, one each. Make sure to get the size as per that order, and have them delivered home.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "9b2dc64_2",
+        "Query": "I liked that last sweater I bought on amazon. Place a new order for the same in black and red, one each. Make sure to get the size as per that order, and have them delivered home.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "9b2dc64_3",
+        "Query": "I liked that last t-shirt I bought on amazon. Place a new order for the same in black and green, one each. Make sure to get the size as per that order, and have them delivered home.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "953b296_1",
+        "Query": "Buy me any t-shirt in my size on amazon. Assure from QAs/reviews that no one has reported its color fading after washing. Obtain my size from any of my past t-shirt orders.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "953b296_2",
+        "Query": "Buy me any sweater in my size on amazon. Assure from QAs/reviews that no one has reported its color fading after washing. Obtain my size from any of my past sweater orders.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "953b296_3",
+        "Query": "Buy me any t-shirt in my size on amazon. Assure from QAs/reviews that no one has reported its color fading after washing. Obtain my size from any of my past t-shirt orders.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "eb5ad85_1",
+        "Query": "How much did I spend on amazon in this calendar year?",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "eb5ad85_2",
+        "Query": "How much did I spend on amazon in the last calendar month?",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "eb5ad85_3",
+        "Query": "How much did I spend on amazon in this or the last calendar month?",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "f6936d4_1",
+        "Query": "I am going on a trip with friends this Saturday. For it, I need 3 kites and sleeping pads, each. Place an amazon order for them, making sure everything reaches my home by the end of the day before I leave.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "f6936d4_2",
+        "Query": "I am going on a trip with friends this Sunday. For it, I need 4 fishing rods and disinfecting wipes, each. Place an amazon order for them, making sure everything reaches my home by the end of the day before I leave.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "f6936d4_3",
+        "Query": "I am going on a trip with friends this Saturday. For it, I need 5 camping lanterns and beach chairs, each. Place an amazon order for them, making sure everything reaches my home by the end of the day before I leave.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "f99d726_1",
+        "Query": "The last t-shirt I bought on Amazon is a bit too small for me. Initiate a return for it, and buy a replacement of the same in the next larger size. If it's available now in white, prefer it, otherwise go with the same color.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "f99d726_2",
+        "Query": "The last sweater I bought on Amazon is a bit too large for me. Initiate a return for it, and buy a replacement of the same in the next smaller size. If it's available now in red, prefer it, otherwise go with the same color.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "f99d726_3",
+        "Query": "The last flip-flops I bought on Amazon is a bit too small for me. Initiate a return for it, and buy a replacement of the same in the next larger size. If it's available now in red, prefer it, otherwise go with the same color.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "1b2bae9_1",
+        "Query": "Order one IKEA LERHAMN Dining Table on Amazon for home delivery. Save the receipt in the \"~/bills/\" folder. I keep my receipts well-organized by category in that folder. So make sure the file location and name are as per the existing organization.",
+        "NeededApps": [
+            "amazon",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "1b2bae9_2",
+        "Query": "Order one Apple Watch Series 7 on Amazon for home delivery. Save the receipt in the \"~/bills/\" folder. I keep my receipts well-organized by category in that folder. So make sure the file location and name are as per the existing organization.",
+        "NeededApps": [
+            "amazon",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "1b2bae9_3",
+        "Query": "Order one Nintendo Switch Lite on Amazon for home delivery. Save the receipt in the \"~/bills/\" folder. I keep my receipts well-organized by category in that folder. So make sure the file location and name are as per the existing organization.",
+        "NeededApps": [
+            "amazon",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "b05f69a_1",
+        "Query": "Download receipts of all my amazon orders in \"~/bills/amazon/\" folder in my file system. Name the files in the format, \"ordered_at_yyyy-mm-dd_order_id_<order_id>.txt\". Replace <order_id> with the actual order id, and yyyy-mm-dd with the date when the order was placed. You should be able to find receipts from order confirmation emails.",
+        "NeededApps": [
+            "amazon",
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "b05f69a_2",
+        "Query": "Download receipts of all my amazon orders in \"~/bills/shopping_amazon/\" folder in my file system. Name the files in the format, \"ordered-at-yyyy-mm-dd-order-id-<order_id>.txt\". Replace <order_id> with the actual order id, and yyyy-mm-dd with the date when the order was placed. You should be able to find receipts from order confirmation emails.",
+        "NeededApps": [
+            "amazon",
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "b05f69a_3",
+        "Query": "Download receipts of all my amazon orders in \"~/bills/amazon_purchases/\" folder in my file system. Name the files in the format, \"yyyy-mm-dd__<order_id>.txt\". Replace <order_id> with the actual order id, and yyyy-mm-dd with the date when the order was placed. You should be able to find receipts from order confirmation emails.",
+        "NeededApps": [
+            "amazon",
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "f6be291_1",
+        "Query": "We are planning a get-together with our friends next week. Buy stuff according to the checklist my husband sent me over email.",
+        "NeededApps": [
+            "gmail",
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "f6be291_2",
+        "Query": "We are planning a get-together with our coworkers next week. Buy stuff according to the checklist my wife sent me over email.",
+        "NeededApps": [
+            "gmail",
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "f6be291_3",
+        "Query": "We are planning a get-together with our friends and coworkers next week. Buy stuff according to the checklist my partner sent me over email.",
+        "NeededApps": [
+            "gmail",
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "432dc7a_1",
+        "Query": "I want to buy everything in my amazon cart. I have a promo code applied to the cart, but today I received a new promotional email from Amazon. See if it is a better deal. Place an order for my home delivery with whichever option is cheaper.",
+        "NeededApps": [
+            "amazon",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "432dc7a_2",
+        "Query": "I want to buy everything in my amazon cart. I have a promo code applied to the cart, but today I received a new promotional email from Amazon. See if it is a better deal. Place an order for my workplace delivery with whichever option is cheaper.",
+        "NeededApps": [
+            "amazon",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "432dc7a_3",
+        "Query": "I want to buy everything in my amazon cart. I have a promo code applied to the cart, but today I received a new promotional email from Amazon. See if it is a better deal. Place an order for my home delivery with whichever option is cheaper.",
+        "NeededApps": [
+            "amazon",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "efc3cea_1",
+        "Query": "I am going to Japan this weekend, and my check-in bag sums to 21kg so far. Place an amazon order for any 4 identical backpacks. Make sure the total weight does not exceed the allowed weight for my check-in bag according to my flight confirmation. These are gifts, so get them gift wrapped if there is an option, and send them to my home address.",
+        "NeededApps": [
+            "amazon",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "efc3cea_2",
+        "Query": "I am going to China this weekend, and my check-in bag sums to 14kg so far. Place an amazon order for any 5 identical picture frames. Make sure the total weight does not exceed the allowed weight for my check-in bag according to my flight confirmation. These are gifts, so get them gift wrapped if there is an option, and send them to my home address.",
+        "NeededApps": [
+            "amazon",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "efc3cea_3",
+        "Query": "I am going to France this weekend, and my check-in bag sums to 22kg so far. Place an amazon order for any 3 identical board games. Make sure the total weight does not exceed the allowed weight for my check-in bag according to my flight confirmation. These are gifts, so get them gift wrapped if there is an option, and send them to my home address.",
+        "NeededApps": [
+            "amazon",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "ec655df_1",
+        "Query": "I am organizing a get-together for my coworkers this Sunday night. I need to buy a return gift for everyone who has RSVPed yes on email. Buy a gift-wrapped 'Amazfit Band 5 Fitness Tracker' for each of them on amazon, and have them delivered to my home.",
+        "NeededApps": [
+            "amazon",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "ec655df_2",
+        "Query": "I am organizing a get-together for my friends this Saturday night. I need to buy a return gift for everyone who has RSVPed yes on email. Buy a gift-wrapped 'Wahl Elite Pro Hair Clipper' for each of them on amazon, and have them delivered to my home.",
+        "NeededApps": [
+            "amazon",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "ec655df_3",
+        "Query": "I am organizing a get-together for my coworkers this Saturday night. I need to buy a return gift for everyone who has RSVPed yes on email. Buy a gift-wrapped 'Ticket to Ride Board Game' for each of them on amazon, and have them delivered to my home.",
+        "NeededApps": [
+            "amazon",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "fdc4b74_1",
+        "Query": "I am planning to buy a few things on amazon for my company's camping trip next week. I have drafted an email to my manager listing the items for confirmation, but the draft is missing individual prices. Please update them in the TODO placeholders and send the email.",
+        "NeededApps": [
+            "amazon",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "fdc4b74_2",
+        "Query": "I am planning to buy a few things on amazon for my company's camping trip next week. I have drafted an email to my manager listing the items for confirmation, but the draft is missing individual prices. Please update them in the TODO placeholders and send the email.",
+        "NeededApps": [
+            "amazon",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "fdc4b74_3",
+        "Query": "I am planning to buy a few things on amazon for my company's camping trip next week. I have drafted an email to my manager listing the items for confirmation, but the draft is missing individual prices. Please update them in the TODO placeholders and send the email.",
+        "NeededApps": [
+            "amazon",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "d6d8cb6_1",
+        "Query": "I ordered a Room Essentials Stick Table Lamp on amazon for my friend, Aaron, this week, but they don't want it anymore. Initiate a return for it and forward email confirmation containing the return label to them. They live near UPS so it'll be easy for them to drop it.",
+        "NeededApps": [
+            "amazon",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "d6d8cb6_2",
+        "Query": "I ordered a EKET Cabinet on amazon for my friend, Carl, this week, but they don't want it anymore. Initiate a return for it and forward email confirmation containing the return label to them. They live near USPS so it'll be easy for them to drop it.",
+        "NeededApps": [
+            "amazon",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "d6d8cb6_3",
+        "Query": "I ordered a Vitamix E310 Explorian Blender on amazon for my friend, Jeffery, this week, but they don't want it anymore. Initiate a return for it and forward email confirmation containing the return label to them. They live near FedEx so it'll be easy for them to drop it.",
+        "NeededApps": [
+            "amazon",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "1a79e37_1",
+        "Query": "Place an amazon order as per my husband's email today.",
+        "NeededApps": [
+            "amazon",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "1a79e37_2",
+        "Query": "Place an amazon order as per my wife's email today.",
+        "NeededApps": [
+            "amazon",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "1a79e37_3",
+        "Query": "Place an amazon order as per my partner's email today.",
+        "NeededApps": [
+            "amazon",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "f3a6713_1",
+        "Query": "I am going on a camping trip with my siblings. I had sent out a checklist of things needed for the trip to them over email. See who has committed to bring what, and place an order on Amazon for the remaining items. Given the available choices pick the highest rated ones.",
+        "NeededApps": [
+            "gmail",
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "f3a6713_2",
+        "Query": "I am going on a camping trip with my roommates. I had sent out a checklist of things needed for the trip to them over email. See who has committed to bring what, and place an order on Amazon for the remaining items. Given the available choices pick the highest rated ones.",
+        "NeededApps": [
+            "gmail",
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "f3a6713_3",
+        "Query": "I am going on a camping trip with my sisters. I had sent out a checklist of things needed for the trip to them over email. See who has committed to bring what, and place an order on Amazon for the remaining items. Given the available choices pick the highest rated ones.",
+        "NeededApps": [
+            "gmail",
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "a5b0084_1",
+        "Query": "I share my amazon prime account with my roommates. I am having trouble logging in. Change its password to Zlp9tir and share it with them via phone text message.",
+        "NeededApps": [
+            "amazon",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "a5b0084_2",
+        "Query": "I share my spotify premium account with my siblings. I am having trouble logging in. Change its password to +68qUnL and share it with them via phone text message.",
+        "NeededApps": [
+            "spotify",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "a5b0084_3",
+        "Query": "I share my spotify premium account with my roommates. I am having trouble logging in. Change its password to @FM[]Jb and share it with them via phone text message.",
+        "NeededApps": [
+            "spotify",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "f86d850_1",
+        "Query": "Debra has requested me to buy \"Sullivans Ceramic Vase Set\" on amazon for them as their card is currently blocked. Place the order and forward the confirmation email containing the receipt to them, and make a venmo request to them for the total cost of the order, with a description note, \"For Amazon Order\".",
+        "NeededApps": [
+            "amazon",
+            "gmail",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "f86d850_2",
+        "Query": "Denise has requested me to buy \"Nintendo Switch Lite\" on amazon for them as their card is currently blocked. Place the order and forward the confirmation email containing the receipt to them, and make a venmo request to them for the total cost of the order, with a description note, \"Amazon Order\".",
+        "NeededApps": [
+            "amazon",
+            "gmail",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "f86d850_3",
+        "Query": "Nicholas has requested me to buy \"Amazon Kindle (9th Generation)\" on amazon for them as their card is currently blocked. Place the order and forward the confirmation email containing the receipt to them, and make a venmo request to them for the total cost of the order, with a description note, \"Order on Amazon\".",
+        "NeededApps": [
+            "amazon",
+            "gmail",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "aaa25aa_1",
+        "Query": "My son sent me a message yesterday on phone about an app account creation. Please do as per his message. Use password _Vh_!1r0 for the new account.",
+        "NeededApps": [
+            "phone",
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "aaa25aa_2",
+        "Query": "My daughter sent me a message yesterday on phone about an app account creation. Please do as per her message. Use password j7}yl^6 for the new account.",
+        "NeededApps": [
+            "phone",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "aaa25aa_3",
+        "Query": "My son sent me a message yesterday on phone about an app account creation. Please do as per his message. Use password UEHA7Gv for the new account.",
+        "NeededApps": [
+            "phone",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "cb4ee7a_1",
+        "Query": "Make me an amazon account with monthly prime membership.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "cb4ee7a_2",
+        "Query": "Make me a spotify account with yearly premium membership.",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "cb4ee7a_3",
+        "Query": "Make me an amazon account with yearly prime membership.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "e201314_1",
+        "Query": "I am throwing a party for all of my friends and roommates upcoming Saturday night. I need return gifts for them. Buy backpacks on amazon with at least 4.5 rating, and with 6 or more reviews, one for each invitee, and make sure they reach home by the end of the day before the party.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "e201314_2",
+        "Query": "I am throwing a party for all of my coworkers and friends upcoming Sunday night. I need return gifts for them. Buy electric shavers on amazon with at least 4.0 rating, and with 7 or more reviews, one for each invitee, and make sure they reach home by the end of the day before the party.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "e201314_3",
+        "Query": "I am throwing a party for all of my coworkers and roommates upcoming Saturday night. I need return gifts for them. Buy fitness trackers on amazon with at least 4.1 rating, and with 7 or more reviews, one for each invitee, and make sure they reach home by the end of the day before the party.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "20c1328_1",
+        "Query": "Buy the highest-rated picture frame on amazon in 10-20 price range (ignoring tax and other fees) for each of my roommates and get them delivered to my home.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "20c1328_2",
+        "Query": "Buy the highest-rated hiking boots on amazon in 80-130 price range (ignoring tax and other fees) for each of my siblings and get them delivered to my home.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "20c1328_3",
+        "Query": "Buy the highest-rated gaming console controller on amazon in 70-170 price range (ignoring tax and other fees) for each of my roommates and get them delivered to my home.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "dbc0276_1",
+        "Query": "Send an itemized list of my amazon wish list to my husband via a phone text. The message should be a newline-separated list of '<product_name> => $<total_price>'. Replace <total_price> with the price of the product times its quantity in the wish list, rounded to the nearest whole number, and <product_name> with the product name. Ignore potential tax or delivery fees.",
+        "NeededApps": [
+            "amazon",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "dbc0276_2",
+        "Query": "Send an itemized list of my amazon wish list to my wife via a phone text. The message should be a newline-separated list of '<product_name> => $<total_price>'. Replace <total_price> with the price of the product times its quantity in the wish list, rounded to the nearest whole number, and <product_name> with the product name. Ignore potential tax or delivery fees.",
+        "NeededApps": [
+            "amazon",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "dbc0276_3",
+        "Query": "Send an itemized list of my amazon wish list to my partner via a phone text. The message should be a newline-separated list of '<product_name> => $<total_price>'. Replace <total_price> with the price of the product times its quantity in the wish list, rounded to the nearest whole number, and <product_name> with the product name. Ignore potential tax or delivery fees.",
+        "NeededApps": [
+            "amazon",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "e7f15ba_1",
+        "Query": "Make an order for 4 'Codenames Board Game's, 3 'Garmin Forerunner 245's, and 2 'RUSCH Wall Clock's from amazon for my parents' home address.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "e7f15ba_2",
+        "Query": "Make an order for 3 'Modern Ceramic Table Lamp's, 2 'Nintendo Switch OLED Model's, and 4 'KALLAX Shelf Unit's from amazon for my father's home address.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "e7f15ba_3",
+        "Query": "Make an order for 4 'Gregory Baltoro 65 Pack's, 3 'TaoTronics LED Desk Lamp's, and 2 'Parrot Anafi Drone's from amazon for my mother's home address.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "b6d1f70_1",
+        "Query": "Buy 2 identical wireless earbuds from amazon with at least 6 reviews and at least 3.9 rating. Deliver one to my parents' home with gift wrapping and one to my home without gift wrapping.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "b6d1f70_2",
+        "Query": "Buy 2 identical gaming console controllers from amazon with at least 10 reviews and at least 3.8 rating. Deliver one to my father's home with gift wrapping and one to my home without gift wrapping.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "b6d1f70_3",
+        "Query": "Buy 2 identical headphones from amazon with at least 5 reviews and at least 4.5 rating. Deliver one to my mother's home with gift wrapping and one to my home without gift wrapping.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "dc5c5c6_1",
+        "Query": "Buy me the top-rated gaming console controller that's available now on amazon for each of my siblings, and have it delivered to their homes with gift wrapping. I want to give them identical gifts.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "dc5c5c6_2",
+        "Query": "Buy me the top-rated watch that's available now on amazon for each of my brothers, and have it delivered to their homes with gift wrapping. I want to give them identical gifts.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "dc5c5c6_3",
+        "Query": "Buy me the top-rated portable air conditioner that's available now on amazon for each of my sisters, and have it delivered to their homes with gift wrapping. I want to give them identical gifts.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "16be9ce_1",
+        "Query": "I ordered a bean bag chair on amazon on my sister's birthday last year. How much does it cost now, ignoring tax and delivery fees?",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "16be9ce_2",
+        "Query": "I ordered a drone on amazon on my mother's birthday last year. How much does it cost now, ignoring tax and delivery fees?",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "16be9ce_3",
+        "Query": "I ordered a robot vacuum on amazon on my brother's birthday last year. How much does it cost now, ignoring tax and delivery fees?",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "59bcfc8_1",
+        "Query": "Buy a t-shirt for Jeremy from Amazon in their favorite color (see phone text message). Get it delivered to their home with gift wrapping. Given the choices, pick the highest rated one.",
+        "NeededApps": [
+            "amazon",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "59bcfc8_2",
+        "Query": "Buy a wall clock for Jennifer from Amazon in their favorite color (see phone voice message). Get it delivered to their home with gift wrapping. Given the choices, pick the highest rated one.",
+        "NeededApps": [
+            "amazon",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "59bcfc8_3",
+        "Query": "Buy a sweater for Valerie from Amazon in their favorite color (see phone voice message). Get it delivered to their home with gift wrapping. Given the choices, pick the highest rated one.",
+        "NeededApps": [
+            "amazon",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "7e1be84_1",
+        "Query": "Buy me a food scale as David recommended in his phone message.",
+        "NeededApps": [
+            "phone",
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "7e1be84_2",
+        "Query": "Buy me a stand mixer as Connor recommended in their phone message.",
+        "NeededApps": [
+            "phone",
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "7e1be84_3",
+        "Query": "Buy me a backpack as Mason recommended in his phone message.",
+        "NeededApps": [
+            "phone",
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "30e8586_1",
+        "Query": "Buy the highest rated popcorn maker available on Amazon now, one for each of my following friends, Grant , Jose , Brenda , Nicholas. They have to be gift wrapped and delivered to their respective home addresses. If the total delivery fee is higher than the monthly prime subscription cost, subscribe me to prime first.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "30e8586_2",
+        "Query": "Buy the highest rated gaming console available on Amazon now, one for each of my following friends, Kyle , Kayla. They have to be gift wrapped and delivered to their respective home addresses. If the total delivery fee is higher than the monthly prime subscription cost, subscribe me to prime first.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "30e8586_3",
+        "Query": "Buy the highest rated table lamp available on Amazon now, one for each of my following friends, Cody , Martin , Tammy , Claudia. They have to be gift wrapped and delivered to their respective home addresses. If the total delivery fee is higher than the monthly prime subscription cost, subscribe me to prime first.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "c9458ed_1",
+        "Query": "I am looking to purchase a Sole E95 Elliptical on Amazon, but it is pricey! I have inquired with my roommates and friends on phone for any promo codes. Please check for replies, apply codes, if any, and complete the purchase with the best discount.",
+        "NeededApps": [
+            "amazon",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "c9458ed_2",
+        "Query": "I am looking to purchase a NordicTrack Commercial 1750 Elliptical on Amazon, but it is pricey! I have inquired with my friends and coworkers on phone for any promo codes. Please check for replies, apply codes, if any, and complete the purchase with the best discount.",
+        "NeededApps": [
+            "amazon",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "c9458ed_3",
+        "Query": "I am looking to purchase a ProForm Pro 2000 Treadmill on Amazon, but it is pricey! I have inquired with my siblings and coworkers on phone for any promo codes. Please check for replies, apply codes, if any, and complete the purchase with the best discount.",
+        "NeededApps": [
+            "amazon",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "b08d5ef_1",
+        "Query": "Buy one Hurom HP Slow Juicer for each of my siblings and parents on Amazon, and have it delivered to their homes. Club purchases for the same place in the same order to save delivery fees.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "b08d5ef_2",
+        "Query": "Buy one Codenames Board Game for each of my parents and siblings on Amazon, and have it delivered to their homes. Club purchases for the same place in the same order to save delivery fees.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "b08d5ef_3",
+        "Query": "Buy one KALLAX Shelf Unit for each of my siblings and parents on Amazon, and have it delivered to their homes. Club purchases for the same place in the same order to save delivery fees.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "92fe421_1",
+        "Query": "My roommates and I share amazon prime, which I just paid for yesterday. Request the money for it from them on venmo assuming equal share among all, with a description note, \"Amazon Subscription\". Skip the one/s who have already paid me for it.",
+        "NeededApps": [
+            "amazon",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "92fe421_2",
+        "Query": "My roommates and I share spotify premium, which I just paid for yesterday. Request the money for it from them on venmo assuming equal share among all, with a description note, \"For Spotify Premium\". Skip the one/s who have already paid me for it.",
+        "NeededApps": [
+            "spotify",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "92fe421_3",
+        "Query": "My roommates and I share amazon prime, which I just paid for yesterday. Request the money for it from them on venmo assuming equal share among all, with a description note, \"Amazon Prime Subscription\". Skip the one/s who have already paid me for it.",
+        "NeededApps": [
+            "amazon",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "2e9b91e_1",
+        "Query": "Everything in my amazon cart is for my friend, Denise. Request them money for it on venmo. Ignore tax and delivery fees from the cart cost.",
+        "NeededApps": [
+            "amazon",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "2e9b91e_2",
+        "Query": "Everything in my amazon cart is for my roommate, Troy. Request them money for it on venmo. Ignore tax and delivery fees from the cart cost.",
+        "NeededApps": [
+            "amazon",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "2e9b91e_3",
+        "Query": "Everything in my amazon cart is for my friend, Adam. Request them money for it on venmo. Ignore tax and delivery fees from the cart cost.",
+        "NeededApps": [
+            "amazon",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "fa327a6_1",
+        "Query": "My last 2 amazon orders were for my friend, Brenda. They have sent me the money for their total cost on venmo today. Check if it tallies up. If not, send or request the difference on venmo with a note \"Fixing amazon order payment.\".",
+        "NeededApps": [
+            "amazon",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "fa327a6_2",
+        "Query": "My last 3 amazon orders were for my roommate, Chris. They have sent me the money for their total cost on venmo today. Check if it tallies up. If not, send or request the difference on venmo with a note \"Correcting amazon order payment.\".",
+        "NeededApps": [
+            "amazon",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "fa327a6_3",
+        "Query": "My last 4 amazon orders were for my friend, Valerie. They have sent me the money for their total cost on venmo today. Check if it tallies up. If not, send or request the difference on venmo with a note \"Adjusting amazon payment.\".",
+        "NeededApps": [
+            "amazon",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "d037dc8_1",
+        "Query": "My last 2 amazon orders were for my roommates and me. The total cost is to be equally shared among all of us. Make venmo requests, one for each of my roommates, with a description note, \"For Shared Purchases on Amazon\" and their share of the expense.",
+        "NeededApps": [
+            "amazon",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "d037dc8_2",
+        "Query": "My last 3 amazon orders were for my roommates and me. The total cost is to be equally shared among all of us. Make venmo requests, one for each of my roommates, with a description note, \"Amazon Purchases\" and their share of the expense.",
+        "NeededApps": [
+            "amazon",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "d037dc8_3",
+        "Query": "My last 4 amazon orders were for my roommates and me. The total cost is to be equally shared among all of us. Make venmo requests, one for each of my roommates, with a description note, \"For Amazon Orders\" and their share of the expense.",
+        "NeededApps": [
+            "amazon",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "c8f5f44_1",
+        "Query": "My brother asked me to buy something for him from amazon. But I totally forgot to place the order. He sent me the money for it on venmo. Place the necessary amazon order for my home address and add a \"Thank you!\" comment on their venmo payment.",
+        "NeededApps": [
+            "amazon",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "c8f5f44_2",
+        "Query": "My sister asked me to buy something for her from amazon. But I totally forgot to place the order. She sent me the money for it on venmo. Place the necessary amazon order for my home address and add a \"Thanks!\" comment on their venmo payment.",
+        "NeededApps": [
+            "amazon",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "c8f5f44_3",
+        "Query": "My brother asked me to buy something for them from amazon. But I totally forgot to place the order. They sent me the money for it on venmo. Place the necessary amazon order for my home address and add a \"Thanks a lot!\" comment on their venmo payment.",
+        "NeededApps": [
+            "amazon",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "9ef034e_1",
+        "Query": "Matthew has sent me a message on phone regarding some amazon order. I am forgetting the details. Do as requested as per their last message.",
+        "NeededApps": [
+            "phone",
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "9ef034e_2",
+        "Query": "Ronald has sent me a message on phone regarding some amazon order. I am forgetting the details. Do as requested as per their last message.",
+        "NeededApps": [
+            "phone",
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "9ef034e_3",
+        "Query": "Marcus has sent me a message on phone regarding some amazon order. I am forgetting the details. Do as requested as per their last message.",
+        "NeededApps": [
+            "phone",
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "5800354_1",
+        "Query": "My roommate asked me to return something I had ordered for them and venmo them the money for it. Check my messages for details and do as per their instruction.",
+        "NeededApps": [
+            "amazon",
+            "venmo",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "5800354_2",
+        "Query": "My roommate asked me to return something I had ordered for them and venmo them the money for it. Check my messages for details and do as per their instruction.",
+        "NeededApps": [
+            "amazon",
+            "venmo",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "5800354_3",
+        "Query": "My roommate asked me to return something I had ordered for them and venmo them the money for it. Check my messages for details and do as per their instruction.",
+        "NeededApps": [
+            "amazon",
+            "venmo",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "66b7899_1",
+        "Query": "My amazon package that is to be delivered today was an order for David. Request them the money for it on venmo.",
+        "NeededApps": [
+            "amazon",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "66b7899_2",
+        "Query": "My amazon package that is to be delivered today was an order for Anita. Request them the money for it on venmo.",
+        "NeededApps": [
+            "amazon",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "66b7899_3",
+        "Query": "My amazon package that is to be delivered today was an order for Edwin. Request them the money for it on venmo.",
+        "NeededApps": [
+            "amazon",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "099174d_1",
+        "Query": "Place an Amazon order as per my Amazon shopping list note in SimpleNote.",
+        "NeededApps": [
+            "amazon",
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "099174d_2",
+        "Query": "Place an Amazon order as per my Amazon shopping list note in SimpleNote.",
+        "NeededApps": [
+            "amazon",
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "099174d_3",
+        "Query": "Place an Amazon order as per my Amazon shopping list note in SimpleNote.",
+        "NeededApps": [
+            "amazon",
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "b4707e8_1",
+        "Query": "I keep a monthly log of total expenses I made on Amazon in a SimpleNote note. Update it with this month's entry.",
+        "NeededApps": [
+            "amazon",
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "b4707e8_2",
+        "Query": "I keep a monthly log of total expenses I made on Amazon in a SimpleNote note. Update it with this month's entry.",
+        "NeededApps": [
+            "amazon",
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "b4707e8_3",
+        "Query": "I keep a monthly log of total expenses I made on Amazon in a SimpleNote note. Update it with this month's entry.",
+        "NeededApps": [
+            "amazon",
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "cdaaea5_1",
+        "Query": "Place an order for my home address as per my Amazon shopping list in SimpleNote. For each item in it, buy me the highest rated product available now. If two products have the same rating, pick the cheaper one.",
+        "NeededApps": [
+            "amazon",
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "cdaaea5_2",
+        "Query": "Place an order for my work address as per my Amazon shopping list in SimpleNote. For each item in it, buy me the highest rated product available now. If two products have the same rating, pick the cheaper one.",
+        "NeededApps": [
+            "amazon",
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "cdaaea5_3",
+        "Query": "Place an order for my home address as per my Amazon shopping list in SimpleNote. For each item in it, buy me the highest rated product available now. If two products have the same rating, pick the cheaper one.",
+        "NeededApps": [
+            "amazon",
+            "simple_note"
+        ]
+    },
+    {
+        "TaskID": "f099b4c_1",
+        "Query": "I have jotted down my amazon shopping list in simple_note. Reset my amazon cart to have as many products in as many quantities from this list as available, and tell me its total cost. In calculating the total cost (i) only include the available items, and (ii) include tax, but not delivery fees as I will be using prime later.",
+        "NeededApps": [
+            "simple_note",
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "f099b4c_2",
+        "Query": "I have jotted down my amazon shopping list in simple_note. Reset my amazon cart to have as many products in as many quantities from this list as available, and tell me its total cost. In calculating the total cost (i) only include the available items, and (ii) include tax, but not delivery fees as I will be using prime later.",
+        "NeededApps": [
+            "simple_note",
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "f099b4c_3",
+        "Query": "I have jotted down my amazon shopping list in simple_note. Reset my amazon cart to have as many products in as many quantities from this list as available, and tell me its total cost. In calculating the total cost (i) only include the available items, and (ii) include tax, but not delivery fees as I will be using prime later.",
+        "NeededApps": [
+            "simple_note",
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "dcb2559_1",
+        "Query": "My spotify premium membership just expired yesterday. Renew it for the same duration.",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "dcb2559_2",
+        "Query": "My amazon prime membership just expired yesterday. Renew it for the same duration.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "dcb2559_3",
+        "Query": "My spotify premium membership just expired yesterday. Renew it for the same duration.",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "365e0a3_1",
+        "Query": "How much have I paid in prime membership since I made the amazon account?",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "365e0a3_2",
+        "Query": "How much have I paid in premium membership since I made the spotify account?",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "365e0a3_3",
+        "Query": "How much have I paid in prime membership since I made the amazon account?",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "476b213_1",
+        "Query": "Tell me the card name I used for my last amazon prime membership payment?",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "476b213_2",
+        "Query": "Tell me the card name I used for my last spotify premium membership payment?",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "476b213_3",
+        "Query": "Tell me the card name I used for my last amazon prime membership payment?",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "ba46d91_1",
+        "Query": "How many days of spotify premium subscription do I still have left? Round to the nearest number.",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "ba46d91_2",
+        "Query": "How many months of amazon prime subscription do I still have left? Round to the nearest number.",
+        "NeededApps": [
+            "amazon"
+        ]
+    },
+    {
+        "TaskID": "ba46d91_3",
+        "Query": "How many months of spotify premium subscription do I still have left? Round to the nearest number.",
+        "NeededApps": [
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "3f3c139_1",
+        "Query": "Remove expired payment cards from all my app accounts that have payment cards.",
+        "NeededApps": [
+            "amazon",
+            "spotify",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "3f3c139_2",
+        "Query": "Remove expired payment cards from all my app accounts that have payment cards.",
+        "NeededApps": [
+            "amazon",
+            "spotify",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "3f3c139_3",
+        "Query": "Remove expired payment cards from all my app accounts that have payment cards.",
+        "NeededApps": [
+            "amazon",
+            "spotify",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "6d59d90_1",
+        "Query": "Buy me the cheapest face shield on amazon that will reach my home within 4 days. My payment cards do not have any money. So please transfer the minimum required money for the order from venmo to a card first.",
+        "NeededApps": [
+            "amazon",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "6d59d90_2",
+        "Query": "Buy me the cheapest safety goggles on amazon that will reach my home within 3 days. My payment cards do not have any money. So please transfer the minimum required money for the order from venmo to a card first.",
+        "NeededApps": [
+            "amazon",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "6d59d90_3",
+        "Query": "Buy me the cheapest insect repellent on amazon that will reach my home within 5 days. My payment cards do not have any money. So please transfer the minimum required money for the order from venmo to a card first.",
+        "NeededApps": [
+            "amazon",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "d8e490b_1",
+        "Query": "Download the last Monday's weekly work meeting slides and recording from Gmail and save them in my file system as per the existing file structure and format.",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "d8e490b_2",
+        "Query": "Download the last Tuesday's weekly work meeting slides and recording from Gmail and save them in my file system as per the existing file structure and format.",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "d8e490b_3",
+        "Query": "Download the last Wednesday's weekly work meeting slides and recording from Gmail and save them in my file system as per the existing file structure and format.",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "998908e_1",
+        "Query": "I booked a few hotel rooms today for my upcoming trip. How much did I spend in total from my MasterCard card based on the email confirmations?",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "998908e_2",
+        "Query": "I booked a few hotel rooms today for my upcoming trip. How much did I spend in total from my Discover card based on the email confirmations?",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "998908e_3",
+        "Query": "I booked a few hotel rooms today for my upcoming trip. How much did I spend in total from my Wells Fargo card based on the email confirmations?",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "dcbd34b_1",
+        "Query": "I have requested expense details from my coworkers via email for our recent company trip. Please extract relevant information from them and save it in \"~/documents/work/reimbursements.csv\". The file already has the headers. Fill in the rest.",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "dcbd34b_2",
+        "Query": "I have requested expense details from my coworkers via email for our recent company trip. Please extract relevant information from them and save it in \"~/documents/work/expense_reimbursements.csv\". The file already has the headers. Fill in the rest.",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "dcbd34b_3",
+        "Query": "I have requested expense details from my coworkers via email for our recent company trip. Please extract relevant information from them and save it in \"~/documents/work/company_trip_expenses.csv\". The file already has the headers. Fill in the rest.",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "7bdaf23_1",
+        "Query": "Download the ticket for my flight to Tokyo this weekend from gmail into the \"~/downloads\" folder of my file system.",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "7bdaf23_2",
+        "Query": "Download the ticket for my flight to Santorini this weekend from gmail into the \"~/documents/personal/\" folder of my file system.",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "7bdaf23_3",
+        "Query": "Download the ticket for my flight to Cairo this weekend from gmail into the \"~/documents/work\" folder of my file system.",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "a97e35d_1",
+        "Query": "I am in the process of hiring for Software Engineer role for my company. I have selected candidates and prepared acceptance/rejection email templates and the offer letter template. You can find it all in \"~/documents/work/recruiting\" in my file system. The candidates have applied to this position by emailing me over the last 2 weeks. Please reply to them individually following the appropriate decision templates.",
+        "NeededApps": [
+            "file_system",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "a97e35d_2",
+        "Query": "I am in the process of hiring for Graphic Designer role for my company. I have selected candidates and prepared acceptance/rejection email templates and the offer letter template. You can find it all in \"~/documents/work/hiring\" in my file system. The candidates have applied to this position by emailing me over the last 3 weeks. Please reply to them individually following the appropriate decision templates.",
+        "NeededApps": [
+            "file_system",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "a97e35d_3",
+        "Query": "I am in the process of hiring for Business Analyst role for my company. I have selected candidates and prepared acceptance/rejection email templates and the offer letter template. You can find it all in \"~/documents/work/recruiting_process\" in my file system. The candidates have applied to this position by emailing me over the last 4 weeks. Please reply to them individually following the appropriate decision templates.",
+        "NeededApps": [
+            "file_system",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "33e202d_1",
+        "Query": "I have received job application emails for Sales Manager role over the last 2 weeks. I need you to do two things for my ongoing recruiting process. 1. Create a \"job_applications.csv\" file with the headers \"First Name\", \"Last Name\" and \"LinkedIn URL\" fields, the values of which should be extracted from the emails. Skip ones who did not provide their LinkedIn URLs in their emails. 2. Download their email attachments in \"attachments/<first_name><last_name>/\" directory. Replace <first_name> and <last_name> as per their names (lower cased), and use file names as per their attachment names in the email. The csv file and \"attachments/\" directory should be in \"~/documents/work/recruiting/\" directory in my file system.",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "33e202d_2",
+        "Query": "I have received job application emails for Marketing Manager role over the last 3 weeks. I need you to do two things for my ongoing recruiting process. 1. Create a \"applications.csv\" file with the headers \"First Name\", \"Last Name\" and \"LinkedIn URL\" fields, the values of which should be extracted from the emails. Skip ones who did not provide their LinkedIn URLs in their emails. 2. Download their email attachments in \"attachments/<first_name><last_name>/\" directory. Replace <first_name> and <last_name> as per their names (lower cased), and use file names as per their attachment names in the email. The csv file and \"attachments/\" directory should be in \"~/documents/work/hiring_process/\" directory in my file system.",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "33e202d_3",
+        "Query": "I have received job application emails for Customer Support role over the last 4 weeks. I need you to do two things for my ongoing recruiting process. 1. Create a \"applications_list.csv\" file with the headers \"First Name\", \"Last Name\" and \"LinkedIn URL\" fields, the values of which should be extracted from the emails. Skip ones who did not provide their LinkedIn URLs in their emails. 2. Download their email attachments in \"attachments/<first_name>__<last_name>/\" directory. Replace <first_name> and <last_name> as per their names (lower cased), and use file names as per their attachment names in the email. The csv file and \"attachments/\" directory should be in \"~/documents/work/recruiting_process/\" directory in my file system.",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "a53a8fd_1",
+        "Query": "For my job search, I've drafted emails to all potential employers in the last 2 days. Attach resume.pdf from my file system to each of them. If it's already attached, update it as I just made some changes to it. Then send the emails.",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "a53a8fd_2",
+        "Query": "For my job search, I've drafted emails to all potential employers in the last 3 days. Attach cv.pdf from my file system to each of them. If it's already attached, update it as I just made some changes to it. Then send the emails.",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "a53a8fd_3",
+        "Query": "For my job search, I've drafted emails to all potential employers in the last 4 days. Attach resume.pdf from my file system to each of them. If it's already attached, update it as I just made some changes to it. Then send the emails.",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "906f2c7_1",
+        "Query": "Leslie has asked me to email them our vacation pictures. They are in my file system. Check their phone message for details and do as said.",
+        "NeededApps": [
+            "file_system",
+            "gmail",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "906f2c7_2",
+        "Query": "Lindsey has asked me to email them our vacation pictures. They are in my file system. Check their phone message for details and do as said.",
+        "NeededApps": [
+            "file_system",
+            "gmail",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "906f2c7_3",
+        "Query": "Cody has asked me to email them our vacation pictures. They are in my file system. Check their phone message for details and do as said.",
+        "NeededApps": [
+            "file_system",
+            "gmail",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "a3ba388_1",
+        "Query": "I have drafted my resignation email on Gmail. Attach \"~/documents/work/resignation.pdf\" from my file system to it and schedule it to be sent to my manager on next Monday at 9 am.",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "a3ba388_2",
+        "Query": "I have drafted my resignation email on Gmail. Attach \"~/documents/work/resignation_letter.pdf\" from my file system to it and schedule it to be sent to my manager on next to next Tuesday at 10 am.",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "a3ba388_3",
+        "Query": "I have drafted my resignation email on Gmail. Attach \"~/documents/work/letter_of_resignation.pdf\" from my file system to it and schedule it to be sent to my manager on next Wednesday at 11 am.",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "b68eb83_1",
+        "Query": "Kayla has emailed me pictures of all trips we had together over the years. Which trip location has the most pictures?",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "b68eb83_2",
+        "Query": "Melissa has emailed me pictures of all trips we had together over the years. Which trip location has the least pictures?",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "b68eb83_3",
+        "Query": "Marcus has emailed me pictures of all trips we had together over the years. Which trip location has the most pictures?",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "f6f2e67_1",
+        "Query": "My brother has sent me a few childhood photos in a zip over email. Add all photos to it from \"~/photographs/childhood/\" from my file system and send a new email to both my parents with the subject \"Good Old Times\", the body \"See attached.\" and the updated zip attachment.",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "f6f2e67_2",
+        "Query": "My sister has sent me a few childhood photos in a tar over email. Add all photos to it from \"~/photographs/childhood_pics/\" from my file system and send a new email to both my parents with the subject \"Childhood Memories\", the body \"Checkout attachments.\" and the updated tar attachment.",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "f6f2e67_3",
+        "Query": "My brother has sent me a few childhood photos in a zip over email. Add all photos to it from \"~/photographs/way_back/\" from my file system and send a new email to both my parents with the subject \"Old Pics\", the body \"PFA.\" and the updated zip attachment.",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "36705ae_1",
+        "Query": "My husband has asked me for cable bills over email for tax purposes. Compile all cable bills I have ever received over Gmail into a \"bills.zip\" and send it to him with a note, \"PFA.\", as a reply to that email. The files in zip should be named \"MM-YYYY.pdf\" as per the month it is the bill for.",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "36705ae_2",
+        "Query": "My wife has asked me for cable bills over email for tax purposes. Compile all cable bills I have ever received over Gmail into a \"cable_bills.tar\" and send it to her with a note, \"Please find attached.\", as a reply to that email. The files in tar should be named \"YYYY-MM.pdf\" as per the month it is the bill for.",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "36705ae_3",
+        "Query": "My partner has asked me for cable bills over email for tax purposes. Compile all cable bills I have ever received over Gmail into a \"bills_cable.zip\" and send it to their with a note, \"Please see attached.\", as a reply to that email. The files in zip should be named \"MM-YYYY.pdf\" as per the month it is the bill for.",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "bcb9696_1",
+        "Query": "My manager has asked me for my headshot picture over email, to which I have drafted a response. But I have mistakenly attached my resume instead. Please fix it and send the email. The headshot is in my file system.",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "bcb9696_2",
+        "Query": "My manager has asked me for my headshot picture over email, to which I have drafted a response. But I have mistakenly attached my cv instead. Please fix it and send the email. The headshot is in my file system.",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "bcb9696_3",
+        "Query": "My manager has asked me for my headshot picture over email, to which I have drafted a response. But I have mistakenly attached my resume instead. Please fix it and send the email. The headshot is in my file system.",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "98d2608_1",
+        "Query": "Email the driving license found in my file system to my partner.",
+        "NeededApps": [
+            "file_system",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "98d2608_2",
+        "Query": "Email the headshot found in my file system to my manager.",
+        "NeededApps": [
+            "file_system",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "98d2608_3",
+        "Query": "Email the birth certificate found in my file system to my husband.",
+        "NeededApps": [
+            "file_system",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "baeb104_1",
+        "Query": "I went on a vacation trip to bali with my roommates. Share all of its photographs with them over email. You should send one email with everyone as recipients. Photographs can be found in my file system, and they should be attached as a zip file.",
+        "NeededApps": [
+            "file_system",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "baeb104_2",
+        "Query": "I went on a vacation trip to sydney with my siblings. Share all of its photographs with them over email. You should send one email with everyone as recipients. Photographs can be found in my file system, and they should be attached as a tar file.",
+        "NeededApps": [
+            "file_system",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "baeb104_3",
+        "Query": "I went on a vacation trip to amsterdam with my roommates. Share all of its photographs with them over email. You should send one email with everyone as recipients. Photographs can be found in my file system, and they should be attached as a zip file.",
+        "NeededApps": [
+            "file_system",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "e70b117_1",
+        "Query": "In my company, we invite an external speaker to give a talk every Friday at 11 AM. My manager has sent me a schedule for the next few weeks over email, and has tasked me to send a reminder email to all company members a few hours before the talk. I need you to schedule these emails to be automatically sent at 8 AM of the days of the talks. The email subject should be \"Today's Talk\" and its body should be as per template saved in my file system in \"~/documents/work\".",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "e70b117_2",
+        "Query": "In my company, we invite an external speaker to give a talk every Thursday at 1 PM. My manager has sent me a schedule for the next few weeks over email, and has tasked me to send a reminder email to all company members a few hours before the talk. I need you to schedule these emails to be automatically sent at 9 AM of the days of the talks. The email subject should be \"Talk Reminder\" and its body should be as per template saved in my file system in \"~/documents/work_stuff\".",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "e70b117_3",
+        "Query": "In my company, we invite an external speaker to give a talk every Wednesday at 3 PM. My manager has sent me a schedule for the next few weeks over email, and has tasked me to send a reminder email to all company members a few hours before the talk. I need you to schedule these emails to be automatically sent at 1 PM of the days of the talks. The email subject should be \"Reminder for the Talk Today\" and its body should be as per template saved in my file system in \"~/documents/work_docs\".",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "4ac4a8d_1",
+        "Query": "Denise, Glenn and I went on a trip recently. Yesterday, Denise emailed me their expenses in a pdf. Forward that thread to Glenn with an additional attachment of \"~/documents/personal/expenses_james.pdf\" from my file system, and a note prefixed to its body, \"Can you please take care of splitting expenses? PFA for both of our expenses.\".",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "4ac4a8d_2",
+        "Query": "Brandon, Jeffery and I went on a trip recently. Yesterday, Brandon emailed me their expenses in a pdf. Forward that thread to Jeffery with an additional attachment of \"~/documents/personal/trip_expenses_allison.pdf\" from my file system, and a note prefixed to its body, \"Would you mind splitting expenses? Our expenses are attached.\".",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "4ac4a8d_3",
+        "Query": "Nancy, Glen and I went on a trip recently. Yesterday, Nancy emailed me their expenses in a pdf. Forward that thread to Glen with an additional attachment of \"~/documents/personal/bradley_trip_expenses.pdf\" from my file system, and a note prefixed to its body, \"Mind splitting expenses? Ours are attached.\".",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "8f79e35_1",
+        "Query": "I have compiled a list of invitees for our upcoming baby shower. You can find it in \"~/documents/personal\" in my file system. The email template for the invitations is saved in my Gmail drafts. Replace the placeholders in it marked by curly braces with the relevant details and send invitation emails, individually to each person.",
+        "NeededApps": [
+            "file_system",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "8f79e35_2",
+        "Query": "I have compiled a list of invitees for our upcoming baby shower. You can find it in \"~/documents/personal\" in my file system. The email template for the invitations is saved in my Gmail drafts. Replace the placeholders in it marked by curly braces with the relevant details and send invitation emails, individually to each person.",
+        "NeededApps": [
+            "file_system",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "8f79e35_3",
+        "Query": "I have compiled a list of invitees for our upcoming baby shower. You can find it in \"~/documents/personal\" in my file system. The email template for the invitations is saved in my Gmail drafts. Replace the placeholders in it marked by curly braces with the relevant details and send invitation emails, individually to each person.",
+        "NeededApps": [
+            "file_system",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "ffea2b5_1",
+        "Query": "Chad has asked me for my weekly workout plan over email. I have drafted a reply to it. Please export my workout plan note from Simple Note to a text file, attach it to the draft, and send the email.",
+        "NeededApps": [
+            "simple_note",
+            "file_system",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "ffea2b5_2",
+        "Query": "Lindsey has asked me for my weekly workout plan over email. I have drafted a reply to it. Please export my workout plan note from Simple Note to a text file, attach it to the draft, and send the email.",
+        "NeededApps": [
+            "simple_note",
+            "file_system",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "ffea2b5_3",
+        "Query": "Vickie has asked me for my weekly workout plan over email. I have drafted a reply to it. Please export my workout plan note from Simple Note to a text file, attach it to the draft, and send the email.",
+        "NeededApps": [
+            "simple_note",
+            "file_system",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "3fcc458_1",
+        "Query": "Isaac has sent me a list of songs over email for our next roadtrip. Add songs to my Spotify playlist \"Road Trip\" that are not already there, and then make sure all the songs in it are downloaded for the trip.",
+        "NeededApps": [
+            "gmail",
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "3fcc458_2",
+        "Query": "Stephen has sent me a list of songs over email for our next roadtrip. Add songs to my Spotify playlist \"Songs for Road Trip\" that are not already there, and then make sure all the songs in it are downloaded for the trip.",
+        "NeededApps": [
+            "gmail",
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "3fcc458_3",
+        "Query": "Katherine has sent me a list of songs over email for our next roadtrip. Add songs to my Spotify playlist \"Roadtrip Playlist\" that are not already there, and then make sure all the songs in it are downloaded for the trip.",
+        "NeededApps": [
+            "gmail",
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "a1d3dfd_1",
+        "Query": "Backup a list of songs from all of my Spotify playlists into a CSV file and email it to my husband. It should have headers \"title\" and \"artists\", and the artist names should be separated by \"|\".",
+        "NeededApps": [
+            "spotify",
+            "file_system",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "a1d3dfd_2",
+        "Query": "Backup a list of songs from all of my Spotify playlists into a CSV file and email it to my wife. It should have headers \"title\" and \"artists\", and the artist names should be separated by \"|\".",
+        "NeededApps": [
+            "spotify",
+            "file_system",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "a1d3dfd_3",
+        "Query": "Backup a list of songs from all of my Spotify playlists into a CSV file and email it to my husband. It should have headers \"title\" and \"artists\", and the artist names should be separated by \"|\".",
+        "NeededApps": [
+            "spotify",
+            "file_system",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "82d2e01_1",
+        "Query": "Valerie booked a flight for me. They have sent me my part of the bill recently over email. Send them the owed amount on venmo with a description note, \"For the flight. Thank you!\".",
+        "NeededApps": [
+            "gmail",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "82d2e01_2",
+        "Query": "Connor booked a flight for me. They have sent me my part of the bill recently over email. Send them the owed amount on venmo with a description note, \"For flight ticket.\".",
+        "NeededApps": [
+            "gmail",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "82d2e01_3",
+        "Query": "Melissa booked a flight for me. They have sent me my part of the bill recently over email. Send them the owed amount on venmo with a description note, \"Thanks for the flight.\".",
+        "NeededApps": [
+            "gmail",
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "a7179fa_1",
+        "Query": "I am looking for a job. I have prepared a cover letter template, list of potential employers, and their email addresses in my Simple Note account. My resume is in \"~/documents/work/\" in my file system. Send emails to all the potential employers, individually, with the subject \"Job Application Submission\", body as per the cover letter template, and my resume as an attachment.",
+        "NeededApps": [
+            "simple_note",
+            "file_system",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "a7179fa_2",
+        "Query": "I am looking for a job. I have prepared a cover letter template, list of potential employers, and their email addresses in my Simple Note account. My cv is in \"~/documents/work/\" in my file system. Send emails to all the potential employers, individually, with the subject \"Application for Employment\", body as per the cover letter template, and my cv as an attachment.",
+        "NeededApps": [
+            "simple_note",
+            "file_system",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "a7179fa_3",
+        "Query": "I am looking for a job. I have prepared a cover letter template, list of potential employers, and their email addresses in my Simple Note account. My resume is in \"~/documents/work/\" in my file system. Send emails to all the potential employers, individually, with the subject \"Seeking Employment Opportunities\", body as per the cover letter template, and my resume as an attachment.",
+        "NeededApps": [
+            "simple_note",
+            "file_system",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "80acbaf_1",
+        "Query": "I want to migrate my music library to Spotify. I have exported relevant information from my previous software to a text file which you can find in my file system in \"~/backups\". Create an account for me on Spotify, and add song library, album library, and playlists according to information in it.",
+        "NeededApps": [
+            "file_system",
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "80acbaf_2",
+        "Query": "I want to migrate my music library to Spotify. I have exported relevant information from my previous software to a text file which you can find in my file system in \"~/backups\". Create an account for me on Spotify, and add song library, album library, and playlists according to information in it.",
+        "NeededApps": [
+            "file_system",
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "80acbaf_3",
+        "Query": "I want to migrate my music library to Spotify. I have exported relevant information from my previous software to a text file which you can find in my file system in \"~/backups\". Create an account for me on Spotify, and add song library, album library, and playlists according to information in it.",
+        "NeededApps": [
+            "file_system",
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "e0fe09c_1",
+        "Query": "Label all email threads in my Gmail inbox from notifications@<app>.com with the label of the respective app. Ignore spam and archived ones.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "e0fe09c_2",
+        "Query": "Label all email threads in my Gmail inbox from notifications@<app>.com with the label of the respective app. Ignore spam and archived ones.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "e0fe09c_3",
+        "Query": "Label all email threads in my Gmail inbox from notifications@<app>.com with the label of the respective app. Ignore spam and archived ones.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "7264edc_1",
+        "Query": "I sent out many job application emails this week. I had scheduled an auto-reminder email for each of them to be sent after 1 week. Some of them have already replied and so the reminder is not needed. Please delete those drafts.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "7264edc_2",
+        "Query": "I sent out many job application emails this week. I had scheduled an auto-reminder email for each of them to be sent after 2 weeks. Some of them have already replied and so the reminder is not needed. Please delete those drafts.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "7264edc_3",
+        "Query": "I sent out many job application emails this week. I had scheduled an auto-reminder email for each of them to be sent after 3 weeks. Some of them have already replied and so the reminder is not needed. Please delete those drafts.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "f691597_1",
+        "Query": "How many read email threads are in my Gmail inbox?",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "f691597_2",
+        "Query": "How many unread email threads are in my Gmail outbox?",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "f691597_3",
+        "Query": "How many unread email threads are in my Gmail inbox?",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "a132254_1",
+        "Query": "I just made an announcement about our company's anniversary celebration but I forgot br_ritt@gmail.com. Please forward the announcement email (not the entire thread) to them.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "a132254_2",
+        "Query": "I just made an announcement about our company's anniversary celebration but I forgot sab-brown@gmail.com. Please forward the announcement email (not the entire thread) to them.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "a132254_3",
+        "Query": "I just made an announcement about our company's anniversary celebration but I forgot je.simpson@gmail.com. Please forward the announcement email (not the entire thread) to them.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "09ac073_1",
+        "Query": "Archive all my read Gmail threads from inbox/outbox, except the ones that have some priority label or are starred.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "09ac073_2",
+        "Query": "Delete all my read Gmail threads from inbox/outbox, except the ones that have some priority label and are also starred.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "09ac073_3",
+        "Query": "Delete all my read Gmail threads from inbox/outbox, except the ones that have some priority label or are starred.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "6a5e690_1",
+        "Query": "Send all my future-scheduled emails on Gmail right away.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "6a5e690_2",
+        "Query": "Send all my future-scheduled emails on Gmail right away.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "6a5e690_3",
+        "Query": "Send all my future-scheduled emails on Gmail right away.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "e52623a_1",
+        "Query": "Relabel all my priority-1 and priority-2 email threads with P1 and P2, respectively, and remove all priority-3 labels.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "e52623a_2",
+        "Query": "Relabel all my P1 and P2 email threads with priority-1 and priority-2, respectively, and remove all P3 labels.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "e52623a_3",
+        "Query": "Relabel all my pr-1 and pr-2 email threads with P1 and P2, respectively, and remove all pr-3 labels.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "5e27cd7_1",
+        "Query": "Delete all my Gmail drafts that have empty subject and body.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "5e27cd7_2",
+        "Query": "Delete all my Gmail drafts that have empty subject or body.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "5e27cd7_3",
+        "Query": "Delete all my Gmail drafts that have empty subject and body.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "277d81d_1",
+        "Query": "Mark everything in my Gmail inbox and outbox before the last calendar month as read.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "277d81d_2",
+        "Query": "Mark everything in my Gmail inbox and outbox in the current calendar month as unread.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "277d81d_3",
+        "Query": "Mark everything in my Gmail inbox and outbox before the current calendar year as read.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "ce73d68_1",
+        "Query": "I sent out job application emails to many potential employers over the last week. Reply \"A gentle reminder.\" to everyone who has not replied in more than 48 hours of sending the email. I have already done it for a few emails, so skip them.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "ce73d68_2",
+        "Query": "I sent out job application emails to many potential employers over the last week. Reply \"A polite reminder.\" to everyone who has not replied in more than 72 hours of sending the email. I have already done it for a few emails, so skip them.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "ce73d68_3",
+        "Query": "I sent out job application emails to many potential employers over the last week. Reply \"A gentle reminder.\" to everyone who has not replied in more than 96 hours of sending the email. I have already done it for a few emails, so skip them.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "d37c235_1",
+        "Query": "Find all Amazon promo codes from my Gmail account, including spam and archived emails, and give it to me in a comma-separated list.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "d37c235_2",
+        "Query": "Find all Amazon promo codes from my Gmail account, including spam and archived emails, and give it to me in a comma-separated list.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "d37c235_3",
+        "Query": "Find all Amazon promo codes from my Gmail account, including spam and archived emails, and give it to me in a comma-separated list.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "4d12842_1",
+        "Query": "Delete all my archived gmail threads that are from before this calendar month.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "4d12842_2",
+        "Query": "Delete all my archived gmail threads that are from this calendar month.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "4d12842_3",
+        "Query": "Delete all my archived gmail threads that are from this or the last calendar month.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "69ba40f_1",
+        "Query": "I just finished sending out my job applications to many potential employers. Please schedule a reply of \"A gentle reminder.\", to each of those emails, 48 hours after the respective emails were sent.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "69ba40f_2",
+        "Query": "I just finished sending out my job applications to many potential employers. Please schedule a reply of \"A friendly reminder here.\", to each of those emails, 72 hours after the respective emails were sent.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "69ba40f_3",
+        "Query": "I just finished sending out my job applications to many potential employers. Please schedule a reply of \"A quick reminder on my job application.\", to each of those emails, 96 hours after the respective emails were sent.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "af84964_1",
+        "Query": "Respond to all the emails I have received within the last 5 days (including today) that I have not replied to yet. The reply should be \"I am on a vacation until 2023-05-20. I will get back to you as soon as possible.\". If there are multiple people involved in a email thread, make sure to add all to the reply email. Please also mark the threads you reply to as unread and starred, so I know where to start when I get back.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "af84964_2",
+        "Query": "Respond to all the emails I have received within the last 5 days (including today) that I have not replied to yet. The reply should be \"I am out of office until 2023-05-21. I will get back ASAP after that.\". If there are multiple people involved in a email thread, make sure to add all to the reply email. Please also mark the threads you reply to as unread and starred, so I know where to start when I get back.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "af84964_3",
+        "Query": "Respond to all the emails I have received within the last 5 days (including today) that I have not replied to yet. The reply should be \"I am out of town currently. I will return on 2023-05-22. I will get back to you ASAP after that.\". If there are multiple people involved in a email thread, make sure to add all to the reply email. Please also mark the threads you reply to as unread and starred, so I know where to start when I get back.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "e775c78_1",
+        "Query": "How many priority-1 unread email threads are in my Gmail inbox?",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "e775c78_2",
+        "Query": "How many priority-2 read email threads are in my Gmail inbox?",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "e775c78_3",
+        "Query": "How many priority-3 unread email threads are in my Gmail inbox?",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "2ff4dfb_1",
+        "Query": "I have received the weekly work meeting schedule from my manager via email. Add an alarm to my phone for every meeting 15 minutes before the scheduled time. The alarms should repeat weekly on that day, labeled as per meeting name, and have 15 minutes of snooze.",
+        "NeededApps": [
+            "gmail",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "2ff4dfb_2",
+        "Query": "I have received the weekly work meeting schedule from my manager via email. Add an alarm to my phone for every meeting 5 minutes before the scheduled time. The alarms should repeat weekly on that day, labeled as per meeting name, and have 5 minutes of snooze.",
+        "NeededApps": [
+            "gmail",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "2ff4dfb_3",
+        "Query": "I have received the weekly work meeting schedule from my manager via email. Add an alarm to my phone for every meeting 10 minutes before the scheduled time. The alarms should repeat weekly on that day, labeled as per meeting name, and have 10 minutes of snooze.",
+        "NeededApps": [
+            "gmail",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "fddb6b6_1",
+        "Query": "I helped organize my company celebration recently. The caterers have emailed me the bill. Forward it to my manager with a note prefixed to its body, \"Bill for our last celebration.\".",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "fddb6b6_2",
+        "Query": "I helped organize my company celebration recently. The caterers have emailed me the bill. Forward it to my manager with a note prefixed to its body, \"Company celebration bill.\".",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "fddb6b6_3",
+        "Query": "I helped organize my company celebration recently. The caterers have emailed me the bill. Forward it to my manager with a note prefixed to its body, \"Bill for our last party.\".",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "c1091c7_1",
+        "Query": "I have alarms for all my work meetings. Some of my coworkers have canceled their meeting with me via email. Please disable the corresponding alarms from my phone.",
+        "NeededApps": [
+            "gmail",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "c1091c7_2",
+        "Query": "I have alarms for all my work meetings. Some of my coworkers have canceled their meeting with me via email. Please disable the corresponding alarms from my phone.",
+        "NeededApps": [
+            "phone",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "c1091c7_3",
+        "Query": "I have alarms for all my work meetings. Some of my coworkers have canceled their meeting with me via email. Please disable the corresponding alarms from my phone.",
+        "NeededApps": [
+            "phone",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "321ec38_1",
+        "Query": "I am going to Toronto this week. Add a phone alarm with a label \"Flight to Toronto\" 2 hours before my scheduled flight day and time as per its confirmation email.",
+        "NeededApps": [
+            "phone",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "321ec38_2",
+        "Query": "I am going to Singapore this week. Add a phone alarm with a label \"Flight to Singapore\" 90 minutes before my scheduled flight day and time as per its confirmation email.",
+        "NeededApps": [
+            "phone",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "321ec38_3",
+        "Query": "I am going to Rome this week. Add a phone alarm with a label \"Flight to Rome\" 2.5 hours before my scheduled flight day and time as per its confirmation email.",
+        "NeededApps": [
+            "gmail",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "0de03ad_1",
+        "Query": "Star all my gmail threads with email/s from or to my manager and unstar the rest. Ignore the archived threads.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "0de03ad_2",
+        "Query": "Star all my gmail threads with email/s from or to my coworkers and unstar the rest. Ignore the archived threads.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "0de03ad_3",
+        "Query": "Star all my gmail threads with email/s from or to my friends and unstar the rest. Ignore the archived threads.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "ac62177_1",
+        "Query": "Check my gmail to see if any of my coworkers' email thread has been marked as spam. If so, unspam it and make it unread. Then, delete all spam threads.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "ac62177_2",
+        "Query": "Check my gmail to see if any of my friends' email thread has been marked as spam. If so, unspam it and make it unread. Then, delete all spam threads.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "ac62177_3",
+        "Query": "Check my gmail to see if any of my roommates' email thread has been marked as spam. If so, unspam it and make it unread. Then, delete all spam threads.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "4441ee9_1",
+        "Query": "My manager assigns me tasks at the beginning of every week with a subject starting with \"TODO\". At the end of each week, I reply to them \"Done.\" or \"Not Done.\". For this week, I have starred the emails/tasks which I finished working on, and left the others unstarred. I am closing off this week now, please reply accordingly, and unstar those threads. I may have non-todo emails starred, please keep them as is.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "4441ee9_2",
+        "Query": "My manager assigns me tasks at the beginning of every week with a subject starting with \"To Do\". At the end of each week, I reply to them \"Completed.\" or \"Not Completed.\". For this week, I have starred the emails/tasks which I finished working on, and left the others unstarred. I am closing off this week now, please reply accordingly, and unstar those threads. I may have non-todo emails starred, please keep them as is.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "4441ee9_3",
+        "Query": "My manager assigns me tasks at the beginning of every week with a subject starting with \"Assignment\". At the end of each week, I reply to them \"Finished.\" or \"Not Finished.\". For this week, I have starred the emails/tasks which I finished working on, and left the others unstarred. I am closing off this week now, please reply accordingly, and unstar those threads. I may have non-todo emails starred, please keep them as is.",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "96bf160_1",
+        "Query": "My roommate sent me \"electricity_bill.pdf\" on Gmail sometime ago. Please find it and forward that email to the rest of my roommates in a single email.",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "96bf160_2",
+        "Query": "My roommate sent me \"internet_bill.pdf\" on Gmail sometime ago. Please find it and forward that email to the rest of my roommates in a single email.",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "96bf160_3",
+        "Query": "My roommate sent me \"cable_bill.pdf\" on Gmail sometime ago. Please find it and forward that email to the rest of my roommates in a single email.",
+        "NeededApps": [
+            "gmail",
+            "file_system"
+        ]
+    },
+    {
+        "TaskID": "adb1060_1",
+        "Query": "Set up an email to be sent automatically to each of my friends at 07:15 AM on the day of their next birthday. The email should have the subject \"Happy Birthday!\" and the content should be \"Hope you have a great day!\".",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "adb1060_2",
+        "Query": "Set up an email to be sent automatically to each of my friends at 00:45 AM on the day of their next birthday. The email should have the subject \"Many happy returns!\" and the content should be \"Have a fantastic year ahead!\".",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "adb1060_3",
+        "Query": "Set up an email to be sent automatically to each of my friends at 07:30 AM on the day of their next birthday. The email should have the subject \"Best wishes on your birthday!\" and the content should be \"Wishing you a wonderful birthday!\".",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "9126bf0_1",
+        "Query": "Our weekly standup time has changed. Update my phone alarm as per my manager's email about it. I want it to ring 5 minutes before the meeting.",
+        "NeededApps": [
+            "phone",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "9126bf0_2",
+        "Query": "Our weekly standup time has changed. Update my phone alarm as per my manager's email about it. I want it to ring 10 minutes before the meeting.",
+        "NeededApps": [
+            "phone",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "9126bf0_3",
+        "Query": "Our weekly standup time has changed. Update my phone alarm as per my manager's email about it. I want it to ring 15 minutes before the meeting.",
+        "NeededApps": [
+            "gmail",
+            "phone"
+        ]
+    },
+    {
+        "TaskID": "f37e804_1",
+        "Query": "Label all email threads in my Gmail inbox/outbox involving any of my coworkers as \"work\" and involving any of my friends, partner or children as \"personal\".",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "f37e804_2",
+        "Query": "Label all email threads in my Gmail inbox/outbox involving any of my coworkers as \"work\" and involving any of my friends, parents, roommates or siblings as \"personal\".",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "f37e804_3",
+        "Query": "Label all email threads in my Gmail inbox/outbox involving any of my coworkers as \"work\" and involving any of my friends, partner, siblings or parents as \"personal\".",
+        "NeededApps": [
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "18670a5_1",
+        "Query": "My meeting schedule is in my SimpleNote. Schedule a reminder email for each meeting this week. It should be sent to all participants in that meeting, excluding me, 30 mins before the meeting. The subject should be \"Reminder for <meeting_name>\", where <meeting_name> is the actual meeting name from the note, and the body should be empty.",
+        "NeededApps": [
+            "simple_note",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "18670a5_2",
+        "Query": "My meeting schedule is in my SimpleNote. Schedule a reminder email for each meeting this week. It should be sent to all participants in that meeting, excluding me, 15 mins before the meeting. The subject should be \"Reminder to Attend => <meeting_name>\", where <meeting_name> is the actual meeting name from the note, and the body should be empty.",
+        "NeededApps": [
+            "simple_note",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "18670a5_3",
+        "Query": "My meeting schedule is in my SimpleNote. Schedule a reminder email for each meeting this week. It should be sent to all participants in that meeting, excluding me, 20 mins before the meeting. The subject should be \"Meeting '<meeting_name>' Starting Soon\", where <meeting_name> is the actual meeting name from the note, and the body should be empty.",
+        "NeededApps": [
+            "simple_note",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "143527e_1",
+        "Query": "One of my friends has asked me for song recommendations over email. Reply them with a list of my liked songs that are in my Spotify song library. It should say \"Sure thing! Here are some of my favorite songs.\" and then a comma-separated list of song titles.",
+        "NeededApps": [
+            "spotify",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "143527e_2",
+        "Query": "One of my coworkers has asked me for song recommendations over email. Reply them with a list of my liked songs that are in my Spotify song library. It should say \"Sure! These are my favorite songs.\" and then a comma-separated list of song titles.",
+        "NeededApps": [
+            "gmail",
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "143527e_3",
+        "Query": "One of my roommates has asked me for song recommendations over email. Reply them with a list of my liked songs that are in my Spotify song library. It should say \"Of course, I like these songs the most.\" and then a comma-separated list of song titles.",
+        "NeededApps": [
+            "gmail",
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "1b988ac_1",
+        "Query": "Katie asked me for my song recommendations over email. I started drafting the response email off the top of my head. But then realized I can mine it from my Spotify account! Please update the email draft with all of my liked songs that are in my song or album library or any of my plalists. Keep the existing format of the email, making changes only to the song entries. Once done, send the email.",
+        "NeededApps": [
+            "spotify",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "1b988ac_2",
+        "Query": "Angelica asked me for my song recommendations over email. I started drafting the response email off the top of my head. But then realized I can mine it from my Spotify account! Please update the email draft with all of my liked songs that are in my song or album library or any of my plalists. Keep the existing format of the email, making changes only to the song entries. Once done, send the email.",
+        "NeededApps": [
+            "spotify",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "1b988ac_3",
+        "Query": "Paul asked me for my song recommendations over email. I started drafting the response email off the top of my head. But then realized I can mine it from my Spotify account! Please update the email draft with all of my liked songs that are in my song or album library or any of my plalists. Keep the existing format of the email, making changes only to the song entries. Once done, send the email.",
+        "NeededApps": [
+            "spotify",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "9a16324_1",
+        "Query": "I am seeking music artist recommendations from some of my coworkers and friends, as we have a similar musical taste. I have reached out to my coworkers via email and my friends via phone text messages to ask for their suggestions. Make me follow all of their recommended artists on Spotify as per their responses.",
+        "NeededApps": [
+            "gmail",
+            "phone",
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "9a16324_2",
+        "Query": "I am seeking music artist recommendations from some of my coworkers and friends, as we have a similar musical taste. I have reached out to my coworkers via email and my friends via phone text messages to ask for their suggestions. Make me follow all of their recommended artists on Spotify as per their responses.",
+        "NeededApps": [
+            "gmail",
+            "phone",
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "9a16324_3",
+        "Query": "I am seeking music artist recommendations from some of my coworkers and friends, as we have a similar musical taste. I have reached out to my coworkers via email and my friends via phone text messages to ask for their suggestions. Make me follow all of their recommended artists on Spotify as per their responses.",
+        "NeededApps": [
+            "gmail",
+            "phone",
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "b71318e_1",
+        "Query": "Send $100 to each of my coworkers privately on venmo with a note\n\"Thank you for the extra hard work during the sprint!\". Then send an email with all of them in the recipients with\nthe subject, \"Successful Sprint Completion\", and body \"I've sent all of you a small gift on venmo for the hard work you put in our sprint. Great work!\"",
+        "NeededApps": [
+            "venmo",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "b71318e_2",
+        "Query": "Send $200 to each of my coworkers privately on venmo with a note\n\"I greatly appreaciate your hard work in the sprint!\". Then send an email with all of them in the recipients with\nthe subject, \"End of Sprint!\", and body \"As a token of appreciation for the hard work you put in our sprint, I've sent you a small gift on venmo.\"",
+        "NeededApps": [
+            "venmo",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "b71318e_3",
+        "Query": "Send $300 to each of my coworkers privately on venmo with a note\n\"Thank you for working extra hard in our sprint.\". Then send an email with all of them in the recipients with\nthe subject, \"Successful Sprint!!\", and body \"Thank you for all your hard work!! I've sent you a small gift on venmo.\"",
+        "NeededApps": [
+            "venmo",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "a676f2a_1",
+        "Query": "I placed an order for lunch meeting with some of my coworkers in office today. I had sent out an email yesterday to them asking for individual orders, and everyone involved responded with their chosen food item and its base price. The tip was was 15% on the food cost, and delivery fee was $10. Unlike individual orders, the tip and delivery fee are to be equally shared among all, including me. Make all the necessary (public) venmo requests with a description note, \"Lunch Meeting Order\".",
+        "NeededApps": [
+            "venmo",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "a676f2a_2",
+        "Query": "I placed an order for lunch meeting with some of my coworkers in office today. I had sent out an email yesterday to them asking for individual orders, and everyone involved responded with their chosen food item and its base price. The tip was was 20% on the food cost, and delivery fee was $11. Unlike individual orders, the tip and delivery fee are to be equally shared among all, including me. Make all the necessary (public) venmo requests with a description note, \"For Lunch Meeting\".",
+        "NeededApps": [
+            "venmo",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "a676f2a_3",
+        "Query": "I placed an order for lunch meeting with some of my coworkers in office today. I had sent out an email yesterday to them asking for individual orders, and everyone involved responded with their chosen food item and its base price. The tip was was 25% on the food cost, and delivery fee was $12. Unlike individual orders, the tip and delivery fee are to be equally shared among all, including me. Make all the necessary (public) venmo requests with a description note, \"Order for Lunch Meeting\".",
+        "NeededApps": [
+            "venmo",
+            "gmail"
+        ]
+    },
+    {
+        "TaskID": "7238049_1",
+        "Query": "Send $73 to Troy via Venmo. You may need to make me an account first, if I do not have one.",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "7238049_2",
+        "Query": "Send $58 to Katherine via Venmo. You may need to make me an account first, if I do not have one.",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "7238049_3",
+        "Query": "Send $59 to Jose via Venmo. You may need to make me an account first, if I do not have one.",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "8a13317_1",
+        "Query": "My workout partner has sent me some songs over email. Make a new Spotify playlist titled \"New Workout\" with those songs in it.",
+        "NeededApps": [
+            "gmail",
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "8a13317_2",
+        "Query": "My workout partner has sent me some songs over email. Make a new Spotify playlist titled \"Workout Playlist\" with those songs in it.",
+        "NeededApps": [
+            "gmail",
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "8a13317_3",
+        "Query": "My workout partner has sent me some songs over email. Make a new Spotify playlist titled \"Workout Music\" with those songs in it.",
+        "NeededApps": [
+            "gmail",
+            "spotify"
+        ]
+    },
+    {
+        "TaskID": "7574325_1",
+        "Query": "Change my venmo password to aQAdQp",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "7574325_2",
+        "Query": "Change my venmo password to (mwch1X",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "7574325_3",
+        "Query": "Change my venmo password to CIr#I2(o",
+        "NeededApps": [
+            "venmo"
+        ]
+    },
+    {
+        "TaskID": "fb05fed_1",
+        "Query": "I ordered a few t-shirts on amazon yesterday. Ones in navy blue are for me, ones in yellow are for Andrew, and the rest are for Robin. Add an expense in our splitwise group for the total cost of the t-shirts (ignoring any tax or delivery fees) shared among the three of us as per our respective shares.",
+        "NeededApps": [
+            "amazon",
+            "splitwise"
+        ]
+    },
+    {
+        "TaskID": "fb05fed_2",
+        "Query": "I ordered a few sweaters on amazon today. Ones in burgundy are for me, ones in pink are for Cory, and the rest are for Travis. Add an expense in our splitwise group for the total cost of the sweaters (ignoring any tax or delivery fees) shared among the three of us as per our respective shares.",
+        "NeededApps": [
+            "amazon",
+            "splitwise"
+        ]
+    },
+    {
+        "TaskID": "fb05fed_3",
+        "Query": "I ordered a few t-shirts on amazon the day before yesterday. Ones in white are for me, ones in orange are for Carl, and the rest are for Jeremy. Add an expense in our splitwise group for the total cost of the t-shirts (ignoring any tax or delivery fees) shared among the three of us as per our respective shares.",
+        "NeededApps": [
+            "amazon",
+            "splitwise"
+        ]
+    },
+    {
+        "TaskID": "8d42650_1",
+        "Query": "I get monthly electricity bill via email on the 1st of every month for the previous month's usage. I pay for it but its total cost is to be shared equally with my roommates and me. In our Splitwise group, create an expense for each month with a note \"electricity bill for MM/YY\" and the associated total cost (including my share). The MM/YY refers to the month and year the bill usage is for. Do it only for bills for this year's electricity usage.",
+        "NeededApps": [
+            "gmail",
+            "splitwise"
+        ]
+    },
+    {
+        "TaskID": "8d42650_2",
+        "Query": "I get monthly internet bill via email on the 1st of every month for the previous month's usage. I pay for it but its total cost is to be shared equally with my roommates and me. In our Splitwise group, create an expense for each month with a note \"internet | MM/YYYY\" and the associated total cost (including my share). The MM/YYYY refers to the month and year the bill usage is for. Do it only for bills for this year's internet usage.",
+        "NeededApps": [
+            "gmail",
+            "splitwise"
+        ]
+    },
+    {
+        "TaskID": "8d42650_3",
+        "Query": "I get monthly cable bill via email on the 1st of every month for the previous month's usage. I pay for it but its total cost is to be shared equally with my roommates and me. In our Splitwise group, create an expense for each month with a note \"cable bill [MM-YY]\" and the associated total cost (including my share). The MM-YY refers to the month and year the bill usage is for. Do it only for bills for this year's cable usage.",
+        "NeededApps": [
+            "gmail",
+            "splitwise"
+        ]
+    },
+    {
+        "TaskID": "988af8e_1",
+        "Query": "I am going on a camping trip with some of my friends. I have created a new Todoist project for managing its tasks. Please do them for me, and mark them all complete.",
+        "NeededApps": [
+            "todoist"
+        ]
+    },
+    {
+        "TaskID": "988af8e_2",
+        "Query": "I am going on a camping trip with some of my friends. I have created a new Todoist project for managing its tasks. Please do them for me, and mark them all complete.",
+        "NeededApps": [
+            "todoist"
+        ]
+    },
+    {
+        "TaskID": "988af8e_3",
+        "Query": "I am going on a camping trip with some of my friends. I have created a new Todoist project for managing its tasks. Please do them for me, and mark them all complete.",
+        "NeededApps": [
+            "todoist"
+        ]
+    }
+]
