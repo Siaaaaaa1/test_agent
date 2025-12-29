@@ -6,7 +6,27 @@ import time
 import threading
 from typing import Any, Dict
 
+# 尝试导入 OmegaConf 以处理配置对象的序列化
+try:
+    from omegaconf import DictConfig, ListConfig, OmegaConf
+except ImportError:
+    DictConfig = ListConfig = OmegaConf = None
+
 _log_lock = threading.Lock()
+
+def _json_serializer(obj):
+    """
+    辅助函数：处理 json.dumps 无法默认序列化的对象
+    """
+    # 处理 OmegaConf 配置对象
+    if OmegaConf is not None and isinstance(obj, (DictConfig, ListConfig)):
+        return OmegaConf.to_container(obj, resolve=True)
+    
+    # 处理其他可能的非基本类型（兜底方案，转为字符串）
+    try:
+        return str(obj)
+    except Exception:
+        return "<Unserializable Object>"
 
 def debug_log(config: Any, log_name: str, data: Dict[str, Any]):
     """
@@ -33,7 +53,11 @@ def debug_log(config: Any, log_name: str, data: Dict[str, Any]):
 
     # 2. 准备目录和文件名
     log_dir = "./logs"
-    os.makedirs(log_dir, exist_ok=True)
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+    except Exception as e:
+        print(f"[DebugLog Error] Failed to create log dir: {e}")
+        return
     
     date_str = time.strftime("%Y-%m-%d")
     filename = os.path.join(log_dir, f"{log_name}_{date_str}.jsonl")
@@ -49,6 +73,8 @@ def debug_log(config: Any, log_name: str, data: Dict[str, Any]):
     with _log_lock:
         try:
             with open(filename, "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                # 关键修复：使用 default=_json_serializer 处理 DictConfig
+                f.write(json.dumps(entry, default=_json_serializer, ensure_ascii=False) + "\n")
         except Exception as e:
+            # 打印错误但不中断程序，防止日志系统搞挂主流程
             print(f"[DebugLog Error] Write failed: {e}")
