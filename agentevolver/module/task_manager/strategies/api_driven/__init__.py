@@ -281,7 +281,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             "prompt": prompt
         })
         
-        response = self._chat_with_retry(messages=[{"role": "user", "content": prompt}], temperature=0.7)
+        response = self._chat_with_retry(messages=[{"role": "user", "content": prompt}])
 
         debug_log(self.config, "api_gen_intra", {
             "type": "LLM_OUTPUT",
