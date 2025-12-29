@@ -97,6 +97,7 @@ python3 -m agentevolver.main_ppo \
     task_manager.exploration_strategy_args.b=10 \
     task_manager.strategy=api_driven \
     task_manager.exploration_strategy_args.active_apps="['amazon','gmail','spotify','venmo','simple_note','todoist','splitwise','phone','file_system','supervisor','api_docs']" \
+    task_manager.exploration_strategy_args.task_labels_path="./envronments/appworld/data/datasets/train.jsonl" \
     debug_log=True \
     2>&1 | tee "$log_file"
 

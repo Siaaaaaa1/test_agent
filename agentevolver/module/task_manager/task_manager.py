@@ -52,14 +52,17 @@ class RewardProps(TypedDict):
 
 def get_exploration_strategy(name: str, strategy_args, *, tokenizer, config, llm_client) -> TaskExploreStrategy:
     logger.info(f"loading exploration strategy {name}")
+    print(f"[get_exploration_strategy] Loading strategy: {name}, args: {strategy_args}") # ADDED
     debug_log(config, "init_exploration_strategy", {"name": name, "args": strategy_args})
     if name == "random":
+        print(f"[get_exploration_strategy] Initialized LlmRandomSamplingExploreStrategy") # ADDED
         return LlmRandomSamplingExploreStrategy(
             tokenizer=tokenizer, 
             config=config, 
             **strategy_args
             )
     elif name == "api_driven":
+        print(f"[get_exploration_strategy] Initialized ApiDrivenExploreStrategy") # ADDED
         return ApiDrivenExploreStrategy(
             tokenizer=tokenizer, 
             config=config, 
@@ -67,6 +70,7 @@ def get_exploration_strategy(name: str, strategy_args, *, tokenizer, config, llm
             **strategy_args
         )
     else:
+        print(f"[get_exploration_strategy] Error: Unknown strategy {name}") # ADDED
         raise NotImplementedError(f"exploration strategy {name} not implemented")
 
 # ================= TaskManager 类 =================
@@ -96,6 +100,7 @@ class TaskManager(object):
         """
         初始化任务管理器，注入所有必要的依赖项。
         """
+        print(f"[TaskManager.__init__] Start initializing. Strategy: {exploration_strategy}, Env URL: {env_service_url}") # ADDED
         self._config = config
         self._tokenizer = tokenizer
         
@@ -138,6 +143,7 @@ class TaskManager(object):
             "num_explore_threads": self._num_exploration_threads,
             "expansion_n": self._n
         })
+        print(f"[TaskManager.__init__] Initialization complete. Threads: {self._num_exploration_threads}, Expansion N: {self._n}") # ADDED
 
     @property
     def seed_tasks(self):
@@ -153,22 +159,27 @@ class TaskManager(object):
 
     def load_tasks(self, tasks: Sequence[Task]):
         """直接加载 Task 对象列表"""
+        print(f"[load_tasks] Loading {len(tasks)} tasks directly.") # ADDED
         self._tasks.extend(tasks)
         assert all([x.query is None for x in self._tasks]), "种子任务的 query 必须为空（待演化）"
         logger.info(f"loaded tasks, #tasks={len(self._tasks)}")
         debug_log(self._config, "load_tasks_direct", {"count": len(tasks), "total": len(self._tasks)})
+        print(f"[load_tasks] Tasks loaded. Total tasks: {len(self._tasks)}") # ADDED
 
     def load_tasks_from_dataset(self, dataset: RLHFDataset, *, env_type: str):
         """从 verl 的 RLHFDataset 中加载并转换为 Task"""
+        print(f"[load_tasks_from_dataset] Loading from dataset for env_type: {env_type}") # ADDED
         new_tasks = adapter.convert_to_tasks(dataset, env_type=env_type, grader=self._reward_config["original_grader"])
         self._tasks.extend(new_tasks)
         assert all([x.query is None for x in self._tasks]), "种子任务的 query 必须为空"
         logger.info(f"loaded tasks from dataset, #tasks={len(self._tasks)}")
         debug_log(self._config, "load_tasks_from_dataset", {"env_type": env_type, "count": len(new_tasks)})
+        print(f"[load_tasks_from_dataset] Success. Added {len(new_tasks)} tasks. Total: {len(self._tasks)}") # ADDED
 
     def load_tasks_from_environment(self, env: EnvClient, *, env_type: str, split: str, params: Optional[dict] = None):
         """从环境服务端拉取可用的任务 ID，并构造种子任务"""
         try:
+            print(f"[load_tasks_from_environment] Requesting env profile. Type: {env_type}, Split: {split}, URL: {self._env_service_url}") # ADDED
             debug_log(self._config, "load_tasks_from_env_start", {"env_type": env_type, "split": split})
             response = env.get_env_profile(env_type, split, params)
             new_tasks = [Task(task_id=str(x), env_type=env_type, open_query=False, evaluator=self._reward_config["original_grader"]) for x in response]
@@ -176,21 +187,26 @@ class TaskManager(object):
             assert all([x.query is None for x in self._tasks]), "种子任务的 query 必须为空"
             logger.info(f"loaded tasks from environment, #tasks={len(self._tasks)}")
             debug_log(self._config, "load_tasks_from_env_end", {"count": len(new_tasks)})
+            print(f"[load_tasks_from_environment] Loaded {len(new_tasks)} tasks. Total tasks: {len(self._tasks)}") # ADDED
         except requests.exceptions.RequestException as e:
             logger.error(f"failed to load tasks from environment: {e}")
+            print(f"[load_tasks_from_environment] FAILED. Error: {str(e)}") # ADDED
             debug_log(self._config, "load_tasks_from_env_error", {"error": str(e)})
             raise
         return len(response)
 
     def register_filter(self, filter: TaskPostFilter):
         """允许外部注册额外的实时过滤器"""
+        print(f"[register_filter] Registering new filter: {type(filter).__name__}") # ADDED
         self._realtime_filters.append(filter)
 
     def _compute_tasks_hash(self, tasks: Sequence[Task]) -> str:
         """根据当前任务列表计算 MD5 哈希，用于验证断点文件是否过期"""
         task_strs = [f"{task.task_id}:{task.env_type}" for task in tasks]
         combined_str = "|".join(task_strs)
-        return hashlib.md5(combined_str.encode()).hexdigest()
+        val = hashlib.md5(combined_str.encode()).hexdigest()
+        # print(f"[_compute_tasks_hash] Computed hash: {val} for {len(tasks)} tasks") # ADDED (Optional, can be verbose)
+        return val
 
     # --- 核心任务生成流程 ---
 
@@ -199,6 +215,7 @@ class TaskManager(object):
         生成任务的总入口：根据当前策略类型（API驱动 vs 随机采样）选择不同的执行流。
         """
         strategy_type = "api_driven" if isinstance(self._exploration_strategy, ApiDrivenExploreStrategy) else "random"
+        print(f"[generate_task] Start generation. Strategy: {strategy_type}, Input Tasks: {len(tasks)}") # ADDED
         debug_log(self._config, "generate_task_entry", {"strategy": strategy_type, "num_input_tasks": len(tasks)})
         
         if strategy_type == "api_driven":
@@ -211,6 +228,7 @@ class TaskManager(object):
         Random 策略下的任务生成：
         特点：任务之间无耦合，支持高度并行的 ThreadPool 探索。
         """
+        print(f"[_generate_task_random] Starting random generation. Resume file: {resume_file}") # ADDED
         if resume_file is None:
             resume_file = '.generate_task.checkpoint.json'
 
@@ -227,21 +245,25 @@ class TaskManager(object):
                     checkpoint = json.load(f)
                     if checkpoint.get('tasks_hash') != current_tasks_hash:
                         logger.warning(f"任务哈希不匹配，正在删除过期的断点文件。")
+                        print(f"[_generate_task_random] Checkpoint hash mismatch. Deleting {resume_file}") # ADDED
                         debug_log(self._config, "gen_random_checkpoint_mismatch", {})
                         os.remove(resume_file)
                     else:
                         res = [TaskObjective.parse_raw(json.dumps(obj)) for obj in checkpoint.get('results', [])]
                         processed_indices = {int(i) for i in checkpoint.get('processed_indices', [])}
                         logger.info(f"从断点恢复: 已加载 {len(res)} 条结果")
+                        print(f"[_generate_task_random] Resumed from checkpoint. Loaded {len(res)} results.") # ADDED
                         debug_log(self._config, "gen_random_resumed", {"loaded_count": len(res)})
             except Exception as e:
                 logger.warning(f"断点加载失败: {e}, 将重新开始生成")
+                print(f"[_generate_task_random] Failed to load checkpoint: {e}") # ADDED
                 debug_log(self._config, "gen_random_checkpoint_error", {"error": str(e)})
 
         # 将任务池扩大 n 倍
         task_q = list(copy.copy(tasks)) * self._n
         parallel_num = max(1, min(self._num_exploration_threads, len(tasks)))
         
+        print(f"[_generate_task_random] Execution Plan: Total Tasks={len(task_q)}, Parallel Workers={parallel_num}") # ADDED
         debug_log(self._config, "gen_random_execution_start", {
             "total_tasks_to_process": len(task_q),
             "parallel_num": parallel_num
@@ -266,6 +288,7 @@ class TaskManager(object):
                 res = functools.reduce(lambda x, f: f.filter(x), self._realtime_filters, res)
                 
                 if len(res) < pre_filter_len:
+                    print(f"[_generate_task_random] Batch {idx}: Filtered out {pre_filter_len - len(res)} tasks.") # ADDED
                     debug_log(self._config, "gen_random_realtime_filtered", {
                         "batch_index": idx,
                         "dropped": pre_filter_len - len(res)
@@ -280,9 +303,11 @@ class TaskManager(object):
                 if resume_file:
                     self._save_checkpoint(resume_file, res, processed_indices, len(batch_indices), current_tasks_hash)
 
+        print(f"[_generate_task_random] Generation finished. Total candidates: {len(res)}. Proceeding to post-filter.") # ADDED
         return self._apply_post_filter(res)
 
     def _generate_task_api_driven(self, tasks: Sequence[Task], *, show_progress=False, resume_file: Optional[str] = None) -> list[TaskObjective]:
+        print(f"[_generate_task_api_driven] Starting API-Driven generation.") # ADDED
         strategy_args = self._config.task_manager.get('exploration_strategy_args', {})
         a = strategy_args.get('a', 1)
         b = strategy_args.get('b', 1)
@@ -290,6 +315,7 @@ class TaskManager(object):
         debug_mode = self._config.get("debug_log", False)
         if debug_mode:
             logger.warning("Debug mode enabled: forcing single thread and single task execution for API Driven generation.")
+            print("[_generate_task_api_driven] DEBUG MODE ENABLED.") # ADDED
             random.seed(42)
 
         if resume_file is None:
@@ -309,6 +335,14 @@ class TaskManager(object):
         api_knowledge = getattr(self._exploration_strategy, 'api_knowledge', {})
         active_apps_set = getattr(self._exploration_strategy, 'active_apps', set(api_knowledge.keys()))
         
+        # --- (ADDED) Debug Logs ---
+        print("\n" + "="*20 + " [DEBUG LOGS] TaskManager " + "="*20)
+        print(f"api_knowledge (keys): {list(api_knowledge.keys())}")
+        print("api_knowledge content:", api_knowledge)
+        print("active_apps_set:", active_apps_set)
+        print("="*60 + "\n", flush=True)
+        # --------------------------
+
         # =================================================================
         # 定义并行执行的原子函数 (Wrapper Functions)
         # =================================================================
@@ -316,6 +350,7 @@ class TaskManager(object):
         def process_intra_task(idx: int, api_info: dict, seed_task: Task) -> List[TaskObjective]:
             """单线程处理：单域任务生成 -> 探索 -> 总结"""
 
+            print(f"[process_intra_task] Start idx={idx}, App={api_info.get('app_name')}, API={api_info.get('api_name')}") # ADDED
             debug_log(self._config, "tm_process_intra_start", {
                 "idx": idx,
                 "app_name": api_info.get("app_name"),
@@ -345,6 +380,7 @@ class TaskManager(object):
                     task=current_task
                 )
                 if not current_task:
+                    print(f"[process_intra_task] Skipped: Generation returned None for idx={idx}") # ADDED
                     debug_log(self._config, "tm_process_intra_skipped", {"idx": idx, "reason": "generation_returned_none"})
                     return []
                 
@@ -368,6 +404,7 @@ class TaskManager(object):
                 if trajectories and trajectories[0].steps:
                     results = self._exploration_strategy.summarize(current_task, trajectories[0])
                 
+                print(f"[process_intra_task] Completed idx={idx}. Generated {len(results)} objectives.") # ADDED
                 debug_log(self._config, "tm_process_intra_completed", {
                     "idx": idx,
                     "data_id": data_id,
@@ -377,6 +414,7 @@ class TaskManager(object):
                 return results if results else []
             except Exception as e:
                 logger.error(f"[Intra-Task Error] Index {idx}: {e}")
+                print(f"[process_intra_task] Error in idx={idx}: {e}") # ADDED
                 debug_log(self._config, "tm_process_intra_error", {
                     "idx": idx,
                     "error": str(e)
@@ -386,6 +424,7 @@ class TaskManager(object):
         def process_cross_task(idx: int, app_list: List[str], seed_task: Task) -> List[TaskObjective]:
             """单线程处理：跨域任务生成 -> 探索 -> 总结"""
 
+            print(f"[process_cross_task] Start idx={idx}, Candidate Apps Count={len(app_list)}") # ADDED
             debug_log(self._config, "tm_process_cross_start", {
                 "idx": idx,
                 "candidate_apps_count": len(app_list),
@@ -408,6 +447,7 @@ class TaskManager(object):
 
                 current_task = self._exploration_strategy.generate_cross_task(app_list=app_list, task=current_task)
                 if not current_task:
+                    print(f"[process_cross_task] Skipped: Generation returned None for idx={idx}") # ADDED
                     debug_log(self._config, "tm_process_cross_skipped", {"idx": idx, "reason": "generation_returned_none"})
                     return []
                 
@@ -430,6 +470,7 @@ class TaskManager(object):
                 if trajectories and trajectories[0].steps:
                     results = self._exploration_strategy.summarize(current_task, trajectories[0])
 
+                print(f"[process_cross_task] Completed idx={idx}. Generated {len(results)} objectives.") # ADDED
                 debug_log(self._config, "tm_process_cross_completed", {
                     "idx": idx,
                     "data_id": data_id,
@@ -439,6 +480,7 @@ class TaskManager(object):
                 return results if results else []
             except Exception as e:
                 logger.error(f"[Cross-Task Error] Index {idx}: {e}")
+                print(f"[process_cross_task] Error in idx={idx}: {e}") # ADDED
                 debug_log(self._config, "tm_process_cross_error", {"idx": idx, "error": str(e)})
                 return []
 
@@ -454,6 +496,7 @@ class TaskManager(object):
 
         if debug_mode:
             logger.info(f"[Debug] Truncating Intra-Domain API list (Original: {len(active_apis)}) to 1.")
+            print(f"[_generate_task_api_driven] Intra-Domain truncated to 1. Original count: {len(active_apis)}") # ADDED
             active_apis = active_apis[:1]
 
         intra_task_pool = list(copy.copy(tasks)) * a
@@ -473,12 +516,15 @@ class TaskManager(object):
                         intra_res = [TaskObjective.parse_raw(json.dumps(obj)) for obj in cp.get('results', [])]
                         intra_processed_idx = {int(i) for i in cp.get('processed_indices', [])}
                         logger.info(f"Intra-Domain resumed: {len(intra_res)} tasks loaded.")
+                        print(f"[_generate_task_api_driven] Intra resumed. Loaded {len(intra_res)} tasks.") # ADDED
                         debug_log(self._config, "gen_api_intra_resumed", {"loaded_count": len(intra_res)})
             except Exception as e:
                 logger.warning(f"Failed to load intra checkpoint: {e}")
+                print(f"[_generate_task_api_driven] Failed to load intra checkpoint: {e}") # ADDED
 
         # 使用线程池执行
         total_intra = min(len(active_apis), len(intra_task_pool))
+        print(f"[_generate_task_api_driven] Stage 1 Plan: Intra-Domain Tasks: {total_intra}") # ADDED
         if len(intra_processed_idx) < total_intra:
             parallel_num = max(1, min(self._num_exploration_threads, total_intra))
 
@@ -513,6 +559,7 @@ class TaskManager(object):
                             batch_results_count += len(objs)
                         except Exception as e:
                             logger.error(f"Unhandled exception in future for task {idx}: {e}")
+                            print(f"[_generate_task_api_driven] Future exception for idx={idx}: {e}") # ADDED
                         finally:
                             intra_processed_idx.add(idx)
                             pbar.update(1)
@@ -520,6 +567,7 @@ class TaskManager(object):
                     intra_res = functools.reduce(lambda x, f: f.filter(x), self._realtime_filters, intra_res)
                     self._save_checkpoint(intra_ckpt_path, intra_res, intra_processed_idx, total_intra, current_tasks_hash)
                     
+                    print(f"[_generate_task_api_driven] Intra Batch {batch_idx} done. Saved checkpoint.") # ADDED
                     debug_log(self._config, "gen_api_intra_batch_done", {
                         "batch_idx": batch_idx, 
                         "results_in_batch": batch_results_count,
@@ -538,6 +586,7 @@ class TaskManager(object):
 
         if debug_mode:
             logger.info(f"[Debug] Truncating Cross-Domain task pool (Original: {len(cross_task_pool)}) to 1.")
+            print(f"[_generate_task_api_driven] Cross-Domain truncated to 1. Original count: {len(cross_task_pool)}") # ADDED
             cross_task_pool = cross_task_pool[:1]
 
         cross_processed_idx = set()
@@ -549,9 +598,11 @@ class TaskManager(object):
                     cross_res = [TaskObjective.parse_raw(json.dumps(obj)) for obj in cp.get('results', [])]
                     cross_processed_idx = {int(i) for i in cp.get('processed_indices', [])}
                     logger.info(f"Cross-Domain resumed: {len(cross_res)} tasks loaded.")
+                    print(f"[_generate_task_api_driven] Cross resumed. Loaded {len(cross_res)} tasks.") # ADDED
                     debug_log(self._config, "gen_api_cross_resumed", {"loaded_count": len(cross_res)})
             except Exception: pass
 
+        print(f"[_generate_task_api_driven] Stage 2 Plan: Cross-Domain Tasks: {len(cross_task_pool)}") # ADDED
         if len(cross_processed_idx) < len(cross_task_pool):
             parallel_num = max(1, min(self._num_exploration_threads, len(cross_task_pool)))
             if debug_mode: parallel_num = 1
@@ -583,6 +634,7 @@ class TaskManager(object):
                             batch_results_count += len(objs)
                         except Exception as e:
                             logger.error(f"Unhandled exception in cross task {idx}: {e}")
+                            print(f"[_generate_task_api_driven] Future exception for idx={idx}: {e}") # ADDED
                         finally:
                             cross_processed_idx.add(idx)
                             pbar.update(1)
@@ -593,6 +645,7 @@ class TaskManager(object):
                     cross_res_to_save = filtered_all[len(intra_res):] 
                     self._save_checkpoint(cross_ckpt_path, cross_res_to_save, cross_processed_idx, len(cross_task_pool), current_tasks_hash)
                     
+                    print(f"[_generate_task_api_driven] Cross Batch {batch_idx} done. Saved checkpoint.") # ADDED
                     debug_log(self._config, "gen_api_cross_batch_done", {
                         "batch_idx": batch_idx,
                         "results_in_batch": batch_results_count,
@@ -602,6 +655,7 @@ class TaskManager(object):
             pbar.close()
         
         total_results = intra_res + cross_res
+        print(f"[_generate_task_api_driven] Generation Finished. Intra: {len(intra_res)}, Cross: {len(cross_res)}. Applying Post-filter.") # ADDED
         debug_log(self._config, "gen_api_driven_finish", {
             "total_intra": len(intra_res),
             "total_cross": len(cross_res),
@@ -612,6 +666,7 @@ class TaskManager(object):
     def _save_checkpoint(self, path, results, processed_indices, total, hash_val):
         """保存任务生成的断点信息到 JSON 文件"""
         try:
+            print(f"[_save_checkpoint] Saving checkpoint to {path}. Total processed: {len(processed_indices)}") # ADDED
             checkpoint_data = {
                 'results': [obj.dict() for obj in results],
                 'processed_indices': list(processed_indices),
@@ -623,9 +678,11 @@ class TaskManager(object):
                 json.dump(checkpoint_data, f, indent=2)
         except Exception as e:
             logger.warning(f"保存断点失败: {e}")
+            print(f"[_save_checkpoint] ERROR: Failed to save checkpoint: {e}") # ADDED
 
     def _apply_post_filter(self, res: List[TaskObjective]) -> List[TaskObjective]:
         """应用耗时较长的后置过滤器（如 LLM 质量核验），并打乱数据顺序"""
+        print(f"[_apply_post_filter] Start filtering {len(res)} results.") # ADDED
         debug_log(self._config, "post_filter_start", {"input_count": len(res)})
         
         # 先应用实时过滤器（确保最终一致性）
@@ -643,6 +700,7 @@ class TaskManager(object):
         })
         
         random.shuffle(res)
+        print(f"[_apply_post_filter] Done. Filtered from {cnt_before} to {len(res)}. Shuffled.") # ADDED
         return res
 
     # --- 执行与总结的助手方法 ---
@@ -650,6 +708,7 @@ class TaskManager(object):
     def _exlore_and_summarize(self, task: Task, data_id: str, rollout_id: str) -> list[TaskObjective]:
         """随机策略下：执行探索并对轨迹进行总结"""
         try:
+            print(f"[_exlore_and_summarize] Processing task: {task.task_id}") # ADDED
             trajectories = self._step_explore(task, data_id, rollout_id)
             task_objectives = sum([self._step_summarize(task, trajectory) for trajectory in trajectories], [])
             
@@ -659,20 +718,24 @@ class TaskManager(object):
                 if x.task.open_query:
                     valid_objs.append(x)
                 else:
+                    print(f"[_exlore_and_summarize] Invalid task objective (open_query=False): {x.task.task_id}") # ADDED
                     debug_log(self._config, "random_explore_invalid_task", {"reason": "open_query_false", "task_id": task.task_id})
             
             return valid_objs
         except Exception as e:
             logger.error(f"Error in random explore: {e}")
+            print(f"[_exlore_and_summarize] Error: {e}") # ADDED
             debug_log(self._config, "random_explore_error", {"error": str(e), "task_id": task.task_id})
             return []
 
     def _step_explore(self, task: Task, data_id: str, rollout_id: str) -> list[Trajectory]:
         """调用策略的 explore 方法（Random 专用）"""
+        print(f"[_step_explore] Calling strategy.explore for task {task.task_id}") # ADDED
         return self._exploration_strategy.explore(task, data_id, rollout_id)
 
     def _step_summarize(self, task: Task, trajectory: Trajectory) -> list[TaskObjective]:
         """调用策略的 summarize 方法（Random 专用）"""
+        print(f"[_step_summarize] Calling strategy.summarize for task {task.task_id}") # ADDED
         return self._exploration_strategy.summarize(task, trajectory)
 
 # ================= 数据集类 =================
@@ -684,6 +747,7 @@ class FullDataset(Dataset):
     """
     def __init__(self, manager: TaskManager, mixture_strategy: MixtureStrategy, reward_config: RewardProps, cache_path: Optional[str] = None, *, tokenizer, config, processor):
         debug_log(config, "FullDataset_init", {"cache_path": cache_path})
+        print(f"[FullDataset.__init__] Initializing. Cache path: {cache_path}") # ADDED
         self._manager = manager
         self._tasks = self._manager.seed_task_objectives
         self._mixture_strategy = mixture_strategy
@@ -700,11 +764,13 @@ class FullDataset(Dataset):
         # 如果策略需要合成数据，则加载缓存或生成新任务
         if self._mixture_strategy.need_synthetic:
             logger.info("正在准备合成任务数据...")
+            print("[FullDataset.__init__] Need synthetic data.") # ADDED
             if self._cache_path is not None and os.path.exists(self._cache_path):
                 debug_log(config, "FullDataset_load_cache", {})
                 self.load_from_file()
             else:
                 debug_log(config, "FullDataset_generate_new", {})
+                print("[FullDataset.__init__] Cache not found or not set. Generating new tasks.") # ADDED
                 self.reload_new_task()
                 if self._cache_path is not None: self.save_to_file()
         
@@ -712,16 +778,27 @@ class FullDataset(Dataset):
 
     def _rebuild_dataset(self):
         """混合原始数据和合成数据，并转换为训练格式"""
+        print("[_rebuild_dataset] Mixing synthetic and original tasks.") # ADDED
         self._objectives = self._mixture_strategy.mix_data(self._synthetic_objectives, self._tasks)
+        
+        # --- 添加保护逻辑 ---
+        if len(self._objectives) == 0:
+            logger.error("【严重错误】没有可用的训练数据！可能是环境服务挂了，或者 Debug 模式下生成的任务全部被过滤了。")
+            print("[_rebuild_dataset] FATAL: Dataset is empty!") # ADDED
+            raise ValueError("Dataset is empty. Please check env_service status or disable debug_log.")
+        # -------------------
+
         debug_log(self._config, "FullDataset_rebuild", {
             "synthetic_count": len(self._synthetic_objectives),
             "seed_count": len(self._tasks),
             "mixed_total": len(self._objectives)
         })
+        print(f"[_rebuild_dataset] Total objectives: {len(self._objectives)}. Converting to RL dataset.") # ADDED
         self._dataset = to_rl_dataset(self._objectives, self._tokenizer, self._config, self._processor)
 
     def save_to_file(self):
         """将生成的合成任务目标保存到 JSONL 文件"""
+        print(f"[save_to_file] Saving to {self._cache_path}") # ADDED
         assert self._cache_path is not None
         with open(self._cache_path, "w") as f:
             f.writelines([ob.json() + "\n" for ob in self._synthetic_objectives])
@@ -729,6 +806,7 @@ class FullDataset(Dataset):
 
     def load_from_file(self):
         """从缓存文件加载合成任务，并修正评分器配置"""
+        print(f"[load_from_file] Loading from {self._cache_path}") # ADDED
         if os.path.exists(self._cache_path):
             with open(self._cache_path, "r") as f:
                 self._synthetic_objectives = []
@@ -741,14 +819,18 @@ class FullDataset(Dataset):
             for item in self._synthetic_objectives:
                 item.task.evaluator = self._reward_config["synthetic_grader"]
             debug_log(self._config, "FullDataset_loaded_count", {"count": len(self._synthetic_objectives)})
+            print(f"[load_from_file] Loaded {len(self._synthetic_objectives)} synthetic objectives.") # ADDED
         else:
+            print(f"[load_from_file] Error: File not found {self._cache_path}") # ADDED
             raise FileNotFoundError(f"找不到缓存文件 {self._cache_path}")
 
     def reload_new_task(self):
         """调用 TaskManager 重新触发演化生成流程"""
+        print("[reload_new_task] Triggering task generation.") # ADDED
         self._synthetic_objectives = self._manager.generate_task([x.task for x in self._tasks], show_progress=True)
         for item in self._synthetic_objectives:
             item.task.evaluator = self._reward_config["synthetic_grader"]
+        print(f"[reload_new_task] Generated {len(self._synthetic_objectives)} new tasks.") # ADDED
 
     def __getitem__(self, index):
         return self._dataset[index]
@@ -762,6 +844,7 @@ class AutoReloadDataset(IterableDataset):
     可迭代数据集：在训练过程中，当数据耗尽时，动态触发 TaskManager 生成新任务（On-the-fly）。
     """
     def __init__(self, manager: TaskManager, tasks: Iterable[Task], bs: int, mix_origins: bool = False, *, tokenizer, config, processor):
+        print(f"[AutoReloadDataset.__init__] Initializing. BS={bs}") # ADDED
         self._manager = manager
         self._tasks = tasks
         self._bs = bs
@@ -773,6 +856,7 @@ class AutoReloadDataset(IterableDataset):
 
     def reload(self):
         """动态拉取一批种子任务并演化出新任务，加入数据集队列"""
+        print("[AutoReloadDataset.reload] Reloading data.") # ADDED
         debug_log(self._config, "AutoReloadDataset_reload_start", {})
         delta = []
         for task in self._tasks:
@@ -780,6 +864,7 @@ class AutoReloadDataset(IterableDataset):
             if len(delta) == self._bs: break
 
         if not delta: 
+            print("[AutoReloadDataset.reload] No seed tasks available.") # ADDED
             debug_log(self._config, "AutoReloadDataset_reload_empty_source", {})
             return 0
 
@@ -788,10 +873,12 @@ class AutoReloadDataset(IterableDataset):
         # 确保生成了足够的数据
         while len(ls) < self._bs * self._manager._n:
             logger.debug("合成数据量不足，正在重试生成...")
+            print(f"[AutoReloadDataset.reload] Not enough data ({len(ls)}). Retrying.") # ADDED
             debug_log(self._config, "AutoReloadDataset_retry", {"current": len(ls), "target": self._bs * self._manager._n})
             ls = self._manager.generate_task(delta)
 
         self._dataset.append_dataset(to_rl_dataset(ls, self._tokenizer, self._config, self._processor))
+        print(f"[AutoReloadDataset.reload] Appended {len(ls)} new examples.") # ADDED
         debug_log(self._config, "AutoReloadDataset_reload_finish", {"new_data_count": len(ls)})
         return self._dataset.num_rest_data
 
