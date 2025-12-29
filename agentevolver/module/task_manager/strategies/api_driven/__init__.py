@@ -141,9 +141,9 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
 
         # 3. 构造 LLM 聊天函数
         sampling_params = {
-            "temperature": self.config.get("exploration_llm_temperature", 1.0),
-            "top_p": self.config.get("exploration_llm_top_p", 1.0),
-            "top_k": self.config.get("exploration_llm_top_k", -1),
+            "temperature": self.config.get("exploration_llm_temperature", 0.5),
+            "top_p": self.config.get("exploration_llm_top_p", 0.9),
+            "top_k": self.config.get("exploration_llm_top_k", 0),
         }
         
         llm_chat_fn = self._get_llm_chat_fn(
