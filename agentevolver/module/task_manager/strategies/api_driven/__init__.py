@@ -118,13 +118,13 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             # 将物理环境ID存入元数据，保留 task.task_id 为生成的唯一ID (如 gen_intra_0)
             task.metadata["env_sandbox_id"] = real_sandbox_id
             
-        logger.info(f"[ApiDriven] Exploring task (Phase: {task.metrics.get('phase')}) on Sandbox: {real_sandbox_id}")
+        logger.info(f"[ApiDriven] Exploring task (Phase: {task.metadata.get('phase')}) on Sandbox: {real_sandbox_id}")
         debug_log(self.config, "api_explore_start", {
             "task_id": task.task_id,
             "data_id": data_id,
-            "phase": task.metrics.get('phase'),
+            "phase": task.metadata.get('phase'),
             "real_sandbox_id": real_sandbox_id,
-            "instruction": task.instruction[:50] + "..." if task.instruction else None
+            "instruction": task.query[:50] + "..." if task.query else None
         })
 
         # 2. 初始化环境工作者 (EnvWorker)
@@ -210,7 +210,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             debug_log(self.config, "api_summarize_skipped", {"reason": "empty_trajectory"})
             return []
 
-        phase = task.metrics.get("phase", "unknown")
+        phase = task.metadata.get("phase", "unknown")
         debug_log(self.config, "api_summarize_start", {"phase": phase, "task_id": task.task_id})
         
         results = []
@@ -292,9 +292,9 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         if not response: return None
 
         # [Fix Typo & Logic] 修正属性名并赋值给 query，确保执行时生效
-        task.instruction = response.content.strip()
-        task.query = task.instruction 
-        task.metrics = {
+        task.query = response.content.strip()
+        task.query = task.query 
+        task.metadata = {
                 "phase": "intra", 
                 "target_app": app_name, 
                 "target_api": target_api_name
@@ -402,9 +402,9 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             return None
         
         # [Fix Logic] 赋值给 query
-        task.instruction = user_query
         task.query = user_query
-        task.metrics = {
+        task.query = user_query
+        task.metadata = {
                 "phase": "extra",
                 "info_app": info_app_name,
                 "exec_app": exec_app_name,
@@ -421,8 +421,8 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         单域探索总结：检查是否调用目标 API，如果调用则使用 LLM 归纳任务意图。
         [FIX] 使用 parse_tasks_from_response 解析出列表，逻辑模仿 Random 策略。
         """
-        target_app = task.metrics.get("target_app")
-        target_api = task.metrics.get("target_api")
+        target_app = task.metadata.get("target_app")
+        target_api = task.metadata.get("target_api")
         
         # 1. 前置检查：如果目标 API 未被调用，视为探索失败，不生成总结
         if not self._check_api_called(trajectory, target_api):
@@ -513,8 +513,8 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         跨域探索总结：同样进行后验归纳，解析出实际完成的任务。
         [FIX] 调整返回值为列表，并增加 LLM 归纳步骤。
         """
-        info_app = task.metrics.get("info_app")
-        target_api = task.metrics.get("target_api")
+        info_app = task.metadata.get("info_app")
+        target_api = task.metadata.get("target_api")
         
         # 1. 前置检查
         called_info = self._check_app_usage(trajectory, info_app)

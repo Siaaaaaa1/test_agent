@@ -386,7 +386,7 @@ class TaskManager(object):
                 
                 # [FIX]: 生成唯一 data_id 并传递给 explore，避免日志覆盖
                 data_id = f"gen_intra_{idx}"
-                current_task.metrics["data_id"] = data_id
+                current_task.metadata["data_id"] = data_id
                 
                 debug_log(self._config, "tm_process_intra_exploring", {"idx": idx, "data_id": data_id})
 
@@ -453,7 +453,7 @@ class TaskManager(object):
                 
                 # [FIX]: 生成唯一 data_id 并传递给 explore，避免日志覆盖
                 data_id = f"gen_cross_{idx}"
-                current_task.metrics["data_id"] = data_id
+                current_task.metadata["data_id"] = data_id
                 
                 debug_log(self._config, "tm_process_cross_exploring", {"idx": idx, "data_id": data_id})
 
