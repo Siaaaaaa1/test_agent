@@ -91,8 +91,8 @@ python3 -m agentevolver.main_ppo \
     task_manager.mixture.synthetic_data_ratio=1.0 \
     task_manager.mixture.use_original_tasks=False \
     actor_rollout_ref.rollout.val_kwargs.n=8 \
-    task_manager.train_data_path=/mmu_cd_ssd/zhangzhenyu06/workspace/AgentEvolver/tasks_explored/tasks_explored.train.json \
-    task_manager.val_data_path=/mmu_cd_ssd/zhangzhenyu06/workspace/AgentEvolver/tasks_explored/tasks_explored.val.json \
+    task_manager.train_data_path=./tasks_explored/tasks_explored.train.json \
+    task_manager.val_data_path=.tasks_explored/tasks_explored.val.json \
     task_manager.exploration_strategy_args.a=5 \
     task_manager.exploration_strategy_args.b=10 \
     task_manager.strategy=api_driven \
