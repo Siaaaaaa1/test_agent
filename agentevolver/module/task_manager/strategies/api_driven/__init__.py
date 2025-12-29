@@ -124,7 +124,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             "data_id": data_id,
             "phase": task.metadata.get('phase'),
             "real_sandbox_id": real_sandbox_id,
-            "instruction": task.query[:50] + "..." if task.query else None
+            "instruction": task.query + "..." if task.query else None
         })
 
         # 2. 初始化环境工作者 (EnvWorker)
@@ -166,7 +166,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         # 5. 执行 Agent，获取轨迹
         try:
             # 获取对应的 System Prompt
-            system_prompt = get_agent_interaction_system_prompt(self.env_profile_name)
+            system_prompt = get_agent_interaction_system_prompt()
 
             trajectory = env_worker.execute(
                 data_id=data_id, # [FIX]: 接收并使用 TaskManager 传递过来的唯一 ID

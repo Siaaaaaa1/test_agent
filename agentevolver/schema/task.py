@@ -33,6 +33,7 @@ class Task(BaseModel):
     # 它通常用于基于模型的评估器 (LLM Judge) 中，作为参考轨迹 (Reference Trajectory) 来评判 Agent 的表现。
     ground_truth: Optional[str] = Field(default=None, description="ground truth")
     
+    metrics: Dict = Field(default_factory=dict, description="Task execution metrics")
     # 评估器类型标识。
     # "env": 表示使用环境自带的评估函数（如代码执行结果、网页状态匹配）。
     # 其他值: 可能指向特定的 LLM 评分器或规则评分器。

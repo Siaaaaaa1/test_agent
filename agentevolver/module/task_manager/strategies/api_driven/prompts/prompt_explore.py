@@ -12,7 +12,16 @@ This is your first time entering this environment. Your mission is to **gain a d
 
 ## 1. Environment Description
 
-[INSERT_ENVIRONMENT_DESCRIPTION_HERE]
+This environment is a multi-application ecosystem designed for a general computer user named Bob. It integrates various services covering finance, communication, productivity, and entertainment. The environment consists of the following key entities:
+Venmo: A mobile payment service for financial transactions (sending/requesting money, accepting/rejecting requests), managing social connections (friends list), and transaction history.
+Amazon: An e-commerce platform where users can manage account details, shopping carts, and wishlists; place orders; check deliveries; and interact with products through reviews and questions.
+Spotify: A music streaming service for managing a digital library (songs, albums, playlists), following artists, and exporting library data.
+Gmail: An email communication service providing tools to send, receive, reply to, and forward emails, as well as organizing them using labels and stars.
+Simple Note: A productivity app for creating, updating, and exporting notes, with a specialized feature to convert note content into music playlists.
+Phone: A central communication device for handling contacts, SMS/voice messaging, and managing device-level utilities like alarms.
+Todoist: A task management application for organizing individual tasks within various projects, including updating and moving tasks.
+Splitwise: A utility for tracking shared group expenses and settling balances between users.
+File System: A local storage management system for organizing directories and files, supporting operations like downloading, moving, deleting, and compressing data.
 
 ### Use Environment Description
 
@@ -117,13 +126,8 @@ User may asks questions like `[USER_QUESTION]`. You may explore related informat
 """
 
 
-def get_agent_interaction_system_prompt(
-    profile:EnvProfile | None
-) -> str:
-    if profile is not None:
-        return AGENT_INTERACTION_SYSTEM_PROMPT.replace("[INSERT_ENVIRONMENT_DESCRIPTION_HERE]", profile.get_instruction())
-    else:
-        return AGENT_INTERACTION_SYSTEM_PROMPT.replace("[INSERT_ENVIRONMENT_DESCRIPTION_HERE]", "No environment description provided.")
+def get_agent_interaction_system_prompt() -> str:
+        return AGENT_INTERACTION_SYSTEM_PROMPT
 
 
 
