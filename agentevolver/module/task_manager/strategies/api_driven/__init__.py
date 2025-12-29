@@ -143,7 +143,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         sampling_params = {
             "temperature": self.config.get("exploration_llm_temperature", 0.5),
             "top_p": self.config.get("exploration_llm_top_p", 0.9),
-            "top_k": self.config.get("exploration_llm_top_k", 0),
+            "top_k": self.config.get("exploration_llm_top_k", 50),
         }
         
         llm_chat_fn = self._get_llm_chat_fn(
@@ -437,7 +437,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             sampling_params = {
                 "temperature": self.config.get("exploration_llm_temperature", 0.5),
                 "top_p": self.config.get("exploration_llm_top_p", 0.9),
-                "top_k": self.config.get("exploration_llm_top_k", 0),
+                "top_k": self.config.get("exploration_llm_top_k", 50),
             }
         )
         
@@ -535,7 +535,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             sampling_params = {
                 "temperature": self.config.get("exploration_llm_temperature", 0.5),
                 "top_p": self.config.get("exploration_llm_top_p", 0.9),
-                "top_k": self.config.get("exploration_llm_top_k", 0),
+                "top_k": self.config.get("exploration_llm_top_k", 50),
             }
         )
         

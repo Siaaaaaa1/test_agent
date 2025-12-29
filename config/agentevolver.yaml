@@ -3,6 +3,9 @@ algorithm:
   adv_estimator: grpo
   use_kl_in_reward: false
 
+ray_init:
+  num_cpus: 32
+
 data:
   train_batch_size: 32         
   max_prompt_length: 4000      
