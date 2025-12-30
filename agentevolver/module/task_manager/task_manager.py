@@ -315,13 +315,24 @@ class TaskManager(object):
                 trajectories = self._exploration_strategy.explore(current_task, data_id, data_id)
                 
                 # --- 关键日志保留：LLM 输出与环境反馈 ---
-                # 将轨迹简化记录，便于调试 Prompt
+                # [FIX]: 安全获取步骤字典，如果 s 是对象则转字典，如果是字典则直接使用
                 simple_trajs = []
                 for t in trajectories:
+                    steps_data = []
+                    for s in t.steps:
+                        if isinstance(s, dict):
+                            steps_data.append(s)
+                        elif hasattr(s, 'dict'):
+                            steps_data.append(s.dict())
+                        else:
+                            # Fallback if neither (e.g. str)
+                            steps_data.append(str(s))
+                            
                     simple_trajs.append({
                         "steps_count": len(t.steps),
-                        "steps": [s.dict() for s in t.steps] # 包含 action, observation, reward
+                        "steps": steps_data
                     })
+                    
                 debug_log(self._config, "evolution_trace", {
                     "type": "intra_output",
                     "data_id": data_id,
@@ -369,12 +380,23 @@ class TaskManager(object):
                 trajectories = self._exploration_strategy.explore(current_task, data_id, data_id)
                 
                 # --- 关键日志保留：LLM 输出与环境反馈 ---
+                # [FIX]: 安全获取步骤字典
                 simple_trajs = []
                 for t in trajectories:
+                    steps_data = []
+                    for s in t.steps:
+                        if isinstance(s, dict):
+                            steps_data.append(s)
+                        elif hasattr(s, 'dict'):
+                            steps_data.append(s.dict())
+                        else:
+                            steps_data.append(str(s))
+                            
                     simple_trajs.append({
                         "steps_count": len(t.steps),
-                        "steps": [s.dict() for s in t.steps]
+                        "steps": steps_data
                     })
+                    
                 debug_log(self._config, "evolution_trace", {
                     "type": "cross_output",
                     "data_id": data_id,
