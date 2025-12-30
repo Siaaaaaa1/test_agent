@@ -55,8 +55,8 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             logger.warning("[ApiDriven] No LlmClient passed, creating a new one.")
             self.llm_client = LlmClient(config)
             
-        # 可选：支持独立的 summarize client
-        self.llm_client_summarize = kwargs.get("llm_client_summarize", self.llm_client)
+        # [Fix: AttributeError] 使用下划线变量名避免与父类同名属性冲突
+        self._summarize_client = kwargs.get("llm_client_summarize", self.llm_client)
 
         self._max_llm_retries = kwargs.get("max_llm_retries", 3)
         self._lock = threading.Lock() # 用于保护记忆文件的并发写入
@@ -93,11 +93,6 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         # 获取环境配置名称
         self.env_profile_name = self.config.get("env_service", {}).get("env_type", "appworld")
 
-        debug_log(self.config, "api_strategy_init", {
-            "env_profile": self.env_profile_name,
-            "api_knowledge_size": len(self.api_knowledge),
-            "mastered_intra_apps": len(self.explored_intra_apps)
-        })
         logger.info(f"[ApiDriven] Initialized. Strategy ready.")
 
     # ================= [核心] 执行循环逻辑 =================
@@ -171,20 +166,10 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                 system_prompt=system_prompt,
             )
             
-            steps_count = len(trajectory.steps) if trajectory else 0
-            debug_log(self.config, "api_explore_done", {
-                "data_id": data_id,
-                "sandbox_id": real_sandbox_id,
-                "steps_count": steps_count
-            })
             return [trajectory]
 
         except Exception as e:
             logger.error(f"[ApiDriven] Explore failed on Sandbox {real_sandbox_id}: {e}")
-            debug_log(self.config, "api_explore_error", {
-                "data_id": data_id,
-                "error": str(e)
-            })
             return [Trajectory(steps=[])]
 
     # ================= 总结逻辑 =================
@@ -379,8 +364,8 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         if not self._check_api_called(trajectory, target_api):
             return []
             
-        # 2. 构造 LLM 函数
-        client = self.llm_client_summarize
+        # 2. 构造 LLM 函数 (使用修正后的变量名)
+        client = self._summarize_client
         llm_fn = self._get_llm_chat_fn(client)
         
         # 3. 数据脱敏 (Masking)
@@ -445,8 +430,8 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         if not (called_info and called_exec):
             return []
             
-        # 2. 构造 LLM 函数
-        client = self.llm_client_summarize
+        # 2. 构造 LLM 函数 (使用修正后的变量名)
+        client = self._summarize_client
         llm_fn = self._get_llm_chat_fn(client)
         
         # 3. 数据脱敏
