@@ -73,7 +73,7 @@ class FIREvLLMRollout(vLLMRollout):
             kwargs_0["temperature"] = 30
             kwargs_0["max_tokens"] = 1
             if "top_k" not in kwargs_0 or kwargs_0["top_k"] <= 0:
-                kwargs_0["top_k"] = 16
+                kwargs_0["top_k"] = 100
             self.sampling_params.max_tokens = config.response_length - 1
             for k in config.keys():
                 if hasattr(SamplingParams(), str(k)):

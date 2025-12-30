@@ -1,5 +1,3 @@
-# agentevolver/utils/debug_utils.py
-
 import os
 import json
 import time
