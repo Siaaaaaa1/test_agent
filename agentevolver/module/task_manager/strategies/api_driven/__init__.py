@@ -18,6 +18,8 @@ from agentevolver.schema.task import Task, TaskObjective
 from agentevolver.schema.trajectory import Trajectory
 from agentevolver.utils.utils import extract_json_from_str
 from agentevolver.utils.debug_utils import debug_log
+from agentevolver.module.task_manager.strategies.api_driven.prompts.intra_domain import parse_intra_purpose_from_response
+from agentevolver.module.task_manager.strategies.api_driven.prompts.cross_domain import parse_cross_purpose_from_response
 
 # 环境与执行模块
 from agentevolver.module.env_manager.env_worker import EnvWorker, TrajExpConfig
@@ -256,7 +258,9 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         """
         生成单域探索任务：针对特定 App 的 API 生成 Prompt。
         """
-        app_knowledge = self.api_knowledge.get(task.metadata["target_app"], {})
+        # [Fix: KeyError] 使用 api_dict 获取 app_name，此时 task.metadata 为空
+        target_app = api_dict.get("app_name")
+        app_knowledge = self.api_knowledge.get(target_app, {})
         apis = app_knowledge.get("apis", {})
 
         # # 随机选择 API 策略
@@ -283,17 +287,17 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
 
         prompt = INTRA_DOMAIN_PURPOSE_PROMPT.format(
             APP_NAME=api_dict["app_name"],
-            API_LIST=api_dict["apis_name_list"]
+            API_LIST=",".join(api_dict["apis_name_list"])
         )
 
         response = self._chat_with_retry(messages=[{"role": "user", "content": prompt}])
 
         if not response: return None
-        parsed_response = parse_intra_purpose_from_response(response)
+        parsed_response = parse_intra_purpose_from_response(response.content)
         task.query = parsed_response["user_query"]
         task.metadata = {
                 "phase": "intra", 
-                "target_app": task.metadata["target_app"], 
+                "target_app": target_app,  # [Fix] 使用局部变量
                 "target_api": parsed_response["target_api"]
             }
         return task

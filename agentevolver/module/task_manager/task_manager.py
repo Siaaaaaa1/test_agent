@@ -423,9 +423,11 @@ class TaskManager(object):
             if not apis:
                 continue
             sample_count = min(len(apis), 5)
-            for i in len(apis):
+            # [Fix: TypeError] 使用 range(1) 替代 len(apis)，且避免循环次数过多
+            for _ in range(1):
                 selected_apis = random.sample(apis, sample_count)
-                this_turn_apis = [api["call_name"]for api in selected_apis]
+                # [Fix: SyntaxError] 补全列表推导式空格
+                this_turn_apis = [api["call_name"] for api in selected_apis]
                 api_list.append({"app_name":app_name,
                                  "apis_name_list":this_turn_apis})
         # for app_name in sorted(list(active_apps_set)):
@@ -485,15 +487,17 @@ class TaskManager(object):
                     for future in as_completed(future_to_idx):
                         idx = future_to_idx[future]
                         try:
+                            # [Optimization] 仅过滤新产生的结果，避免 O(N^2)
                             objs = future.result()
-                            intra_res.extend(objs)
+                            filtered_objs = functools.reduce(lambda x, f: f.filter(x), self._realtime_filters, objs)
+                            intra_res.extend(filtered_objs)
                         except Exception as e:
                             logger.error(f"Unhandled exception in future for task {idx}: {e}")
                         finally:
                             intra_processed_idx.add(idx)
                             pbar.update(1)
                     
-                    intra_res = functools.reduce(lambda x, f: f.filter(x), self._realtime_filters, intra_res)
+                    # [Modified] intra_res 已经是累积的过滤结果了，不再对全文重过滤
                     self._save_checkpoint(intra_ckpt_path, intra_res, intra_processed_idx, total_intra, current_tasks_hash)
             
             pbar.close()
@@ -580,19 +584,18 @@ class TaskManager(object):
                     for future in as_completed(future_to_idx):
                         idx = future_to_idx[future]
                         try:
+                            # [Optimization] 仅过滤新产生的结果，避免 O(N^2)
                             objs = future.result()
-                            cross_res.extend(objs)
+                            filtered_objs = functools.reduce(lambda x, f: f.filter(x), self._realtime_filters, objs)
+                            cross_res.extend(filtered_objs)
                         except Exception as e:
                             logger.error(f"Unhandled exception in cross task {idx}: {e}")
                         finally:
                             cross_processed_idx.add(idx)
                             pbar.update(1)
                     
-                    current_batch_all = intra_res + cross_res
-                    filtered_all = functools.reduce(lambda x, f: f.filter(x), self._realtime_filters, current_batch_all)
-                    # 只保存 extra 的部分
-                    cross_res_to_save = filtered_all[len(intra_res):] 
-                    self._save_checkpoint(cross_ckpt_path, cross_res_to_save, cross_processed_idx, len(cross_task_pool), current_tasks_hash)
+                    # [Modified] 直接保存 cross_res，移除原来复杂的切片逻辑
+                    self._save_checkpoint(cross_ckpt_path, cross_res, cross_processed_idx, len(cross_task_pool), current_tasks_hash)
             
             pbar.close()
         
