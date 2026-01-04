@@ -308,8 +308,8 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             sampled_keys = random.sample(candidates, min(len(candidates), count))
             return {k: all_apis[k] for k in sampled_keys}
 
-        info_apis = get_sampled_apis(info_app_name, "info", 5)
-        exec_apis = get_sampled_apis(exec_app_name, "exec", 5)
+        info_apis = get_sampled_apis(info_app_name, "info", 3)
+        exec_apis = get_sampled_apis(exec_app_name, "exec", 3)
 
         system_tools_hint = (
             "Available System Tools:\n"
