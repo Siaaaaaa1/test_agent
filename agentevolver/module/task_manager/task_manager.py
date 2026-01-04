@@ -523,10 +523,10 @@ class TaskManager(object):
                 app_name_b = other_apps[i % len(other_apps)]
                 apis_b_all = api_knowledge[app_name_b].get("apis", [])
                 sample_count_a = min(len(apis_a_all), 5)
-                selected_apis_a = random.sample(apis_a_all.values(), sample_count_a)
+                selected_apis_a = random.sample(list(apis_a_all.values()), sample_count_a)
                 apis_list_a = [api["call_name"] for api in selected_apis_a]
                 sample_count_b = min(len(apis_b_all), 5)
-                selected_apis_b = random.sample(apis_b_all.values(), sample_count_b)
+                selected_apis_b = random.sample(list(apis_b_all.values()), sample_count_b)
                 apis_list_b = [api["call_name"] for api in selected_apis_b]
                 pair_entry = [
                     {
