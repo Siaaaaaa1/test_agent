@@ -26,8 +26,8 @@ from agentevolver.module.task_manager.agent_flow import ModifiedAgentFlow
 # Prompt 与 Profile 相关
 from agentevolver.module.task_manager.prelude_profiles import appworld, bfcl, webshop
 from agentevolver.module.task_manager.strategies.api_driven.prompts import (
-    PLAN_GENERATION_PROMPT,
-    PURPOSE_SYNTHESIS_PROMPT,
+    INTRA_DOMAIN_PURPOSE_PROMPT,
+    CROSS_DOMAIN_PURPOSE_PROMPT,
     get_agent_interaction_system_prompt
 )
 from agentevolver.module.task_manager.strategies.api_driven.prompts.prompt_summarize import (
@@ -200,142 +200,133 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
 
     # ================= 任务生成 (Generation) =================
 
-    def generate_intra_task(self, app_name: str = None, target_api_name: str = None, task: Task = None) -> Optional[Task]:
+    # def generate_intra_task(self, app_name: str = None, target_api_name: str = None, task: Task = None) -> Optional[Task]:
+    #     """
+    #     生成单域探索任务：针对特定 App 的 API 生成 Prompt。
+    #     """
+    #     if not app_name:
+    #         unmastered_apps = list(self.active_apps - self.explored_intra_apps)
+    #         app_name = random.choice(unmastered_apps) if unmastered_apps else random.choice(list(self.active_apps))
+        
+    #     app_knowledge = self.api_knowledge.get(app_name, {})
+    #     apis = app_knowledge.get("apis", {})
+
+    #     # 随机选择 API 策略
+    #     if not target_api_name:
+    #         action_apis = [k for k, v in apis.items() if v.get("action_type") == "Executive Action"]
+    #         info_apis_list = [k for k, v in apis.items() if v.get("action_type") == "Informational Action"]
+            
+    #         roll = random.random()
+    #         if roll < 0.7 and action_apis:
+    #             target_api_name = random.choice(action_apis)
+    #         elif info_apis_list:
+    #             target_api_name = random.choice(info_apis_list)
+    #         else:
+    #             target_api_name = random.choice(list(apis.keys())) if apis else None
+
+    #     if not target_api_name:
+    #         return None
+
+    #     # 准备上下文
+    #     target_api_def = apis.get(target_api_name)
+    #     is_executive = target_api_def.get("action_type") == "Executive Action"
+    #     ref_type = "Informational Action" if is_executive else "Executive Action"
+    #     reference_apis = {k: v for k, v in apis.items() if k != target_api_name and v.get("action_type") == ref_type}
+
+    #     prompt = INTRA_DOMAIN_PURPOSE_PROMPT.format(
+    #         target_api_name=target_api_name,
+    #         app_name=app_name,
+    #         target_api_details=json.dumps(target_api_def, indent=2, ensure_ascii=False),
+    #         available_info_apis=json.dumps(reference_apis, indent=2, ensure_ascii=False)
+    #     )
+
+    #     response = self._chat_with_retry(messages=[{"role": "user", "content": prompt}])
+
+    #     if not response: return None
+
+    #     task.query = response.content.strip()
+    #     task.metadata = {
+    #             "phase": "intra", 
+    #             "target_app": app_name, 
+    #             "target_api": target_api_name
+    #         }
+    #     return task
+    
+    def generate_intra_task(self, api_dict: dict = None, task: Task = None) -> Optional[Task]:
         """
         生成单域探索任务：针对特定 App 的 API 生成 Prompt。
         """
-        if not app_name:
-            unmastered_apps = list(self.active_apps - self.explored_intra_apps)
-            app_name = random.choice(unmastered_apps) if unmastered_apps else random.choice(list(self.active_apps))
-        
-        app_knowledge = self.api_knowledge.get(app_name, {})
+        app_knowledge = self.api_knowledge.get(task.metadata["target_app"], {})
         apis = app_knowledge.get("apis", {})
 
-        # 随机选择 API 策略
-        if not target_api_name:
-            action_apis = [k for k, v in apis.items() if v.get("action_type") == "Executive Action"]
-            info_apis_list = [k for k, v in apis.items() if v.get("action_type") == "Informational Action"]
+        # # 随机选择 API 策略
+        # if not target_api_name:
+        #     action_apis = [k for k, v in apis.items() if v.get("action_type") == "Executive Action"]
+        #     info_apis_list = [k for k, v in apis.items() if v.get("action_type") == "Informational Action"]
             
-            roll = random.random()
-            if roll < 0.7 and action_apis:
-                target_api_name = random.choice(action_apis)
-            elif info_apis_list:
-                target_api_name = random.choice(info_apis_list)
-            else:
-                target_api_name = random.choice(list(apis.keys())) if apis else None
+        #     roll = random.random()
+        #     if roll < 0.7 and action_apis:
+        #         target_api_name = random.choice(action_apis)
+        #     elif info_apis_list:
+        #         target_api_name = random.choice(info_apis_list)
+        #     else:
+        #         target_api_name = random.choice(list(apis.keys())) if apis else None
 
-        if not target_api_name:
-            return None
+        # if not target_api_name:
+        #     return None
 
         # 准备上下文
-        target_api_def = apis.get(target_api_name)
-        is_executive = target_api_def.get("action_type") == "Executive Action"
-        ref_type = "Informational Action" if is_executive else "Executive Action"
-        reference_apis = {k: v for k, v in apis.items() if k != target_api_name and v.get("action_type") == ref_type}
+        # target_api_def = apis.get(target_api_name)
+        # is_executive = target_api_def.get("action_type") == "Executive Action"
+        # ref_type = "Informational Action" if is_executive else "Executive Action"
+        # reference_apis = {k: v for k, v in apis.items() if k != target_api_name and v.get("action_type") == ref_type}
 
-        prompt = PLAN_GENERATION_PROMPT.format(
-            target_api_name=target_api_name,
-            app_name=app_name,
-            target_api_details=json.dumps(target_api_def, indent=2, ensure_ascii=False),
-            available_info_apis=json.dumps(reference_apis, indent=2, ensure_ascii=False)
+        prompt = INTRA_DOMAIN_PURPOSE_PROMPT.format(
+            APP_NAME=api_dict["app_name"],
+            API_LIST=api_dict["apis_name_list"]
         )
 
         response = self._chat_with_retry(messages=[{"role": "user", "content": prompt}])
 
         if not response: return None
-
-        task.query = response.content.strip()
+        parsed_response = parse_intra_purpose_from_response(response)
+        task.query = parsed_response["user_query"]
         task.metadata = {
                 "phase": "intra", 
-                "target_app": app_name, 
-                "target_api": target_api_name
+                "target_app": task.metadata["target_app"], 
+                "target_api": parsed_response["target_api"]
             }
         return task
 
-    def generate_cross_task(self, app_list: List[str] = None, task: Task = None) -> Optional[Task]:
+    def generate_cross_task(self, api_dict1: dict = None, api_dict2: dict = None, task: Task = None) -> Optional[Task]:
         """
         生成跨域探索任务：选择两个 App，合成跨应用场景。
         """
-        if not app_list:
-            app_list = list(self.active_apps)
-        
-        available_apps = [app for app in app_list if app in self.api_knowledge]
-        if len(available_apps) < 2:
-            return None
-        
-        # 去重逻辑：避免生成已探索过的 App 对
-        explored_pairs = set()
-        if "logs" in self.cross_memory_data:
-            for log in self.cross_memory_data["logs"]:
-                pair = f"{log.get('info_app')}->{log.get('exec_app')}"
-                explored_pairs.add(pair)
 
-        info_app_name, exec_app_name = None, None
-        
-        # 尝试随机采样 5 次以找到未探索的组合
-        for _ in range(5):
-            selected_apps = random.sample(available_apps, 2)
-            app_a, app_b = selected_apps[0], selected_apps[1]
-            
-            # 启发式规则：优先将 Gmail/Notes 等作为信息源
-            if app_a not in UNIVERSAL_INFO_PROVIDERS and app_b in UNIVERSAL_INFO_PROVIDERS:
-                temp_info, temp_exec = app_b, app_a
-            else:
-                temp_info, temp_exec = app_a, app_b
-            
-            if f"{temp_info}->{temp_exec}" not in explored_pairs:
-                info_app_name, exec_app_name = temp_info, temp_exec
-                break
-        
-        if not info_app_name: 
-            info_app_name, exec_app_name = temp_info, temp_exec
+        # system_tools_hint = (
+        #     "Available System Tools:\n"
+        #     "- supervisor: Use to coordinate steps.\n"
+        #     f"- Context: You are exploring functionalities between {info_app_name} and {exec_app_name}."
+        # )
 
-        # 辅助函数：采样 API 列表
-        def get_sampled_apis(app_name, intent_type, count=5):
-            app_info = self.api_knowledge.get(app_name, {})
-            all_apis = app_info.get("apis", {})
-            candidates = []
-            if intent_type == "info":
-                candidates = [k for k, v in all_apis.items() if v.get("action_type") == "Informational Action"]
-                if not candidates: # Fallback to GET
-                    candidates = [k for k, v in all_apis.items() if v.get("method", "").upper() == "GET"]
-            else:
-                candidates = [k for k, v in all_apis.items() if v.get("action_type") == "Executive Action"]
-                if not candidates: # Fallback to non-GET
-                    candidates = [k for k, v in all_apis.items() if v.get("method", "").upper() != "GET"]
-            
-            if not candidates: candidates = list(all_apis.keys())
-            sampled_keys = random.sample(candidates, min(len(candidates), count))
-            return {k: all_apis[k] for k in sampled_keys}
-
-        info_apis = get_sampled_apis(info_app_name, "info", 3)
-        exec_apis = get_sampled_apis(exec_app_name, "exec", 3)
-
-        system_tools_hint = (
-            "Available System Tools:\n"
-            "- supervisor: Use to coordinate steps.\n"
-            f"- Context: You are exploring functionalities between {info_app_name} and {exec_app_name}."
-        )
-
-        prompt = PURPOSE_SYNTHESIS_PROMPT.format(
-            info_app_name=info_app_name,
-            exec_app_name=exec_app_name,
-            info_apis_json=json.dumps(info_apis, indent=2, ensure_ascii=False),
-            exec_apis_json=json.dumps(exec_apis, indent=2, ensure_ascii=False),
-            system_tools_hint=system_tools_hint
+        prompt = CROSS_DOMAIN_PURPOSE_PROMPT.format(
+            APP_NAME1=api_dict1["app_name"],
+            API_LIST1=",".join(api_dict1["apis_name_list"]),
+            APP_NAME2=api_dict2["app_name"],
+            API_LIST2=",".join(api_dict2["apis_name_list"])
         )
 
         response = self._chat_with_retry(
-            messages=[{"role": "user", "content": prompt}], 
-            response_format={"type": "json_object"}
+            messages=[{"role": "user", "content": prompt}]
         )
 
         if not response: return None
         
         try:
-            res_json = extract_json_from_str(response.content)
-            user_query = res_json.get("user_query", "")
-            target_action = res_json.get("target_action_api", "")
+            parsed_response = parse_cross_purpose_from_response(response.content)
+            user_query = parsed_response["user_query"]
+            source_info = parsed_response["source_info_api"]
+            target_action = parsed_response["target_action_api"]
         except Exception as e:
             debug_log(self.config, "api_gen_cross_error", {"error": f"json_extract_failed: {e}", "content": response.content})
             return None
@@ -343,11 +334,12 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         task.query = user_query
         task.metadata = {
                 "phase": "extra",
-                "info_app": info_app_name,
-                "exec_app": exec_app_name,
+                "info_app": api_dict1["app_name"],
+                "exec_app": api_dict2["app_name"],
+                "source_info_api" : source_info,
                 "target_api": target_action,
-                "sampled_info_apis": list(info_apis.keys()),
-                "sampled_exec_apis": list(exec_apis.keys())
+                "sampled_info_apis": list(api_dict1["apis_name_list"]),
+                "sampled_exec_apis": list(api_dict2["apis_name_list"])
             }
         return task
 
@@ -356,14 +348,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
     def summarize_intra(self, task: Task, trajectory: Trajectory) -> List[TaskObjective]:
         """
         单域探索总结：检查是否调用目标 API，如果调用则使用 LLM 归纳任务意图。
-        """
-        target_app = task.metadata.get("target_app")
-        target_api = task.metadata.get("target_api")
-        
-        # 1. 前置检查：如果目标 API 未被调用，视为探索失败
-        if not self._check_api_called(trajectory, target_api):
-            return []
-            
+        """ 
         # 2. 构造 LLM 函数 (使用修正后的变量名)
         client = self._summarize_client
         llm_fn = self._get_llm_chat_fn(client)
@@ -380,7 +365,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         # 4. 生成 Prompt
         env_profile_obj = self._get_env_profile_obj()
         system_prompt, user_prompt = get_task_summarize_prompt(
-            [masked_trajectory], old_objectives=[], env_profile=env_profile_obj
+            [masked_trajectory], old_objectives=[task.query], env_profile=env_profile_obj
         )
         
         messages = [
@@ -388,8 +373,6 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             {"role": "user", "content": user_prompt}
         ]
         
-        debug_log(self.config, "api_sum_intra_prompt", {"target_api": target_api})
-
         # 5. 调用 LLM
         try:
             llm_response = llm_fn(messages=messages)
@@ -403,33 +386,12 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         task_copy.evaluator = 'synthetic'
         tasks = parse_tasks_from_response(task_copy, llm_output)
         
-        # 7. 记录记忆（如果成功生成了总结，说明该 App 已被探索）
-        if tasks:
-            user_query = tasks[0].input
-            with self._lock:
-                if target_app not in self.explored_intra_apps:
-                    self.explored_intra_apps.add(target_app)
-                    self._save_intra_memory(target_app)
-                
-            trajectory.info["synthesized_user_query"] = user_query
-            trajectory.info["exploration_type"] = "intra_domain"
-            
         return tasks
 
     def summarize_cross(self, task: Task, trajectory: Trajectory) -> List[TaskObjective]:
         """
         跨域探索总结：验证是否跨两个 App 进行了交互，如果是，则归纳任务。
         """
-        info_app = task.metadata.get("info_app")
-        target_api = task.metadata.get("target_api")
-        
-        # 1. 前置检查
-        called_info = self._check_app_usage(trajectory, info_app)
-        called_exec = self._check_api_called(trajectory, target_api)
-        
-        if not (called_info and called_exec):
-            return []
-            
         # 2. 构造 LLM 函数 (使用修正后的变量名)
         client = self._summarize_client
         llm_fn = self._get_llm_chat_fn(client)
@@ -445,7 +407,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         # 4. 生成 Prompt
         env_profile_obj = self._get_env_profile_obj()
         system_prompt, user_prompt = get_task_summarize_prompt(
-            [masked_trajectory], old_objectives=[], env_profile=env_profile_obj
+            [masked_trajectory], old_objectives=[task.query], env_profile=env_profile_obj
         )
         
         messages = [
@@ -466,15 +428,6 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         task_copy.evaluator = 'synthetic'
         tasks = parse_tasks_from_response(task_copy, llm_output)
         
-        # 7. 记录记忆
-        if tasks:
-            user_query = tasks[0].input
-            trajectory.info["synthesized_user_query"] = user_query
-            trajectory.info["exploration_type"] = "cross_domain"
-            
-            with self._lock:
-                self._save_cross_memory(trajectory.info)
-            
         return tasks
 
     # ================= 辅助私有方法 =================

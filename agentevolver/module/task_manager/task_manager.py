@@ -276,7 +276,7 @@ class TaskManager(object):
         # 定义并行执行的原子函数 (Wrapper Functions)
         # =================================================================
         
-        def process_intra_task(idx: int, api_info: dict, seed_task: Task) -> List[TaskObjective]:
+        def process_intra_task(idx: int, api_dict: dict, seed_task: Task) -> List[TaskObjective]:
             """单线程处理：单域任务生成 -> 探索 -> 总结"""
             try:
                 # 1. 生成任务描述
@@ -291,8 +291,7 @@ class TaskManager(object):
                 current_task.metadata['thread_index'] = thread_idx
 
                 current_task = self._exploration_strategy.generate_intra_task(
-                    app_name=api_info["app_name"], 
-                    target_api_name=api_info["api_name"],
+                    api_dict,
                     task=current_task
                 )
                 if not current_task:
@@ -305,8 +304,8 @@ class TaskManager(object):
                 debug_log(self._config, "evolution_trace", {
                     "type": "intra_input",
                     "data_id": data_id,
-                    "app": api_info["app_name"],
-                    "api": api_info["api_name"],
+                    "app": current_task.metadata["target_app"],
+                    "api": current_task.metadata["target_api"],
                     "generated_task_query": current_task.query,
                     "task_metadata": current_task.metadata
                 })
@@ -349,7 +348,7 @@ class TaskManager(object):
                 logger.error(f"[Intra-Task Error] Index {idx}: {e}")
                 return []
 
-        def process_cross_task(idx: int, app_list: List[str], seed_task: Task) -> List[TaskObjective]:
+        def process_cross_task(idx: int, api_dict1: dict, api_dict2:dict, seed_task: Task) -> List[TaskObjective]:
             """单线程处理：跨域任务生成 -> 探索 -> 总结"""
             try:
                 current_task = copy.deepcopy(seed_task)
@@ -360,7 +359,7 @@ class TaskManager(object):
                 thread_idx = idx % self._num_exploration_threads
                 current_task.metadata['thread_index'] = thread_idx
 
-                current_task = self._exploration_strategy.generate_cross_task(app_list=app_list, task=current_task)
+                current_task = self._exploration_strategy.generate_cross_task(api_dict1=api_dict1, api_dict2=api_dict2, task=current_task)
                 if not current_task:
                     return []
                 
@@ -371,7 +370,8 @@ class TaskManager(object):
                 debug_log(self._config, "evolution_trace", {
                     "type": "cross_input",
                     "data_id": data_id,
-                    "target_apps": app_list,
+                    "target_apps": api_dict1["app_name"] + " & " + api_dict2["app_name"],
+                    "target_apis": ", ".join(api_dict1["apis_name_list"] + api_dict2["apis_name_list"]),
                     "generated_task_query": current_task.query,
                     "task_metadata": current_task.metadata
                 })
@@ -415,40 +415,52 @@ class TaskManager(object):
         # =================================================================
         # 阶段 1: 单域探索 (Intra-Domain) - 并行化
         # =================================================================
-        active_apis = []
-        for app_name in sorted(list(active_apps_set)):
-            if app_name in api_knowledge:
-                apis = api_knowledge[app_name].get("apis", {})
-                for api_name in sorted(apis.keys()):
-                    active_apis.append({"app_name": app_name, "api_name": api_name})
+        api_list = []
+        for app_name in sorted(active_apps_set):
+            if app_name not in api_knowledge:
+                continue
+            apis = api_knowledge[app_name].get("apis", [])
+            if not apis:
+                continue
+            sample_count = min(len(apis), 5)
+            for i in len(apis):
+                selected_apis = random.sample(apis, sample_count)
+                this_turn_apis = [api["call_name"]for api in selected_apis]
+                api_list.append({"app_name":app_name,
+                                 "apis_name_list":this_turn_apis})
+        # for app_name in sorted(list(active_apps_set)):
+        #     if app_name in api_knowledge:
+        #         apis = api_knowledge[app_name].get("apis", {})
+        #         for api_name in sorted(apis.keys()):
+        #             api_list.append({"app_name": app_name, "api_name": api_name})
 
         # --- 保留调试逻辑：只跑一个 ---
         if debug_mode:
-            logger.info(f"[Debug] Truncating Intra-Domain API list (Original: {len(active_apis)}) to 1.")
-            active_apis = active_apis[:1]
-
+            logger.info(f"[Debug] Truncating Intra-Domain API list (Original: {len(api_list)}) to 1.")
+            api_list = api_list[:1]
+        random.shuffle(api_list)
         intra_task_pool = list(copy.copy(tasks)) * a
         # 重新构造任务池
-        if len(intra_task_pool) < len(active_apis):
-             intra_task_pool = (intra_task_pool * (len(active_apis) // len(intra_task_pool) + 1))[:len(active_apis)]
+        # if len(intra_task_pool) < len(api_list):
+        #      intra_task_pool = (intra_task_pool * (len(api_list) // len(intra_task_pool) + 1))[:len(api_list)]
         
         intra_res = []
         intra_processed_idx = set()
         
         # 尝试恢复断点
-        if os.path.exists(intra_ckpt_path):
-            try:
-                with open(intra_ckpt_path, 'r') as f:
-                    cp = json.load(f)
-                    if cp.get('tasks_hash') == current_tasks_hash:
-                        intra_res = [TaskObjective.parse_raw(json.dumps(obj)) for obj in cp.get('results', [])]
-                        intra_processed_idx = {int(i) for i in cp.get('processed_indices', [])}
-                        logger.info(f"Intra-Domain resumed: {len(intra_res)} tasks loaded.")
-            except Exception as e:
-                logger.warning(f"Failed to load intra checkpoint: {e}")
+        # if os.path.exists(intra_ckpt_path):
+        #     try:
+        #         with open(intra_ckpt_path, 'r') as f:
+        #             cp = json.load(f)
+        #             if cp.get('tasks_hash') == current_tasks_hash:
+        #                 intra_res = [TaskObjective.parse_raw(json.dumps(obj)) for obj in cp.get('results', [])]
+        #                 intra_processed_idx = {int(i) for i in cp.get('processed_indices', [])}
+        #                 logger.info(f"Intra-Domain resumed: {len(intra_res)} tasks loaded.")
+        #     except Exception as e:
+        #         logger.warning(f"Failed to load intra checkpoint: {e}")
 
         # 使用线程池执行
-        total_intra = min(len(active_apis), len(intra_task_pool))
+        total_intra = min(len(api_list), len(intra_task_pool))
         
         if len(intra_processed_idx) < total_intra:
             parallel_num = max(1, min(self._num_exploration_threads, total_intra))
@@ -466,7 +478,7 @@ class TaskManager(object):
             with ThreadPoolExecutor(max_workers=parallel_num) as pool:
                 for batch_idx, batch_idxs in enumerate(batches):
                     future_to_idx = {
-                        pool.submit(process_intra_task, idx, active_apis[idx], intra_task_pool[idx]): idx 
+                        pool.submit(process_intra_task, idx, api_list[idx], intra_task_pool[idx]): idx 
                         for idx in batch_idxs
                     }
 
@@ -489,6 +501,43 @@ class TaskManager(object):
         # =================================================================
         # 阶段 2: 跨域合成 (Cross-Domain) - 并行化
         # =================================================================
+        valid_apps_list = []
+        for app_name in sorted(active_apps_set):
+            if app_name in api_knowledge and api_knowledge[app_name].get("apis"):
+                valid_apps_list.append(app_name)
+        final_pair_data = []
+
+        for app_name_a in valid_apps_list:
+            apis_a_all = api_knowledge[app_name_a].get("apis", [])
+            other_apps = [x for x in valid_apps_list if x != app_name_a]
+            if not other_apps:
+                continue
+            random.shuffle(other_apps) 
+            loop_count = max(len(apis_a_all), len(other_apps))
+            
+            for i in range(loop_count):
+                app_name_b = other_apps[i % len(other_apps)]
+                apis_b_all = api_knowledge[app_name_b].get("apis", [])
+                sample_count_a = min(len(apis_a_all), 5)
+                selected_apis_a = random.sample(apis_a_all, sample_count_a)
+                apis_list_a = [api["call_name"] for api in selected_apis_a]
+                sample_count_b = min(len(apis_b_all), 5)
+                selected_apis_b = random.sample(apis_b_all, sample_count_b)
+                apis_list_b = [api["call_name"] for api in selected_apis_b]
+                pair_entry = [
+                    {
+                        "app_name": app_name_a,
+                        "apis_name_list": apis_list_a
+                    },
+                    {
+                        "app_name": app_name_b,
+                        "apis_name_list": apis_list_b
+                    }
+                ]
+                final_pair_data.append(pair_entry)
+
+        random.shuffle(final_pair_data)
+
         cross_res = []
         active_apps_list = list(active_apps_set)
         
@@ -501,14 +550,14 @@ class TaskManager(object):
 
         cross_processed_idx = set()
         
-        if os.path.exists(cross_ckpt_path):
-            try:
-                with open(cross_ckpt_path, 'r') as f:
-                    cp = json.load(f)
-                    cross_res = [TaskObjective.parse_raw(json.dumps(obj)) for obj in cp.get('results', [])]
-                    cross_processed_idx = {int(i) for i in cp.get('processed_indices', [])}
-                    logger.info(f"Cross-Domain resumed: {len(cross_res)} tasks loaded.")
-            except Exception: pass
+        # if os.path.exists(cross_ckpt_path):
+        #     try:
+        #         with open(cross_ckpt_path, 'r') as f:
+        #             cp = json.load(f)
+        #             cross_res = [TaskObjective.parse_raw(json.dumps(obj)) for obj in cp.get('results', [])]
+        #             cross_processed_idx = {int(i) for i in cp.get('processed_indices', [])}
+        #             logger.info(f"Cross-Domain resumed: {len(cross_res)} tasks loaded.")
+        #     except Exception: pass
 
         if len(cross_processed_idx) < len(cross_task_pool):
             parallel_num = max(1, min(self._num_exploration_threads, len(cross_task_pool)))
@@ -524,7 +573,7 @@ class TaskManager(object):
             with ThreadPoolExecutor(max_workers=parallel_num) as pool:
                 for batch_idx, batch_idxs in enumerate(batches):
                     future_to_idx = {
-                        pool.submit(process_cross_task, idx, active_apps_list, cross_task_pool[idx]): idx 
+                        pool.submit(process_cross_task, idx, final_pair_data[idx][0], final_pair_data[idx][1], cross_task_pool[idx]): idx 
                         for idx in batch_idxs
                     }
 
