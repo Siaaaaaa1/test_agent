@@ -425,7 +425,7 @@ class TaskManager(object):
             sample_count = min(len(apis), 5)
             # [Fix: TypeError] 使用 range(1) 替代 len(apis)，且避免循环次数过多
             for _ in range(1):
-                selected_apis = random.sample(apis, sample_count)
+                selected_apis = random.sample(list(apis), sample_count)
                 # [Fix: SyntaxError] 补全列表推导式空格
                 this_turn_apis = [api["call_name"] for api in selected_apis]
                 api_list.append({"app_name":app_name,
