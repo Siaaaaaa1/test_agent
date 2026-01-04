@@ -1,5 +1,5 @@
-from .intra_domain import PLAN_GENERATION_PROMPT
-from .cross_domain import PURPOSE_SYNTHESIS_PROMPT
+from .intra_domain import INTRA_DOMAIN_PURPOSE_PROMPT
+from .cross_domain import CROSS_DOMAIN_PURPOSE_PROMPT
 from .prompt_explore import get_agent_interaction_system_prompt
 from .prompt_summarize import get_task_summarize_prompt
 from .prompt_summarize import parse_tasks_from_response

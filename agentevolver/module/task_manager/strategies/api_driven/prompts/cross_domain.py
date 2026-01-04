@@ -1,3 +1,6 @@
+import json
+import re
+
 # 阶段三：跨域合成 Prompt (Condition-Based Exploration)
 
 CROSS_DOMAIN_PURPOSE_PROMPT = """
@@ -60,6 +63,34 @@ App 2 Name: {APP_NAME2}
 App 2 APIs:
 {API_LIST2}
 """
+
+def parse_cross_purpose_from_response(response_text: str) -> dict:
+    try:
+        content = response_text.strip()
+        match = re.search(r'(\{.*\})', content, re.DOTALL)
+        
+        if match:
+            json_str = match.group(1)
+        else:
+            json_str = content
+
+        data = json.loads(json_str)
+
+        required_keys = ["user_query", "source_info_api", "target_action_api"]
+        missing_keys = [k for k in required_keys if k not in data]
+        
+        if missing_keys:
+            print(f"[Parse Warning] 结果缺少必要字段: {missing_keys}")
+            
+        return data
+
+    except json.JSONDecodeError as e:
+        print(f"[Parse Error] JSON 解码失败: {e}")
+        print(f"--> 原始文本: {response_text}")
+        return None
+    except Exception as e:
+        print(f"[Parse Error] 未知错误: {e}")
+        return None
 
 # 阶段三：跨域合成 Prompt（基于条件的探索）
 
