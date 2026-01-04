@@ -148,6 +148,8 @@ def run_ppo(config) -> None:
                 "WANDB_API_KEY": "local-e93291bd40698a593a1fcc5b99da6a71a753a383", # 示例 Key
                 "WANDB_BASE_URL": "http://22.6.186.25:8080"
             }},
+            include_dashboard=False,  # <--- 添加这一行，彻底关闭 Dashboard
+            ignore_reinit_error=True, # <--- 建议加上这个，防止反复 init 报错
             num_cpus=config.ray_init.num_cpus,
         )
 
