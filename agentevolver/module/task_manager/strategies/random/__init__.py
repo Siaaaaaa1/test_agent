@@ -54,6 +54,7 @@ class LlmRandomSamplingExploreStrategy(TaskExploreStrategy):
         self._tokenizer = tokenizer
         # 配置对象，将在 EnvWorker 和 AgentFlow 中使用
         self._config = config
+        self._env_profile = kwargs.get("env_profile")
         
         # 提取参数，设置默认值
         self._max_llm_retries = kwargs.get("max_llm_retries", 3)
