@@ -6,20 +6,25 @@ import re
 # 阶段二：单域泛化引导 Prompt (Generic Task Generation)
 
 INTRA_DOMAIN_PURPOSE_PROMPT = """
-You generate intra-domain AI agent training data. Given an API list for a single app, construct a logical scenario for a User Query.
+You generate AI agent training data for a "Black Box" environment. Given an API list for a single app, construct a logical User Query.
+
+Core Context:
+The user CANNOT see the system's internal state (e.g., current settings, specific existing data). The user simply inputs commands into this "Black Box" expecting a result.
 
 Task:
-Select a reasonable API (Action) to solve a user problem. The query should not be a simple function call; it must involve **constraints** or **context**.
+Generate a natural language instruction that triggers an API. The query can be **Precise** or represent a **Fuzzy Intent**, but it must adhere to "Black Box" logic.
 
 Core Logic Types:
-1. Conditional/Filtering: "Delete emails *older than 30 days*", "Find items *under $50*".
-2. Batch Operations: "Process *all* unread messages", "Buy *every* item in cart".
-3. Complex Parameters: "Book a flight *using my business card* for *next Friday*".
+1. Blind Action: Overwrite or execute without caring about the current value. e.g., "Set background to blue" (regardless of what it was), "Restart the service".
+2. Fuzzy Intent: Express a general goal, leaving details to the Agent or defaults. e.g., "Clean up my memory", "Play some music".
+3. Attribute Filtering: Operate based on hypothesized attributes. e.g., "Delete all error logs" (The user assumes error logs might exist; if none exist, the API simply returns nothing, which is valid).
 
 Rules:
-1. Natural: Fluent, conversational English.
-2. Specific: Include plausible details (dates, quantities, specific attributes) to make the query realistic.
-3. Self-Contained: The user implies the necessary information exists within the app context (e.g., "my cart", "my history").
+1. State-Agnostic: **Strictly Prohibit** conditional logic based on "known current state".
+   - Bad (God View): "If the volume is currently 0, turn it up." (The user cannot see that the volume is 0).
+   - Good (Black Box View): "Turn up the volume" or "Unmute".
+2. Allow Ambiguity: Commands do not need to be exhaustive. If the API permits, use vague descriptions (e.g., "highest", "latest", "best", "something") to simulate real user uncertainty.
+3. Natural Language: Fluent, conversational English.
 
 Output Format:
 Output ONLY a raw JSON object. No Markdown.
@@ -29,19 +34,18 @@ Output ONLY a raw JSON object. No Markdown.
 }}
 
 Example:
-App Name: Gmail
+App Name: MusicPlayer
 App APIs:
 [
-    "apis.gmail.list_threads",
-    "apis.gmail.delete_thread",
-    "apis.gmail.send_message",
-    "apis.gmail.get_profile"
+    "apis.music.play",
+    "apis.music.set_volume",
+    "apis.music.get_playlist"
 ]
 
-Output JSON:
+Output JSON (Fuzzy Intent Example):
 {{
-    "user_query": "Delete all my archived gmail threads that are from before this calendar month.",
-    "target_api": "apis.gmail.delete_thread"
+    "user_query": "Play something relaxing.",
+    "target_api": "apis.music.play"
 }}
 
 ---
@@ -52,6 +56,54 @@ App Name: {APP_NAME}
 App APIs:
 {API_LIST}
 """
+
+# INTRA_DOMAIN_PURPOSE_PROMPT = """
+# You generate intra-domain AI agent training data. Given an API list for a single app, construct a logical scenario for a User Query.
+
+# Task:
+# Select a reasonable API (Action) to solve a user problem. The query should not be a simple function call; it must involve **constraints** or **context**.
+
+# Core Logic Types:
+# 1. Conditional/Filtering: "Delete emails *older than 30 days*", "Find items *under $50*".
+# 2. Batch Operations: "Process *all* unread messages", "Buy *every* item in cart".
+# 3. Complex Parameters: "Book a flight *using my business card* for *next Friday*".
+
+# Rules:
+# 1. Natural: Fluent, conversational English.
+# 2. Specific: Include plausible details (dates, quantities, specific attributes) to make the query realistic.
+# 3. Self-Contained: The user implies the necessary information exists within the app context (e.g., "my cart", "my history").
+
+# Output Format:
+# Output ONLY a raw JSON object. No Markdown.
+# {{
+#     "user_query": "Generated natural language instruction",
+#     "target_api": "The primary API call_name used to fulfill the request"
+# }}
+
+# Example:
+# App Name: Gmail
+# App APIs:
+# [
+#     "apis.gmail.list_threads",
+#     "apis.gmail.delete_thread",
+#     "apis.gmail.send_message",
+#     "apis.gmail.get_profile"
+# ]
+
+# Output JSON:
+# {{
+#     "user_query": "Delete all my archived gmail threads that are from before this calendar month.",
+#     "target_api": "apis.gmail.delete_thread"
+# }}
+
+# ---
+
+# Input Data:
+
+# App Name: {APP_NAME}
+# App APIs:
+# {API_LIST}
+# """
 
 def parse_intra_purpose_from_response(response_text: str) -> dict:
     try:
