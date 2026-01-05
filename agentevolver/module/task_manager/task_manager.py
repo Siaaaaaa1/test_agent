@@ -255,6 +255,9 @@ class TaskManager(object):
         a = strategy_args.get('a', 1)
         b = strategy_args.get('b', 1)
         
+        # --- [LOG] 打印策略配置 ---
+        logger.info(f"[API-Driven] Strategy Args: a={a}, b={b}, debug_log={self._config.get('debug_log', False)}")
+
         # --- 保留调试模式下的串行逻辑 ---
         debug_mode = self._config.get("debug_log", False)
         if debug_mode:
@@ -271,6 +274,7 @@ class TaskManager(object):
         # 获取基础数据
         api_knowledge = getattr(self._exploration_strategy, 'api_knowledge', {})
         active_apps_set = getattr(self._exploration_strategy, 'active_apps', set(api_knowledge.keys()))
+        logger.info(f"[API-Driven] Active Apps: {len(active_apps_set)}")
         
         # =================================================================
         # 定义并行执行的原子函数 (Wrapper Functions)
@@ -279,8 +283,10 @@ class TaskManager(object):
         def process_intra_task(idx: int, api_dict: dict, seed_task: Task) -> List[TaskObjective]:
             """单线程处理：单域任务生成 -> 探索 -> 总结"""
             try:
-                # [Log] 流程开始
-                logger.info(f"[Intra-Start] idx={idx} | Start processing intra task.")
+                # [LOG] 开始处理单域任务
+                app_name = api_dict.get('app_name', 'unknown')
+                apis = api_dict.get('apis_name_list', [])
+                logger.info(f"[Intra-Task] #{idx} Start processing for App: {app_name}, APIs: {apis}")
 
                 # 1. 生成任务描述
                 # 注意：深拷贝种子任务以避免副作用
@@ -297,12 +303,12 @@ class TaskManager(object):
                     api_dict,
                     task=current_task
                 )
-                
-                # [Log] 生成阶段检查
                 if not current_task:
-                    logger.warning(f"[Intra-Skip] idx={idx} | Generate intra task failed (returned None).")
+                    logger.warning(f"[Intra-Task] #{idx} LLM failed to generate task description.")
                     return []
                 
+                logger.info(f"[Intra-Task] #{idx} Generated Query: {current_task.query[:50]}...")
+
                 data_id = f"gen_intra_{idx}"
                 current_task.metadata["data_id"] = data_id
                 
@@ -310,17 +316,19 @@ class TaskManager(object):
                 debug_log(self._config, "evolution_trace", {
                     "type": "intra_input",
                     "data_id": data_id,
-                    "app": current_task.metadata.get("target_app", "unknown"), # [Fix] 使用get防止报错
-                    "api": current_task.metadata.get("target_api", "unknown"),
+                    "app": current_task.metadata["target_app"],
+                    "api": current_task.metadata["target_api"],
                     "generated_task_query": current_task.query,
                     "task_metadata": current_task.metadata
                 })
 
                 # 2. 执行探索 (耗时操作)
-                logger.info(f"[Intra-Explore] idx={idx} | Starting exploration for data_id={data_id}")
+                logger.info(f"[Intra-Task] #{idx} Exploring...")
                 trajectories = self._exploration_strategy.explore(current_task, data_id, data_id)
+                logger.info(f"[Intra-Task] #{idx} Exploration finished. Trajectories count: {len(trajectories)}")
                 
                 # --- 关键日志保留：LLM 输出与环境反馈 ---
+                # [FIX]: 安全获取步骤字典，如果 s 是对象则转字典，如果是字典则直接使用
                 simple_trajs = []
                 for t in trajectories:
                     steps_data = []
@@ -330,6 +338,7 @@ class TaskManager(object):
                         elif hasattr(s, 'dict'):
                             steps_data.append(s.dict())
                         else:
+                            # Fallback if neither (e.g. str)
                             steps_data.append(str(s))
                             
                     simple_trajs.append({
@@ -345,26 +354,24 @@ class TaskManager(object):
 
                 # 3. 总结结果
                 results = []
-                # [Log] 检查轨迹是否存在
-                if not trajectories or not trajectories[0].steps:
-                    logger.warning(f"[Intra-Empty] idx={idx} | No trajectories or steps found during exploration.")
-                else:
+                if trajectories and trajectories[0].steps:
                     results = self._exploration_strategy.summarize(current_task, trajectories[0])
-                
-                # [Log] 最终结果统计
-                logger.info(f"[Intra-End] idx={idx} | Finished. Generated {len(results)} objectives.")
+                    logger.info(f"[Intra-Task] #{idx} Summarized {len(results)} objectives.")
+                else:
+                    logger.warning(f"[Intra-Task] #{idx} No steps in trajectory, skipping summary.")
                 
                 return results if results else []
             except Exception as e:
-                # [Log] 增加 exc_info=True 以打印堆栈信息，方便排查具体报错行
-                logger.error(f"[Intra-Task Error] Index {idx}: {e}", exc_info=True)
+                logger.error(f"[Intra-Task Error] Index {idx}: {e}", exc_info=True) # 加上 exc_info 查看完整堆栈
                 return []
 
         def process_cross_task(idx: int, api_dict1: dict, api_dict2:dict, seed_task: Task) -> List[TaskObjective]:
             """单线程处理：跨域任务生成 -> 探索 -> 总结"""
             try:
-                # [Log] 流程开始
-                logger.info(f"[Cross-Start] idx={idx} | Start processing cross task.")
+                # [LOG] 开始处理跨域任务
+                app1 = api_dict1.get('app_name', 'unknown')
+                app2 = api_dict2.get('app_name', 'unknown')
+                logger.info(f"[Cross-Task] #{idx} Start processing for Pair: {app1} & {app2}")
 
                 current_task = copy.deepcopy(seed_task)
 
@@ -375,11 +382,11 @@ class TaskManager(object):
                 current_task.metadata['thread_index'] = thread_idx
 
                 current_task = self._exploration_strategy.generate_cross_task(api_dict1=api_dict1, api_dict2=api_dict2, task=current_task)
-                
-                # [Log] 生成阶段检查
                 if not current_task:
-                    logger.warning(f"[Cross-Skip] idx={idx} | Generate cross task failed (returned None).")
+                    logger.warning(f"[Cross-Task] #{idx} LLM failed to generate cross-domain task description.")
                     return []
+                
+                logger.info(f"[Cross-Task] #{idx} Generated Query: {current_task.query[:50]}...")
                 
                 data_id = f"gen_cross_{idx}"
                 current_task.metadata["data_id"] = data_id
@@ -388,17 +395,19 @@ class TaskManager(object):
                 debug_log(self._config, "evolution_trace", {
                     "type": "cross_input",
                     "data_id": data_id,
-                    "target_apps": f"{api_dict1.get('app_name', 'unk')} & {api_dict2.get('app_name', 'unk')}",
-                    "target_apis": "mixed", # 简化日志，避免过长
+                    "target_apps": api_dict1["app_name"] + " & " + api_dict2["app_name"],
+                    "target_apis": ", ".join(api_dict1["apis_name_list"] + api_dict2["apis_name_list"]),
                     "generated_task_query": current_task.query,
                     "task_metadata": current_task.metadata
                 })
 
                 # 2. 执行探索
-                logger.info(f"[Cross-Explore] idx={idx} | Starting exploration for data_id={data_id}")
+                logger.info(f"[Cross-Task] #{idx} Exploring...")
                 trajectories = self._exploration_strategy.explore(current_task, data_id, data_id)
+                logger.info(f"[Cross-Task] #{idx} Exploration finished. Trajectories count: {len(trajectories)}")
                 
                 # --- 关键日志保留：LLM 输出与环境反馈 ---
+                # [FIX]: 安全获取步骤字典
                 simple_trajs = []
                 for t in trajectories:
                     steps_data = []
@@ -422,18 +431,14 @@ class TaskManager(object):
                 })
 
                 results = []
-                # [Log] 检查轨迹
-                if not trajectories or not trajectories[0].steps:
-                    logger.warning(f"[Cross-Empty] idx={idx} | No trajectories or steps found.")
-                else:
+                if trajectories and trajectories[0].steps:
                     results = self._exploration_strategy.summarize(current_task, trajectories[0])
-
-                # [Log] 最终结果统计
-                logger.info(f"[Cross-End] idx={idx} | Finished. Generated {len(results)} objectives.")
+                    logger.info(f"[Cross-Task] #{idx} Summarized {len(results)} objectives.")
+                else:
+                    logger.warning(f"[Cross-Task] #{idx} No steps in trajectory, skipping summary.")
 
                 return results if results else []
             except Exception as e:
-                # [Log] 增加详细堆栈
                 logger.error(f"[Cross-Task Error] Index {idx}: {e}", exc_info=True)
                 return []
 
@@ -449,22 +454,20 @@ class TaskManager(object):
                 continue
             sample_count = min(len(apis), 5)
             # [Fix: TypeError] 使用 range(1) 替代 len(apis)，且避免循环次数过多
-            for _ in range(1):
+            for _ in range(1): # 注意：这里限制了每个 App 只采样 1 次
                 selected_apis = random.sample(list(apis.values()), sample_count)
                 # [Fix: SyntaxError] 补全列表推导式空格
                 this_turn_apis = [api["call_name"] for api in selected_apis]
                 api_list.append({"app_name":app_name,
                                  "apis_name_list":this_turn_apis})
-        # for app_name in sorted(list(active_apps_set)):
-        #     if app_name in api_knowledge:
-        #         apis = api_knowledge[app_name].get("apis", {})
-        #         for api_name in sorted(apis.keys()):
-        #             api_list.append({"app_name": app_name, "api_name": api_name})
+        
+        logger.info(f"[Intra-Domain] Found {len(api_list)} potential API combinations.")
 
         # --- 保留调试逻辑：只跑一个 ---
         if debug_mode:
             logger.info(f"[Debug] Truncating Intra-Domain API list (Original: {len(api_list)}) to 1.")
             api_list = api_list[:1]
+        
         random.shuffle(api_list)
         intra_task_pool = list(copy.copy(tasks)) * a
         # 重新构造任务池
@@ -488,6 +491,7 @@ class TaskManager(object):
 
         # 使用线程池执行
         total_intra = min(len(api_list), len(intra_task_pool))
+        logger.info(f"[Intra-Domain] Starting generation. Total Tasks to Generate: {total_intra}")
         
         if len(intra_processed_idx) < total_intra:
             parallel_num = max(1, min(self._num_exploration_threads, total_intra))
@@ -514,6 +518,8 @@ class TaskManager(object):
                         try:
                             # [Optimization] 仅过滤新产生的结果，避免 O(N^2)
                             objs = future.result()
+                            if objs:
+                                logger.info(f"[Intra-Domain] Task #{idx} generated {len(objs)} objectives successfully.")
                             filtered_objs = functools.reduce(lambda x, f: f.filter(x), self._realtime_filters, objs)
                             intra_res.extend(filtered_objs)
                         except Exception as e:
@@ -526,6 +532,7 @@ class TaskManager(object):
                     self._save_checkpoint(intra_ckpt_path, intra_res, intra_processed_idx, total_intra, current_tasks_hash)
             
             pbar.close()
+        logger.info(f"[Intra-Domain] Finished. Total collected: {len(intra_res)}")
 
         # =================================================================
         # 阶段 2: 跨域合成 (Cross-Domain) - 并行化
@@ -566,6 +573,7 @@ class TaskManager(object):
                 final_pair_data.append(pair_entry)
 
         random.shuffle(final_pair_data)
+        logger.info(f"[Cross-Domain] Found {len(final_pair_data)} potential API Pairs.")
 
         cross_res = []
         active_apps_list = list(active_apps_set)
@@ -611,6 +619,8 @@ class TaskManager(object):
                         try:
                             # [Optimization] 仅过滤新产生的结果，避免 O(N^2)
                             objs = future.result()
+                            if objs:
+                                logger.info(f"[Cross-Domain] Task #{idx} generated {len(objs)} objectives successfully.")
                             filtered_objs = functools.reduce(lambda x, f: f.filter(x), self._realtime_filters, objs)
                             cross_res.extend(filtered_objs)
                         except Exception as e:
@@ -623,8 +633,10 @@ class TaskManager(object):
                     self._save_checkpoint(cross_ckpt_path, cross_res, cross_processed_idx, len(cross_task_pool), current_tasks_hash)
             
             pbar.close()
+        logger.info(f"[Cross-Domain] Finished. Total collected: {len(cross_res)}")
         
         total_results = intra_res + cross_res
+        logger.info(f"[API-Driven] All stages finished. Total raw results: {len(total_results)}")
         return self._apply_post_filter(total_results)
 
     def _save_checkpoint(self, path, results, processed_indices, total, hash_val):
