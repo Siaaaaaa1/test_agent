@@ -35,6 +35,7 @@ from agentevolver.schema.task import Task, TaskObjective
 from agentevolver.schema.trajectory import Trajectory
 from verl.utils.dataset.rl_dataset import RLHFDataset
 from agentevolver.utils.debug_utils import debug_log
+from agentevolver.module.task_manager.filters.api_llm_pre_filter import LlmQualityPreFilter
 
 # --- 类型定义 ---
 
@@ -127,6 +128,9 @@ class TaskManager(object):
         # 后置过滤器：生成完成后执行（如昂贵的 LLM 质量打分）
         self._post_filter: list[TaskPostFilter] = [
             LlmFilter(env_service_url, llm_client, self._num_exploration_threads, tokenizer=tokenizer, config=config)
+        ]
+        self.api_llm_pre_filter = [
+            LlmQualityPreFilter(llm_client, num_threads=self._num_exploration_threads)
         ]
 
         self._tasks: list[Task] = [] # 存储加载的种子任务
@@ -284,7 +288,7 @@ class TaskManager(object):
         # =================================================================
         
         def process_intra_task(idx: int, api_dict: dict, seed_task: Task) -> List[TaskObjective]:
-            """单线程处理：单域任务生成 -> 探索 -> 总结"""
+            """单线程处理：单域任务生成 -> 预过滤 -> 探索 -> 总结"""
             try:
                 # [LOG] 开始处理单域任务
                 app_name = api_dict.get('app_name', 'unknown')
@@ -324,6 +328,24 @@ class TaskManager(object):
                     "generated_task_query": current_task.query,
                     "task_metadata": current_task.metadata
                 })
+
+                # =================================================================
+                # [新增] 1.5 预执行过滤 (Pre-Execution Filter)
+                # =================================================================
+                # 使用 reduce 依次应用所有注册的预过滤器
+                # filter 接口通常接受 list 返回 list，所以这里包装成列表再解包
+                filtered_tasks = functools.reduce(
+                    lambda tasks, f: f.filter(tasks), 
+                    self.api_llm_pre_filter, 
+                    [current_task]
+                )
+                
+                if not filtered_tasks:
+                    logger.info(f"[Intra-Task] #{idx} Task filtered out by Pre-Filter logic. Skipping execution.")
+                    return []
+                
+                # 只有未被过滤的任务才继续执行
+                current_task = filtered_tasks[0]
 
                 # 2. 执行探索 (耗时操作)
                 logger.info(f"[Intra-Task] #{idx} Exploring...")
@@ -369,7 +391,7 @@ class TaskManager(object):
                 return []
 
         def process_cross_task(idx: int, api_dict1: dict, api_dict2:dict, seed_task: Task) -> List[TaskObjective]:
-            """单线程处理：跨域任务生成 -> 探索 -> 总结"""
+            """单线程处理：跨域任务生成 -> 预过滤 -> 探索 -> 总结"""
             try:
                 # [LOG] 开始处理跨域任务
                 app1 = api_dict1.get('app_name', 'unknown')
@@ -403,6 +425,21 @@ class TaskManager(object):
                     "generated_task_query": current_task.query,
                     "task_metadata": current_task.metadata
                 })
+
+                # =================================================================
+                # [新增] 1.5 预执行过滤 (Pre-Execution Filter)
+                # =================================================================
+                filtered_tasks = functools.reduce(
+                    lambda tasks, f: f.filter(tasks), 
+                    self.api_llm_pre_filter, 
+                    [current_task]
+                )
+                
+                if not filtered_tasks:
+                    logger.info(f"[Cross-Task] #{idx} Task filtered out by Pre-Filter logic. Skipping execution.")
+                    return []
+                
+                current_task = filtered_tasks[0]
 
                 # 2. 执行探索
                 logger.info(f"[Cross-Task] #{idx} Exploring...")

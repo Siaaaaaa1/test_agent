@@ -4,64 +4,47 @@ import re
 # 阶段三：跨域合成 Prompt (Condition-Based Exploration)
 
 CROSS_DOMAIN_PURPOSE_PROMPT = """
-You generate cross-domain AI agent training data. Given API lists for two apps, construct a logical scenario connecting them via a single User Query.
+You are an expert data generator creating Cross-App Automation training data for an AI Agent.
+Given a few APIs for two different Apps, you need to select one API from each and construct a logical **"Pipeline Scenario"** centered around them, where information flows from the "Source App" to the "Target App" via a single User Query.
 
-Core Context (Black Box):
-The user does not know specific data values (IDs, exact timestamps, specific content) inside the Source App.
-Therefore, the user must rely on **Relative References** (e.g., "the latest", "the one from yesterday") to identify data and **Pipe** it to the Target App.
+### Core Context (The Data Pipeline)
+The user wants to bridge two isolated apps.
+1.  **Source App (Data Provider):** The user acts as a "Black Box" observer. They don't know the exact content (e.g., the exact tracking number or meeting ID), so they must use **Relative References** (e.g., "the last email", "my upcoming meeting") to refer to the data.
+2.  **Target App (Action Performer):** The user wants to **use** the data retrieved from the Source to perform an action here.
 
-Task:
-Select one API from the Source App (Data Provider) and one from the Target App (Action Performer).
-Create a query where the output of the Source becomes the input for the Target.
+### Task Goal
+Construct a natural language instruction that:
+1.  **Identifies** specific info in the Source App (using relative logic).
+2.  **Pipes** that info into the Target App to execute a task.
 
-Core Logic Types:
-1. Blind Data Pipelining: "Get [Data X] from App A and use it to do [Action Y] in App B."
-2. Relative Referencing: Since IDs are unknown, use descriptors like "latest", "last", "highest", "most recent" to identify the source object.
-
-Rules:
-1. State-Agnostic / Assumption of Existence: Do NOT use conditional logic (e.g., Avoid: "If I have an order..."). The user assumes the data exists and commands the action directly.
-2. Abstract Connection: The query should not contain specific values (like "Order #123"). Instead, it must linguistically link the two apps (e.g., "use *that* address", "use *the* arrival time").
-3. Natural Flow: Fluent, conversational English implying a sequence (Retrieve -> Execute).
-
-Output Format:
-Output ONLY a raw JSON object. No Markdown blocks.
+### Output Format
+Output ONLY a raw JSON object. **Do NOT** use Markdown code blocks.
 {{
-    "user_query": "Generated natural language instruction",
-    "source_info_api": "Selected Source API call_name",
-    "target_action_api": "Selected Target API call_name"
+    "user_query": "Generated natural language instruction clearly connecting both apps",
+    "source_info_api": "The Source API call_name (Data Provider)",
+    "target_action_api": "The Target API call_name (Action Performer)"
 }}
 
-Example:
-App 1 Name: Amazon
-App 1 APIs:
-[
-    "apis.amazon.show_return",
-    "apis.amazon.initiate_return"
-]
-
-App 2 Name: Phone
-App 2 APIs:
-[
-    "apis.phone.create_alarm",
-    "apis.phone.show_alarms"
-]
+### Example
+App 1: Amazon (Source) [apis.amazon.get_last_order]
+App 2: Gmail (Target) [apis.gmail.send_email]
 
 Output JSON:
 {{
-    "user_query": "Find out the time of my latest Amazon return and set an alarm on my phone for that specific time.",
-    "source_info_api": "apis.amazon.show_return",
-    "target_action_api": "apis.phone.create_alarm"
+    "user_query": "Find the delivery date of my last Amazon order and email it to my boss with the subject 'Package Arrival'.",
+    "source_info_api": "apis.amazon.get_last_order",
+    "target_action_api": "apis.gmail.send_email"
 }}
 
 ---
 
-Input Data:
+**Input Data:**
 
-App 1 Name: {APP_NAME1}
+App 1 Name (Source): {APP_NAME1}
 App 1 APIs:
 [{API_LIST1}]
 
-App 2 Name: {APP_NAME2}
+App 2 Name (Target): {APP_NAME2}
 App 2 APIs:
 [{API_LIST2}]
 """
