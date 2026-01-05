@@ -55,7 +55,8 @@ def get_exploration_strategy(name: str, strategy_args, *, tokenizer, config, llm
     if name == "random":
         return LlmRandomSamplingExploreStrategy(
             tokenizer=tokenizer, 
-            config=config, 
+            config=config,
+            env_profile=env_profile,
             **strategy_args
             )
     elif name == "api_driven":
@@ -63,6 +64,7 @@ def get_exploration_strategy(name: str, strategy_args, *, tokenizer, config, llm
             tokenizer=tokenizer, 
             config=config, 
             llm_client=llm_client,
+            env_profile=env_profile,
             **strategy_args
         )
     else:
