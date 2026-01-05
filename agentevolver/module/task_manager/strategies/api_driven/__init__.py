@@ -50,6 +50,8 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         self.tokenizer = tokenizer
         self.config = config
         
+        self._env_profile = kwargs.get("env_profile")
+        
         # 复用传入的客户端，仅当未传入时才新建
         if llm_client:
             self.llm_client = llm_client
