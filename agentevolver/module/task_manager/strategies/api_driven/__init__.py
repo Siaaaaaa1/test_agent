@@ -387,7 +387,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                 masked_trajectory.steps[2]['content'] = '[MASKED]'
 
         # 4. 生成 Prompt
-        env_profile_obj = self._get_env_profile_obj()
+        # env_profile_obj = self._get_env_profile_obj()
         system_prompt, user_prompt = get_task_summarize_prompt(
             [masked_trajectory], old_objectives=[task.query], env_profile=self.env_profile
         )
@@ -429,7 +429,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                 masked_trajectory.steps[2]['content'] = '[MASKED]'
         
         # 4. 生成 Prompt
-        env_profile_obj = self._get_env_profile_obj()
+        # env_profile_obj = self._get_env_profile_obj()
         system_prompt, user_prompt = get_task_summarize_prompt(
             [masked_trajectory], old_objectives=[task.query], env_profile=self.env_profile
         )
@@ -456,16 +456,16 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
 
     # ================= 辅助私有方法 =================
 
-    def _get_env_profile_obj(self):
-        """辅助方法：根据配置字符串获取 Profile 对象，用于总结 Prompt 的生成"""
-        env_type = self.env_profile_name
-        if env_type == "appworld":
-            return appworld.AppWorldProfile()
-        elif env_type == "bfcl":
-            return bfcl.BfclProfile()
-        elif env_type == "webshop":
-            return webshop.WebShopProfile()
-        return None
+    # def _get_env_profile_obj(self):
+    #     """辅助方法：根据配置字符串获取 Profile 对象，用于总结 Prompt 的生成"""
+    #     env_type = self.env_profile_name
+    #     if env_type == "appworld":
+    #         return appworld.AppWorldProfile()
+    #     elif env_type == "bfcl":
+    #         return bfcl.BfclProfile()
+    #     elif env_type == "webshop":
+    #         return webshop.WebShopProfile()
+    #     return None
 
     def _chat_with_retry(self, messages: List[Dict], **kwargs) -> Optional[Any]:
         """
