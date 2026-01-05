@@ -112,6 +112,7 @@ def _get_action_observation_pair(traj: Trajectory) -> list[tuple[str, str]]:
 
 def get_task_summarize_prompt(
     trajectories: Sequence[Trajectory],
+    old_objectives: str,
     profile: EnvProfile | None,
 ) -> tuple[str, str]:
     x = ""
@@ -135,8 +136,15 @@ def get_task_summarize_prompt(
             x += f"### Reward: {traj.reward.outcome}\n{traj.reward.description}\n"
         idx += 1
 
-    user_prompt = f"""Please analyze the following agent interaction sequence and abstract specific tasks from it:
+    user_prompt = f"""Please analyze the following agent interaction sequence and abstract specific tasks from it.
 
+# Context (Original Intent)
+The agent was originally instructed to explore or solve the following objective:
+"{old_objectives}"
+
+Please use this objective as a reference to understand the user's initial intent. However, your generated task must be based on the **actual successful actions** taken in the history below. If the agent deviated from the plan but successfully performed a valid action sequence, summarize what it *actually* did.
+
+# Actual Interaction History
 {x}
 
 # Task Requirements

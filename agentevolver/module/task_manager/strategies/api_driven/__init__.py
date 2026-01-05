@@ -51,7 +51,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         self.config = config
         
         self._env_profile = kwargs.get("env_profile")
-        
+
         # 复用传入的客户端，仅当未传入时才新建
         if llm_client:
             self.llm_client = llm_client
@@ -391,7 +391,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         # 4. 生成 Prompt
         # env_profile_obj = self._get_env_profile_obj()
         system_prompt, user_prompt = get_task_summarize_prompt(
-            [masked_trajectory], old_objectives=[task.query], env_profile=self.env_profile
+            [masked_trajectory], old_objectives=task.query, env_profile=self.env_profile
         )
         
         messages = [
