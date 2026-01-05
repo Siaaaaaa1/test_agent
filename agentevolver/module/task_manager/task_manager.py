@@ -779,40 +779,133 @@ class FullDataset(Dataset):
 
         self._dataset = to_rl_dataset(self._objectives, self._tokenizer, self._config, self._processor)
 
+    def set_mixture_strategy(self, strategy: MixtureStrategy):
+        """
+        Sets the mixture strategy for the TaskManager and logs the update.
+
+        Args:
+            strategy (MixtureStrategy): The new mixture strategy to be set.
+        """
+        self._mixture_strategy = strategy  # ⭐ Update the mixture strategy
+        logger.info(f"mixture strategy updated to: {type(strategy).__name__}")
+
     def save_to_file(self):
-        """将生成的合成任务目标保存到 JSONL 文件"""
+        """
+        Saves the JSON representation of each synthetic objective to a specified file.
+
+        Args:
+            filepath (str): The path to the file where the objectives will be saved.
+
+        Returns:
+            None
+        """
         assert self._cache_path is not None
         with open(self._cache_path, "w") as f:
-            f.writelines([ob.json() + "\n" for ob in self._synthetic_objectives])
+            f.writelines([ob.json() + "\n" for ob in self._synthetic_objectives])  # ⭐ Writes each objective's JSON to the file
+        logger.info(f"Saved {len(self._objectives)} objectives to {self._cache_path}")  # ⭐ Logs the number of objectives saved
 
     def load_from_file(self):
-        """从缓存文件加载合成任务，并修正评分器配置"""
+        """
+        Loads objectives from a specified file. This function is currently incomplete.
+
+        Args:
+            filepath (str): The path to the file from which the objectives will be loaded.
+
+        Returns:
+            None
+        """
+        if self._cache_path is None:
+            logger.error("trying to load synthetic objectives from file, but cache_path is not set")
+            return
+        
         if os.path.exists(self._cache_path):
             with open(self._cache_path, "r") as f:
                 self._synthetic_objectives = []
-                for line in f:
-                    if not line.strip(): continue
-                    t = json.loads(line)
-                    tmp = TaskObjective.parse_obj(t)
+                for line in filter(lambda x: x.strip() != "", f.readlines()):
+                    # patch old data: open query
+                    t=json.loads(line)
+                    assert 'task' in t
+                    if 'open_query' not in t['task']:
+                        t['task']['open_query'] = True # all synthetic data is open query
+                    
+                    # patch old data: ground_truth
+                    tmp=TaskObjective.parse_obj(t)
+                    if tmp.ground_truth is None:
+                        tmp.ground_truth = json.loads(line)['ground_truth']
                     self._synthetic_objectives.append(tmp)
-            # 为合成数据打上对应的评分器标签
-            for item in self._synthetic_objectives:
-                item.task.evaluator = self._reward_config["synthetic_grader"]
         else:
-            raise FileNotFoundError(f"找不到缓存文件 {self._cache_path}")
+            raise FileNotFoundError(f"failed to load synthetic objectives from file {self._cache_path}, file not found")
+        
+        # check if all synthetic objectives have ground_truth
+        for item in self._synthetic_objectives:
+            assert item.ground_truth is not None
+
+        logger.info("patching grader config to all synthetic data")
+        for item in self._synthetic_objectives:
+            item.task.evaluator=self._reward_config["synthetic_grader"]  # ⭐ Update the evaluator for each task
+
 
     def reload_new_task(self):
-        """调用 TaskManager 重新触发演化生成流程"""
+        """
+        Regenerates the synthetic objectives, updates their evaluators, and rebuilds the dataset.
+
+        This method is used to refresh the task objectives and ensure they are up-to-date with the current configuration.
+        """
         self._synthetic_objectives = self._manager.generate_task([x.task for x in self._tasks], show_progress=True)
+        logger.info("patching grader config to all synthetic data")
         for item in self._synthetic_objectives:
-            item.task.evaluator = self._reward_config["synthetic_grader"]
+            item.task.evaluator=self._reward_config["synthetic_grader"]  # ⭐ Update the evaluator for each task
+        
+
+    def get_statistics(self) -> dict:
+        """
+        Computes and returns a dictionary containing statistics about the tasks, such as the total number of tasks,
+        the number of synthetic and original tasks, the ratio of synthetic tasks, and the strategy information.
+
+        Returns:
+            dict: A dictionary with keys 'total', 'synthetic', 'original', 'synthetic_ratio', and 'strategy_info'.
+        """
+        if not self._objectives:
+            return {
+                "total": 0,
+                "synthetic": 0,
+                "original": 0,
+                "synthetic_ratio": 0.0,
+                "strategy_info": str(self._mixture_strategy)
+            }
+
+        synthetic_count = sum(1 for obj in self._objectives if obj.task.evaluator != "env")  # ⭐ Count the number of synthetic tasks
+        original_count = len(self._objectives) - synthetic_count  # ⭐ Calculate the number of original tasks
+
+        return {
+            "total": len(self._objectives),
+            "synthetic": synthetic_count,
+            "original": original_count,
+            "synthetic_ratio": synthetic_count / len(self._objectives) if len(self._objectives) > 0 else 0,
+            "strategy_info": str(self._mixture_strategy)
+        }
 
     def __getitem__(self, index):
+        """
+        Allows indexing of the TaskManager instance to access items in the underlying dataset.
+
+        Args:
+            index (int): The index of the item to retrieve from the dataset.
+
+        Returns:
+            The item at the specified index in the dataset.
+
+        Raises:
+            RuntimeError: If the dataset has not been loaded.
+        """
+        if self._dataset is None:
+            raise RuntimeError("Dataset not loaded. Call reload() or load_from_file() first.")  # ⭐ Ensures the dataset is loaded before accessing
         return self._dataset[index]
 
     def __len__(self):
-        return len(self._dataset) if self._dataset else 0
-
+        if self._dataset is None:
+            return 0
+        return len(self._dataset)
 
 class AutoReloadDataset(IterableDataset):
     """
@@ -828,30 +921,37 @@ class AutoReloadDataset(IterableDataset):
         self._dataset = OnflyRlDataset(release_used_dataset=True)
 
     def reload(self):
-        """动态拉取一批种子任务并演化出新任务，加入数据集队列"""
         delta = []
         for task in self._tasks:
             delta.append(task)
-            if len(delta) == self._bs: break
+            if len(delta) == self._bs:
+                break
 
-        if not delta: 
-            return 0
-
-        # 调用演化逻辑
         ls = self._manager.generate_task(delta)
-        # 确保生成了足够的数据
         while len(ls) < self._bs * self._manager._n:
-            logger.debug("合成数据量不足，正在重试生成...")
+            logger.debug("failed to generate enough tasks, retrying")
             ls = self._manager.generate_task(delta)
 
-        self._dataset.append_dataset(to_rl_dataset(ls, self._tokenizer, self._config, self._processor))
+        self._dataset.append_dataset(to_rl_dataset(ls, self._tokenizer, self._config,self._processor))
         return self._dataset.num_rest_data
 
     def __iter__(self):
         return self
 
     def __next__(self):
-        """获取下一条数据，如果为空则尝试 reload"""
-        if self._dataset.num_rest_data == 0:
-            if self.reload() == 0: raise StopIteration
-        return next(self._dataset)
+        """
+        Fetches the next task from the dataset. If no tasks are left, it tries to reload the dataset.
+        If reloading does not provide any new tasks, it raises a StopIteration exception.
+
+        Returns:
+            Any: The next task from the dataset.
+
+        Raises:
+            StopIteration: If there are no more tasks left after attempting to reload the dataset.
+        """
+        if self._dataset.num_rest_data == 0:  # ⭐ Check if there are any remaining tasks
+            logger.debug("no data left")
+            if self.reload() == 0:  # ⭐ Attempt to reload the dataset
+                logger.debug("no task left, stop reloading and iteration")
+                raise StopIteration
+        return next(self._dataset)  # ⭐ Get the next task from the dataset
