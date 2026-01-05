@@ -279,6 +279,9 @@ class TaskManager(object):
         def process_intra_task(idx: int, api_dict: dict, seed_task: Task) -> List[TaskObjective]:
             """单线程处理：单域任务生成 -> 探索 -> 总结"""
             try:
+                # [Log] 流程开始
+                logger.info(f"[Intra-Start] idx={idx} | Start processing intra task.")
+
                 # 1. 生成任务描述
                 # 注意：深拷贝种子任务以避免副作用
                 current_task = copy.deepcopy(seed_task)
@@ -294,7 +297,10 @@ class TaskManager(object):
                     api_dict,
                     task=current_task
                 )
+                
+                # [Log] 生成阶段检查
                 if not current_task:
+                    logger.warning(f"[Intra-Skip] idx={idx} | Generate intra task failed (returned None).")
                     return []
                 
                 data_id = f"gen_intra_{idx}"
@@ -304,17 +310,17 @@ class TaskManager(object):
                 debug_log(self._config, "evolution_trace", {
                     "type": "intra_input",
                     "data_id": data_id,
-                    "app": current_task.metadata["target_app"],
-                    "api": current_task.metadata["target_api"],
+                    "app": current_task.metadata.get("target_app", "unknown"), # [Fix] 使用get防止报错
+                    "api": current_task.metadata.get("target_api", "unknown"),
                     "generated_task_query": current_task.query,
                     "task_metadata": current_task.metadata
                 })
 
                 # 2. 执行探索 (耗时操作)
+                logger.info(f"[Intra-Explore] idx={idx} | Starting exploration for data_id={data_id}")
                 trajectories = self._exploration_strategy.explore(current_task, data_id, data_id)
                 
                 # --- 关键日志保留：LLM 输出与环境反馈 ---
-                # [FIX]: 安全获取步骤字典，如果 s 是对象则转字典，如果是字典则直接使用
                 simple_trajs = []
                 for t in trajectories:
                     steps_data = []
@@ -324,7 +330,6 @@ class TaskManager(object):
                         elif hasattr(s, 'dict'):
                             steps_data.append(s.dict())
                         else:
-                            # Fallback if neither (e.g. str)
                             steps_data.append(str(s))
                             
                     simple_trajs.append({
@@ -340,17 +345,27 @@ class TaskManager(object):
 
                 # 3. 总结结果
                 results = []
-                if trajectories and trajectories[0].steps:
+                # [Log] 检查轨迹是否存在
+                if not trajectories or not trajectories[0].steps:
+                    logger.warning(f"[Intra-Empty] idx={idx} | No trajectories or steps found during exploration.")
+                else:
                     results = self._exploration_strategy.summarize(current_task, trajectories[0])
+                
+                # [Log] 最终结果统计
+                logger.info(f"[Intra-End] idx={idx} | Finished. Generated {len(results)} objectives.")
                 
                 return results if results else []
             except Exception as e:
-                logger.error(f"[Intra-Task Error] Index {idx}: {e}")
+                # [Log] 增加 exc_info=True 以打印堆栈信息，方便排查具体报错行
+                logger.error(f"[Intra-Task Error] Index {idx}: {e}", exc_info=True)
                 return []
 
         def process_cross_task(idx: int, api_dict1: dict, api_dict2:dict, seed_task: Task) -> List[TaskObjective]:
             """单线程处理：跨域任务生成 -> 探索 -> 总结"""
             try:
+                # [Log] 流程开始
+                logger.info(f"[Cross-Start] idx={idx} | Start processing cross task.")
+
                 current_task = copy.deepcopy(seed_task)
 
                 if current_task.metadata is None:
@@ -360,7 +375,10 @@ class TaskManager(object):
                 current_task.metadata['thread_index'] = thread_idx
 
                 current_task = self._exploration_strategy.generate_cross_task(api_dict1=api_dict1, api_dict2=api_dict2, task=current_task)
+                
+                # [Log] 生成阶段检查
                 if not current_task:
+                    logger.warning(f"[Cross-Skip] idx={idx} | Generate cross task failed (returned None).")
                     return []
                 
                 data_id = f"gen_cross_{idx}"
@@ -370,17 +388,17 @@ class TaskManager(object):
                 debug_log(self._config, "evolution_trace", {
                     "type": "cross_input",
                     "data_id": data_id,
-                    "target_apps": api_dict1["app_name"] + " & " + api_dict2["app_name"],
-                    "target_apis": ", ".join(api_dict1["apis_name_list"] + api_dict2["apis_name_list"]),
+                    "target_apps": f"{api_dict1.get('app_name', 'unk')} & {api_dict2.get('app_name', 'unk')}",
+                    "target_apis": "mixed", # 简化日志，避免过长
                     "generated_task_query": current_task.query,
                     "task_metadata": current_task.metadata
                 })
 
                 # 2. 执行探索
+                logger.info(f"[Cross-Explore] idx={idx} | Starting exploration for data_id={data_id}")
                 trajectories = self._exploration_strategy.explore(current_task, data_id, data_id)
                 
                 # --- 关键日志保留：LLM 输出与环境反馈 ---
-                # [FIX]: 安全获取步骤字典
                 simple_trajs = []
                 for t in trajectories:
                     steps_data = []
@@ -404,12 +422,19 @@ class TaskManager(object):
                 })
 
                 results = []
-                if trajectories and trajectories[0].steps:
+                # [Log] 检查轨迹
+                if not trajectories or not trajectories[0].steps:
+                    logger.warning(f"[Cross-Empty] idx={idx} | No trajectories or steps found.")
+                else:
                     results = self._exploration_strategy.summarize(current_task, trajectories[0])
+
+                # [Log] 最终结果统计
+                logger.info(f"[Cross-End] idx={idx} | Finished. Generated {len(results)} objectives.")
 
                 return results if results else []
             except Exception as e:
-                logger.error(f"[Cross-Task Error] Index {idx}: {e}")
+                # [Log] 增加详细堆栈
+                logger.error(f"[Cross-Task Error] Index {idx}: {e}", exc_info=True)
                 return []
 
         # =================================================================
