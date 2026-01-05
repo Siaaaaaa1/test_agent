@@ -294,6 +294,12 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
 
         if not response: return None
         parsed_response = parse_intra_purpose_from_response(response.content)
+
+        if not parsed_response:
+            logger.warning(f"[Intra-Task] Failed to parse JSON for app {target_app}")
+            logger.warning(f"[Intra-Task] {parsed_response}")
+            return None
+        
         task.query = parsed_response["user_query"]
         task.metadata = {
                 "phase": "intra", 

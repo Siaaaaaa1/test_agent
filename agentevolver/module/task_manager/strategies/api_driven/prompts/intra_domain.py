@@ -54,8 +54,18 @@ App APIs:
 def parse_intra_purpose_from_response(response_text: str) -> dict:
     try:
         content = response_text.strip()
-        match = re.search(r'(\{.*\})', content, re.DOTALL)
         
+        # 1. 尝试移除 Markdown 代码块标记 ```json ... ```
+        if "```" in content:
+            # 提取第一个代码块的内容
+            pattern = r"```(?:json)?\s*(\{.*?\})\s*```"
+            match = re.search(pattern, content, re.DOTALL)
+            if match:
+                content = match.group(1)
+        
+        # 2. 正则提取最外层的 JSON 对象（非贪婪匹配）
+        # 使用 .*? 非贪婪模式，防止匹配到多余的内容
+        match = re.search(r'(\{.*\})', content, re.DOTALL)
         if match:
             json_str = match.group(1)
         else:
@@ -66,14 +76,16 @@ def parse_intra_purpose_from_response(response_text: str) -> dict:
         required_keys = ["user_query", "target_api"]
         missing_keys = [k for k in required_keys if k not in data]
         
+        # [Fix] 如果缺少键，视为解析失败，返回 None
         if missing_keys:
-            print(f"[Parse Warning] 结果缺少必要字段: {missing_keys}")
+            print(f"[Parse Warning] 结果缺少必要字段: {missing_keys}, 原文: {content[:100]}...")
+            return None
             
         return data
 
     except json.JSONDecodeError as e:
         print(f"[Parse Error] JSON 解码失败: {e}")
-        print(f"--> 原始文本: {response_text}")
+        # print(f"--> 原始文本: {response_text}") # 调试时可打开
         return None
     except Exception as e:
         print(f"[Parse Error] 未知错误: {e}")
