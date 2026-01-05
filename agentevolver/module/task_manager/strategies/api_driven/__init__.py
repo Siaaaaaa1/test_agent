@@ -391,7 +391,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         # 4. 生成 Prompt
         # env_profile_obj = self._get_env_profile_obj()
         system_prompt, user_prompt = get_task_summarize_prompt(
-            [masked_trajectory], old_objectives=task.query, env_profile=self.env_profile
+            [masked_trajectory], old_objectives=task.query, profile=self._env_profile
         )
         
         messages = [
@@ -433,7 +433,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         # 4. 生成 Prompt
         # env_profile_obj = self._get_env_profile_obj()
         system_prompt, user_prompt = get_task_summarize_prompt(
-            [masked_trajectory], old_objectives=[task.query], env_profile=self.env_profile
+            [masked_trajectory], old_objectives=task.query, profile=self._env_profile
         )
         
         messages = [
