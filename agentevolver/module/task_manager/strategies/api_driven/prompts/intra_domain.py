@@ -3,6 +3,8 @@ import re
 
 # 阶段二：单域泛化引导 Prompt (Generic Task Generation)
 
+# 阶段二：单域泛化引导 Prompt (Generic Task Generation)
+
 INTRA_DOMAIN_PURPOSE_PROMPT = """
 You generate intra-domain AI agent training data. Given an API list for a single app, construct a logical scenario for a User Query.
 
@@ -21,10 +23,10 @@ Rules:
 
 Output Format:
 Output ONLY a raw JSON object. No Markdown.
-{
+{{
     "user_query": "Generated natural language instruction",
     "target_api": "The primary API call_name used to fulfill the request"
-}
+}}
 
 Example:
 App Name: Gmail
@@ -37,10 +39,10 @@ App APIs:
 ]
 
 Output JSON:
-{
+{{
     "user_query": "Delete all my archived gmail threads that are from before this calendar month.",
     "target_api": "apis.gmail.delete_thread"
-}
+}}
 
 ---
 
@@ -65,7 +67,7 @@ def parse_intra_purpose_from_response(response_text: str) -> dict:
         
         # 2. 正则提取最外层的 JSON 对象（非贪婪匹配）
         # 使用 .*? 非贪婪模式，防止匹配到多余的内容
-        match = re.search(r'(\{.*\})', content, re.DOTALL)
+        match = re.search(r'(\{.*?\})', content, re.DOTALL)
         if match:
             json_str = match.group(1)
         else:

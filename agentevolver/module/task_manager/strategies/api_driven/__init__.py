@@ -258,52 +258,64 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         """
         生成单域探索任务：针对特定 App 的 API 生成 Prompt。
         """
-        # [Fix: KeyError] 使用 api_dict 获取 app_name，此时 task.metadata 为空
-        target_app = api_dict.get("app_name")
-        app_knowledge = self.api_knowledge.get(target_app, {})
-        apis = app_knowledge.get("apis", {})
+        # [Fix 1] 增加空值校验
+        if not api_dict:
+            logger.error("[Intra-Gen] api_dict is None or empty.")
+            return None
 
-        # # 随机选择 API 策略
-        # if not target_api_name:
-        #     action_apis = [k for k, v in apis.items() if v.get("action_type") == "Executive Action"]
-        #     info_apis_list = [k for k, v in apis.items() if v.get("action_type") == "Informational Action"]
-            
-        #     roll = random.random()
-        #     if roll < 0.7 and action_apis:
-        #         target_api_name = random.choice(action_apis)
-        #     elif info_apis_list:
-        #         target_api_name = random.choice(info_apis_list)
-        #     else:
-        #         target_api_name = random.choice(list(apis.keys())) if apis else None
+        # [Fix 2] 安全获取参数，防止 KeyError
+        target_app = api_dict.get("app_name", "UnknownApp")
+        
+        # [Fix 3] 安全转换列表为字符串，防止列表元素非 String 导致的 TypeError
+        raw_api_list = api_dict.get("apis_name_list", [])
+        if isinstance(raw_api_list, list):
+            api_list_str = ",".join([str(x) for x in raw_api_list])
+        else:
+            api_list_str = str(raw_api_list)
 
-        # if not target_api_name:
-        #     return None
+        # [Log] 打印调试信息，确认数据进入
+        logger.debug(f"[Intra-Gen] Preparing prompt for App: {target_app}, APIs: {api_list_str[:50]}...")
 
-        # 准备上下文
-        # target_api_def = apis.get(target_api_name)
-        # is_executive = target_api_def.get("action_type") == "Executive Action"
-        # ref_type = "Informational Action" if is_executive else "Executive Action"
-        # reference_apis = {k: v for k, v in apis.items() if k != target_api_name and v.get("action_type") == ref_type}
+        # [Fix 4] 核心修复：处理 .format() 可能遇到的 JSON 花括号冲突
+        try:
+            # 尝试标准 format
+            prompt = INTRA_DOMAIN_PURPOSE_PROMPT.format(
+                APP_NAME=target_app,
+                API_LIST=api_list_str
+            )
+        except KeyError as e:
+            # 如果 Prompt 里有未转义的 JSON 花括号（如 {"a":1}），.format 会报 KeyError
+            # 此时降级使用 replace 策略，这是更稳健的做法
+            logger.warning(f"[Intra-Gen] .format() failed due to JSON braces conflict ({e}). Switching to .replace().")
+            prompt = INTRA_DOMAIN_PURPOSE_PROMPT.replace("{APP_NAME}", target_app).replace("{API_LIST}", api_list_str)
+        except Exception as e:
+            logger.error(f"[Intra-Gen] Prompt formatting critical error: {e}")
+            return None
 
-        prompt = INTRA_DOMAIN_PURPOSE_PROMPT.format(
-            APP_NAME=api_dict["app_name"],
-            API_LIST=",".join(api_dict["apis_name_list"])
-        )
+        # 调用 LLM
+        try:
+            response = self._chat_with_retry(messages=[{"role": "user", "content": prompt}])
+        except Exception as e:
+            logger.error(f"[Intra-Gen] Chat API call failed: {e}")
+            return None
 
-        response = self._chat_with_retry(messages=[{"role": "user", "content": prompt}])
+        if not response: 
+            logger.warning(f"[Intra-Gen] No response from LLM for {target_app}")
+            return None
 
-        if not response: return None
+        # 解析结果
         parsed_response = parse_intra_purpose_from_response(response.content)
 
         if not parsed_response:
             logger.warning(f"[Intra-Task] Failed to parse JSON for app {target_app}")
-            logger.warning(f"[Intra-Task] {parsed_response}")
+            # 打印部分内容以便调试（截断防止日志爆炸）
+            logger.warning(f"[Intra-Task] Raw content: {response.content[:200]}...")
             return None
         
         task.query = parsed_response["user_query"]
         task.metadata = {
                 "phase": "intra", 
-                "target_app": target_app,  # [Fix] 使用局部变量
+                "target_app": target_app,
                 "target_api": parsed_response["target_api"]
             }
         return task
