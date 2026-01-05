@@ -318,6 +318,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                 "target_app": target_app,
                 "target_api": parsed_response["target_api"]
             }
+        logger.info(f"[Intra-Gen] Generated task for App: {target_app}, APIs: {api_list_str[:50]}, Query: {task.query}")
         return task
 
     def generate_cross_task(self, api_dict1: dict = None, api_dict2: dict = None, task: Task = None) -> Optional[Task]:
@@ -363,6 +364,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                 "sampled_info_apis": list(api_dict1["apis_name_list"]),
                 "sampled_exec_apis": list(api_dict2["apis_name_list"])
             }
+        logger.info(f"[Intra-Gen] Generated task for App: {api_dict2['app_name']}, APIs: {','.join(api_dict2['apis_name_list'])[:50]}, Query: {task.query}")
         return task
 
     # ================= 阶段总结逻辑 (Summarize) =================

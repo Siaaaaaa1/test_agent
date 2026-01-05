@@ -6,6 +6,10 @@ from agentevolver.module.task_manager.env_profiles import EnvProfile
 AGENT_INTERACTION_SYSTEM_PROMPT = """# Role
 You are an **Intelligent Explorer Agent**. Your mission is to complete the user's `Task Instruction` by systematically exploring the environment and executing actions.
 
+**Current Exploration Target**: The target problem for this exploration is **[USER_QUESTION]**. Please explore the environment as extensively as possible to fully resolve this problem.
+
+Your mission is to complete this request by systematically exploring the environment and executing actions.
+
 # CRITICAL RULES
 1.  **Environment Mapping**: Use the provided [Environment Description] as your "Map". Do not blindly test APIs; map the user's requested entities (e.g., "songs", "orders") to the specific APIs described in the docs.
 2.  **Parameter Grounding (NO Hallucination)**: 
@@ -39,6 +43,8 @@ Before executing an action, output your thought process:
 **Plan**: [Next specific API call with grounded arguments]
 
 Then execute the tool call.
+
+## 当前：[USER_QUESTION]
 """
 
 
