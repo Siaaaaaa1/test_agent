@@ -318,7 +318,8 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         task.metadata = {
                 "phase": "intra", 
                 "target_app": target_app,
-                "target_api": parsed_response["target_api"]
+                "target_api": parsed_response["target_api"],
+                "origin_query": parsed_response["user_query"]
             }
         logger.info(f"[Intra-Gen] Generated task for App: {target_app}, APIs: {api_list_str[:50]}, Query: {task.query}")
         return task
@@ -364,7 +365,8 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                 "source_info_api" : source_info,
                 "target_api": target_action,
                 "sampled_info_apis": list(api_dict1["apis_name_list"]),
-                "sampled_exec_apis": list(api_dict2["apis_name_list"])
+                "sampled_exec_apis": list(api_dict2["apis_name_list"]),
+                "origin_query": parsed_response["user_query"]
             }
         logger.info(f"[Intra-Gen] Generated task for App: {api_dict2['app_name']}, APIs: {','.join(api_dict2['apis_name_list'])[:50]}, Query: {task.query}")
         return task
