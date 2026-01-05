@@ -50,7 +50,7 @@ class RewardProps(TypedDict):
 
 # --- 工具函数 ---
 
-def get_exploration_strategy(name: str, strategy_args, *, tokenizer, config, llm_client) -> TaskExploreStrategy:
+def get_exploration_strategy(name: str, strategy_args, *, tokenizer, config, llm_client, env_profile) -> TaskExploreStrategy:
     logger.info(f"loading exploration strategy {name}")
     if name == "random":
         return LlmRandomSamplingExploreStrategy(
@@ -106,7 +106,8 @@ class TaskManager(object):
             exploration_strategy_args, 
             tokenizer=tokenizer, 
             config=config,
-            llm_client=llm_client 
+            llm_client=llm_client,
+            env_profile=env_profile
         )
         self._llm_client = llm_client
         self._old_retrival = old_retrival       # 用于任务检索和去重的存储器
