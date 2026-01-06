@@ -267,7 +267,8 @@ class TaskManager(object):
         strategy_args = self._config.task_manager.get('exploration_strategy_args', {})
         a = strategy_args.get('a', 1)
         b = strategy_args.get('b', 1)
-        debug_mode = self._config.get("debug_log", False)
+        # debug_mode = self._config.get("debug_log", False)
+        debug_mode = False
         
         logger.info(f"[API-Driven] Strategy Args: a={a}, b={b}, debug_log={debug_mode}")
         if debug_mode:
