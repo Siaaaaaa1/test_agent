@@ -158,7 +158,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         # 5. 执行 Agent，获取轨迹
         try:
             # 获取 System Prompt (通常不带参数，通用指令)
-            system_prompt = get_agent_interaction_system_prompt()
+            system_prompt = get_agent_interaction_system_prompt(self._env_profile)
 
             trajectory = env_worker.execute(
                 data_id=data_id, 
@@ -318,8 +318,10 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         task.metadata = {
                 "phase": "intra", 
                 "target_app": target_app,
+                "app1_apis": list(api_dict["apis_name_list"]),
+                "origin_query": parsed_response["user_query"],
                 "target_api": parsed_response["target_api"],
-                "origin_query": parsed_response["user_query"]
+                "prompt": prompt,
             }
         logger.info(f"[Intra-Gen] Generated task for App: {target_app}, APIs: {api_list_str[:50]}, Query: {task.query}")
         return task
@@ -360,13 +362,14 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         task.query = user_query
         task.metadata = {
                 "phase": "extra",
-                "info_app": api_dict1["app_name"],
-                "exec_app": api_dict2["app_name"],
-                "source_info_api" : source_info,
+                "app1": api_dict1["app_name"],
+                "app2": api_dict2["app_name"],
+                "app1_apis": list(api_dict1["apis_name_list"]),
+                "app2_apis": list(api_dict2["apis_name_list"]),
+                "origin_query": parsed_response["user_query"],
+                "source_api" : source_info,
                 "target_api": target_action,
-                "sampled_info_apis": list(api_dict1["apis_name_list"]),
-                "sampled_exec_apis": list(api_dict2["apis_name_list"]),
-                "origin_query": parsed_response["user_query"]
+                "prompt": prompt,
             }
         logger.info(f"[Intra-Gen] Generated task for App: {api_dict2['app_name']}, APIs: {','.join(api_dict2['apis_name_list'])[:50]}, Query: {task.query}")
         return task
