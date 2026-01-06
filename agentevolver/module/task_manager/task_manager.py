@@ -259,7 +259,7 @@ class TaskManager(object):
 
     def _generate_task_api_driven(self, tasks: Sequence[Task], *, show_progress=False, resume_file: Optional[str] = None) -> list[TaskObjective]:
         """
-        重构后的 API-Driven 生成流程：支持断点续传（增量补充生成）
+        重构后的 API-Driven 生成流程：支持增量生成与增量过滤
         """
         strategy_args = self._config.task_manager.get('exploration_strategy_args', {})
         a = strategy_args.get('a', 1)
@@ -292,7 +292,6 @@ class TaskManager(object):
         def save_intermediate_tasks(path: str, task_list: List[Task]):
             try:
                 with open(path, 'w') as f:
-                    # 这里的 processed_indices 简单地使用 range(len)，因为我们保证了列表是按顺序生成的
                     json.dump({
                         'tasks': [t.dict() for t in task_list],
                         'processed_indices': list(range(len(task_list))),
@@ -424,12 +423,11 @@ class TaskManager(object):
 
         target_len = len(intra_task_pool)
         
-        # 对齐 api_list 长度
         if len(api_list) > 0 and target_len > 0:
             repeat_factor = (target_len // len(api_list)) + 1
             api_list = (api_list * repeat_factor)[:target_len]
         else:
-            target_len = 0 # 安全保护
+            target_len = 0
         total_intra = target_len
         
         intra_gen_path = f"{resume_file}.intra.generated.json"
@@ -441,7 +439,8 @@ class TaskManager(object):
         if generated_intra_tasks is None:
             generated_intra_tasks = []
 
-        # 检查是否需要补充生成
+        new_intra_tasks = [] # 用于记录本轮新生成的样本
+
         current_count = len(generated_intra_tasks)
         if current_count < total_intra:
             needed = total_intra - current_count
@@ -449,29 +448,51 @@ class TaskManager(object):
             
             with ThreadPoolExecutor(max_workers=1 if debug_mode else self._num_exploration_threads) as pool:
                 futures = []
-                # 关键：从 current_count 开始 range，保证索引接续，data_id 不重复
                 for idx in range(current_count, total_intra):
                     futures.append(pool.submit(worker_generate_intra, idx, api_list[idx], intra_task_pool[idx]))
                 
                 for f in tqdm(as_completed(futures), total=len(futures), desc="Intra Generation (Supplement)", disable=not show_progress):
                     res = f.result()
-                    if res: generated_intra_tasks.append(res)
+                    if res: 
+                        generated_intra_tasks.append(res)
+                        new_intra_tasks.append(res) # 记录新样本
             
             save_intermediate_tasks(intra_gen_path, generated_intra_tasks)
         else:
             logger.info(f"[Intra-Gen] Skipped (Loaded {current_count}/{total_intra} from Checkpoint)")
 
-        # --- Step 2: Intra Filtering ---
+        # --- Step 2: Intra Filtering (增量过滤) ---
         filtered_intra_tasks = load_intermediate_tasks(intra_filtered_path)
+        
+        # 情况 A: 没有过滤文件 -> 使用全量 generated 任务进行过滤
         if filtered_intra_tasks is None:
-            logger.info(f"[Intra-Filter] Filtering {len(generated_intra_tasks)} tasks...")
+            logger.info(f"[Intra-Filter] No previous filter file found. Filtering all {len(generated_intra_tasks)} tasks...")
             filtered_intra_tasks = generated_intra_tasks
             for f_filter in self.api_llm_pre_filter:
                 filtered_intra_tasks = f_filter.filter(filtered_intra_tasks)
-            logger.info(f"[Intra-Filter] {len(generated_intra_tasks)} -> {len(filtered_intra_tasks)} tasks remaining.")
+            
             save_intermediate_tasks(intra_filtered_path, filtered_intra_tasks)
+        
+        # 情况 B: 有过滤文件，且本轮有新生成的样本 -> 只过滤新样本并追加
+        elif len(new_intra_tasks) > 0:
+            logger.info(f"[Intra-Filter] Found {len(new_intra_tasks)} newly generated tasks. Applying filter to new tasks only...")
+            
+            tasks_to_filter = new_intra_tasks
+            for f_filter in self.api_llm_pre_filter:
+                tasks_to_filter = f_filter.filter(tasks_to_filter)
+            
+            logger.info(f"[Intra-Filter] {len(new_intra_tasks)} new tasks -> {len(tasks_to_filter)} passed filter.")
+            
+            # 追加到原有结果中
+            filtered_intra_tasks.extend(tasks_to_filter)
+            logger.info(f"[Intra-Filter] Updated total filtered tasks: {len(filtered_intra_tasks)}")
+            
+            save_intermediate_tasks(intra_filtered_path, filtered_intra_tasks)
+            
+        # 情况 C: 有过滤文件且无新样本 -> 跳过
         else:
-            logger.info("[Intra-Filter] Skipped (Loaded from Checkpoint)")
+            logger.info("[Intra-Filter] Skipped (Loaded from Checkpoint & No new tasks generated)")
+
 
         # --- Step 3: Intra Exploration ---
         intra_res = []
@@ -544,6 +565,8 @@ class TaskManager(object):
         generated_cross_tasks = load_intermediate_tasks(cross_gen_path)
         if generated_cross_tasks is None:
             generated_cross_tasks = []
+        
+        new_cross_tasks = [] # 记录新样本
 
         current_count = len(generated_cross_tasks)
         if current_count < total_cross:
@@ -557,23 +580,43 @@ class TaskManager(object):
                 
                 for f in tqdm(as_completed(futures), total=len(futures), desc="Cross Generation (Supplement)", disable=not show_progress):
                     res = f.result()
-                    if res: generated_cross_tasks.append(res)
+                    if res: 
+                        generated_cross_tasks.append(res)
+                        new_cross_tasks.append(res) # 记录新样本
             
             save_intermediate_tasks(cross_gen_path, generated_cross_tasks)
         else:
             logger.info(f"[Cross-Gen] Skipped (Loaded {current_count}/{total_cross} from Checkpoint)")
 
-        # --- Step 2: Cross Filtering ---
+        # --- Step 2: Cross Filtering (增量过滤) ---
         filtered_cross_tasks = load_intermediate_tasks(cross_filtered_path)
+        
+        # 情况 A: 没有过滤文件 -> 全量过滤
         if filtered_cross_tasks is None:
-            logger.info(f"[Cross-Filter] Filtering {len(generated_cross_tasks)} tasks...")
+            logger.info(f"[Cross-Filter] No previous filter file found. Filtering all {len(generated_cross_tasks)} tasks...")
             filtered_cross_tasks = generated_cross_tasks
             for f_filter in self.api_llm_pre_filter:
                 filtered_cross_tasks = f_filter.filter(filtered_cross_tasks)
-            logger.info(f"[Cross-Filter] {len(generated_cross_tasks)} -> {len(filtered_cross_tasks)} tasks remaining.")
             save_intermediate_tasks(cross_filtered_path, filtered_cross_tasks)
+            
+        # 情况 B: 有过滤文件，且有新样本 -> 过滤新样本并追加
+        elif len(new_cross_tasks) > 0:
+            logger.info(f"[Cross-Filter] Found {len(new_cross_tasks)} newly generated tasks. Applying filter to new tasks only...")
+            
+            tasks_to_filter = new_cross_tasks
+            for f_filter in self.api_llm_pre_filter:
+                tasks_to_filter = f_filter.filter(tasks_to_filter)
+                
+            logger.info(f"[Cross-Filter] {len(new_cross_tasks)} new tasks -> {len(tasks_to_filter)} passed filter.")
+            
+            filtered_cross_tasks.extend(tasks_to_filter)
+            logger.info(f"[Cross-Filter] Updated total filtered tasks: {len(filtered_cross_tasks)}")
+            
+            save_intermediate_tasks(cross_filtered_path, filtered_cross_tasks)
+            
+        # 情况 C: 有文件且无新样本 -> 跳过
         else:
-            logger.info("[Cross-Filter] Skipped (Loaded from Checkpoint)")
+            logger.info("[Cross-Filter] Skipped (Loaded from Checkpoint & No new tasks generated)")
 
         # --- Step 3: Cross Exploration ---
         cross_res = []
