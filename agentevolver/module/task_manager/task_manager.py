@@ -259,10 +259,7 @@ class TaskManager(object):
 
     def _generate_task_api_driven(self, tasks: Sequence[Task], *, show_progress=False, resume_file: Optional[str] = None) -> list[TaskObjective]:
         """
-        重构后的 API-Driven 生成流程：
-        1. 阶段一：批量生成任务描述 (Gen) -> 保存
-        2. 阶段二：批量预过滤 (Filter) -> 保存
-        3. 阶段三：批量探索与总结 (Explore) -> 保存
+        重构后的 API-Driven 生成流程：支持断点续传（增量补充生成）
         """
         strategy_args = self._config.task_manager.get('exploration_strategy_args', {})
         a = strategy_args.get('a', 1)
@@ -285,9 +282,8 @@ class TaskManager(object):
                 try:
                     with open(path, 'r') as f:
                         data = json.load(f)
-                        if data.get('tasks_hash') == current_tasks_hash:
-                            logger.info(f"Loaded intermediate tasks from {path}: {len(data['tasks'])} items.")
-                            return [Task.parse_obj(t) for t in data['tasks']]
+                        logger.info(f"Loaded intermediate tasks from {path}: {len(data['tasks'])} items.")
+                        return [Task.parse_obj(t) for t in data['tasks']]
                 except Exception as e:
                     logger.warning(f"Failed to load checkpoint {path}: {e}")
             return None
@@ -296,8 +292,11 @@ class TaskManager(object):
         def save_intermediate_tasks(path: str, task_list: List[Task]):
             try:
                 with open(path, 'w') as f:
+                    # 这里的 processed_indices 简单地使用 range(len)，因为我们保证了列表是按顺序生成的
                     json.dump({
                         'tasks': [t.dict() for t in task_list],
+                        'processed_indices': list(range(len(task_list))),
+                        'total_batches': 1,
                         'tasks_hash': current_tasks_hash,
                         'timestamp': time.time()
                     }, f, indent=2)
@@ -306,11 +305,10 @@ class TaskManager(object):
                 logger.error(f"Failed to save checkpoint {path}: {e}")
 
         # =================================================================
-        # WORKER FUNCTIONS (只负责具体的单步逻辑)
+        # WORKER FUNCTIONS
         # =================================================================
 
         def worker_generate_intra(idx: int, api_dict: dict, seed_task: Task) -> Optional[Task]:
-            """Worker: 仅生成 Intra 任务描述"""
             try:
                 current_task = copy.deepcopy(seed_task)
                 if current_task.metadata is None: current_task.metadata = {}
@@ -320,16 +318,13 @@ class TaskManager(object):
                 current_task = self._exploration_strategy.generate_intra_task(api_dict, task=current_task)
                 if not current_task: return None
                 
-                # 设置 Data ID
+                # 设置 Data ID (基于 idx 保证唯一和连续)
                 data_id = f"gen_intra_{idx}"
                 current_task.metadata["data_id"] = data_id
                 
-                # Log Input Trace
                 debug_log(self._config, "evolution_trace", {
                     "type": "intra_input",
                     "data_id": data_id,
-                    "app": current_task.metadata.get("target_app"),
-                    "api": current_task.metadata.get("target_api"),
                     "generated_task_query": current_task.query,
                     "task_metadata": current_task.metadata
                 })
@@ -339,24 +334,17 @@ class TaskManager(object):
                 return None
 
         def worker_explore_intra(task: Task) -> List[TaskObjective]:
-            """Worker: 执行 Intra 探索和总结"""
             try:
                 data_id = task.metadata.get("data_id", f"unknown_{random.randint(0,1000)}")
                 logger.info(f"[Intra-Explore] Exploring {data_id}...")
-                
                 trajectories = self._exploration_strategy.explore(task, data_id, data_id)
                 
-                # Log Output Trace
                 simple_trajs = []
                 for t in trajectories:
                     steps_data = [s if isinstance(s, dict) else (s.dict() if hasattr(s, 'dict') else str(s)) for s in t.steps]
                     simple_trajs.append({"steps_count": len(t.steps), "steps": steps_data})
                 
-                debug_log(self._config, "evolution_trace", {
-                    "type": "intra_output",
-                    "data_id": data_id,
-                    "trajectories": simple_trajs
-                })
+                debug_log(self._config, "evolution_trace", {"type": "intra_output", "data_id": data_id, "trajectories": simple_trajs})
 
                 results = []
                 if trajectories and trajectories[0].steps:
@@ -367,7 +355,6 @@ class TaskManager(object):
                 return []
 
         def worker_generate_cross(idx: int, api_dict1: dict, api_dict2: dict, seed_task: Task) -> Optional[Task]:
-            """Worker: 仅生成 Cross 任务描述"""
             try:
                 current_task = copy.deepcopy(seed_task)
                 if current_task.metadata is None: current_task.metadata = {}
@@ -382,7 +369,6 @@ class TaskManager(object):
                 debug_log(self._config, "evolution_trace", {
                     "type": "cross_input",
                     "data_id": data_id,
-                    "target_apps": f"{api_dict1.get('app_name')} & {api_dict2.get('app_name')}",
                     "generated_task_query": current_task.query,
                     "task_metadata": current_task.metadata
                 })
@@ -392,11 +378,9 @@ class TaskManager(object):
                 return None
 
         def worker_explore_cross(task: Task) -> List[TaskObjective]:
-            """Worker: 执行 Cross 探索和总结"""
             try:
                 data_id = task.metadata.get("data_id", f"unknown_{random.randint(0,1000)}")
                 logger.info(f"[Cross-Explore] Exploring {data_id}...")
-                
                 trajectories = self._exploration_strategy.explore(task, data_id, data_id)
                 
                 simple_trajs = []
@@ -404,11 +388,7 @@ class TaskManager(object):
                     steps_data = [s if isinstance(s, dict) else (s.dict() if hasattr(s, 'dict') else str(s)) for s in t.steps]
                     simple_trajs.append({"steps_count": len(t.steps), "steps": steps_data})
                 
-                debug_log(self._config, "evolution_trace", {
-                    "type": "cross_output",
-                    "data_id": data_id,
-                    "trajectories": simple_trajs
-                })
+                debug_log(self._config, "evolution_trace", {"type": "cross_output", "data_id": data_id, "trajectories": simple_trajs})
 
                 results = []
                 if trajectories and trajectories[0].steps:
@@ -437,47 +417,57 @@ class TaskManager(object):
                 selected_apis = random.sample(list(apis.values()), sample_count)
                 this_turn_apis = [api["call_name"] for api in selected_apis]
                 api_list.append({"app_name":app_name, "apis_name_list":this_turn_apis})
-        
-        if debug_mode: api_list = api_list[:1]
+
         random.shuffle(api_list)
         intra_task_pool = list(copy.copy(tasks)) * a
-        total_intra = min(len(api_list), len(intra_task_pool))
+        if debug_mode: intra_task_pool = intra_task_pool[:1]
+
+        target_len = len(intra_task_pool)
         
-        # 定义文件路径
+        # 对齐 api_list 长度
+        if len(api_list) > 0 and target_len > 0:
+            repeat_factor = (target_len // len(api_list)) + 1
+            api_list = (api_list * repeat_factor)[:target_len]
+        else:
+            target_len = 0 # 安全保护
+        total_intra = target_len
+        
         intra_gen_path = f"{resume_file}.intra.generated.json"
         intra_filtered_path = f"{resume_file}.intra.filtered.json"
-        intra_final_path = f"{resume_file}.intra.json" # Final objectives
+        intra_final_path = f"{resume_file}.intra.json"
 
-        # --- Step 1: Intra Generation ---
+        # --- Step 1: Intra Generation (增量生成) ---
         generated_intra_tasks = load_intermediate_tasks(intra_gen_path)
         if generated_intra_tasks is None:
             generated_intra_tasks = []
-            logger.info(f"[Intra-Gen] Start generating {total_intra} task descriptions...")
+
+        # 检查是否需要补充生成
+        current_count = len(generated_intra_tasks)
+        if current_count < total_intra:
+            needed = total_intra - current_count
+            logger.info(f"[Intra-Gen] Found {current_count} existing tasks. Generating {needed} more to reach {total_intra}...")
             
             with ThreadPoolExecutor(max_workers=1 if debug_mode else self._num_exploration_threads) as pool:
                 futures = []
-                for idx in range(total_intra):
+                # 关键：从 current_count 开始 range，保证索引接续，data_id 不重复
+                for idx in range(current_count, total_intra):
                     futures.append(pool.submit(worker_generate_intra, idx, api_list[idx], intra_task_pool[idx]))
                 
-                for f in tqdm(as_completed(futures), total=len(futures), desc="Intra Generation", disable=not show_progress):
+                for f in tqdm(as_completed(futures), total=len(futures), desc="Intra Generation (Supplement)", disable=not show_progress):
                     res = f.result()
                     if res: generated_intra_tasks.append(res)
             
             save_intermediate_tasks(intra_gen_path, generated_intra_tasks)
         else:
-            logger.info("[Intra-Gen] Skipped (Loaded from Checkpoint)")
+            logger.info(f"[Intra-Gen] Skipped (Loaded {current_count}/{total_intra} from Checkpoint)")
 
         # --- Step 2: Intra Filtering ---
         filtered_intra_tasks = load_intermediate_tasks(intra_filtered_path)
         if filtered_intra_tasks is None:
             logger.info(f"[Intra-Filter] Filtering {len(generated_intra_tasks)} tasks...")
-            # 批量调用 Pre-Filter
-            # 注意：api_llm_pre_filter 通常接受 list 返回 list，这里我们一次性传入所有生成的任务
-            # 如果列表过大，可以考虑分批，这里假设内存足够
             filtered_intra_tasks = generated_intra_tasks
             for f_filter in self.api_llm_pre_filter:
                 filtered_intra_tasks = f_filter.filter(filtered_intra_tasks)
-            
             logger.info(f"[Intra-Filter] {len(generated_intra_tasks)} -> {len(filtered_intra_tasks)} tasks remaining.")
             save_intermediate_tasks(intra_filtered_path, filtered_intra_tasks)
         else:
@@ -485,34 +475,26 @@ class TaskManager(object):
 
         # --- Step 3: Intra Exploration ---
         intra_res = []
-        # 尝试加载最终结果
         if os.path.exists(intra_final_path):
             try:
                 with open(intra_final_path, 'r') as f:
                     cp = json.load(f)
-                    if cp.get('tasks_hash') == current_tasks_hash:
-                        intra_res = [TaskObjective.parse_raw(json.dumps(obj)) for obj in cp.get('results', [])]
-                        logger.info(f"[Intra-Explore] Loaded {len(intra_res)} objectives from checkpoint.")
+                    intra_res = [TaskObjective.parse_raw(json.dumps(obj)) for obj in cp.get('results', [])]
+                    logger.info(f"[Intra-Explore] Loaded {len(intra_res)} objectives from checkpoint.")
             except Exception: pass
 
         if not intra_res and filtered_intra_tasks:
             logger.info(f"[Intra-Explore] Exploring {len(filtered_intra_tasks)} tasks...")
-            
-            processed_indices = set() # 这里仅做计数用，因为已经有了 filtered_tasks 列表
             batch_res = []
-            
             with ThreadPoolExecutor(max_workers=1 if debug_mode else self._num_exploration_threads) as pool:
                 futures = {pool.submit(worker_explore_intra, t): i for i, t in enumerate(filtered_intra_tasks)}
-                
                 for future in tqdm(as_completed(futures), total=len(futures), desc="Intra Exploration", disable=not show_progress):
                     try:
                         objs = future.result()
-                        # 实时应用 post filter
                         filtered_objs = functools.reduce(lambda x, f: f.filter(x), self._realtime_filters, objs)
                         batch_res.extend(filtered_objs)
                     except Exception as e:
                         logger.error(f"Error in exploration future: {e}")
-            
             intra_res = batch_res
             self._save_checkpoint(intra_final_path, intra_res, set(range(len(filtered_intra_tasks))), len(filtered_intra_tasks), current_tasks_hash)
 
@@ -523,7 +505,6 @@ class TaskManager(object):
         # PART 2: CROSS-DOMAIN (生成 -> 过滤 -> 探索)
         # =================================================================
         
-        # 2.1 准备 API Pairs
         valid_apps_list = [app for app in sorted(active_apps_set) if app in api_knowledge and api_knowledge[app].get("apis")]
         final_pair_data = []
         for app_name_a in valid_apps_list:
@@ -531,16 +512,12 @@ class TaskManager(object):
             other_apps = [x for x in valid_apps_list if x != app_name_a]
             if not other_apps: continue
             random.shuffle(other_apps)
-            
             loop_count = max(len(apis_a_all), len(other_apps))
             for i in range(loop_count):
                 app_name_b = other_apps[i % len(other_apps)]
                 apis_b_all = api_knowledge[app_name_b].get("apis", [])
-                
-                # Sample APIs
                 s_a = random.sample(list(apis_a_all.values()), min(len(apis_a_all), 5))
                 s_b = random.sample(list(apis_b_all.values()), min(len(apis_b_all), 5))
-                
                 final_pair_data.append([
                     {"app_name": app_name_a, "apis_name_list": [x["call_name"] for x in s_a]},
                     {"app_name": app_name_b, "apis_name_list": [x["call_name"] for x in s_b]}
@@ -549,31 +526,42 @@ class TaskManager(object):
         random.shuffle(final_pair_data)
         cross_task_pool = list(copy.copy(tasks)) * b
         if debug_mode: cross_task_pool = cross_task_pool[:1]
-        
-        total_cross = min(len(final_pair_data), len(cross_task_pool))
 
+        target_len_cross = len(cross_task_pool)
+
+        if len(final_pair_data) > 0 and target_len_cross > 0:
+            repeat_factor = (target_len_cross // len(final_pair_data)) + 1
+            final_pair_data = (final_pair_data * repeat_factor)[:target_len_cross]
+        else:
+            target_len_cross = 0
+        total_cross = target_len_cross
+        
         cross_gen_path = f"{resume_file}.cross.generated.json"
         cross_filtered_path = f"{resume_file}.cross.filtered.json"
-        cross_final_path = f"{resume_file}.extra.json" # Match original naming convention
+        cross_final_path = f"{resume_file}.extra.json"
 
-        # --- Step 1: Cross Generation ---
+        # --- Step 1: Cross Generation (增量生成) ---
         generated_cross_tasks = load_intermediate_tasks(cross_gen_path)
         if generated_cross_tasks is None:
             generated_cross_tasks = []
-            logger.info(f"[Cross-Gen] Start generating {total_cross} task descriptions...")
+
+        current_count = len(generated_cross_tasks)
+        if current_count < total_cross:
+            needed = total_cross - current_count
+            logger.info(f"[Cross-Gen] Found {current_count} existing tasks. Generating {needed} more to reach {total_cross}...")
             
             with ThreadPoolExecutor(max_workers=1 if debug_mode else self._num_exploration_threads) as pool:
                 futures = []
-                for idx in range(total_cross):
+                for idx in range(current_count, total_cross):
                     futures.append(pool.submit(worker_generate_cross, idx, final_pair_data[idx][0], final_pair_data[idx][1], cross_task_pool[idx]))
                 
-                for f in tqdm(as_completed(futures), total=len(futures), desc="Cross Generation", disable=not show_progress):
+                for f in tqdm(as_completed(futures), total=len(futures), desc="Cross Generation (Supplement)", disable=not show_progress):
                     res = f.result()
                     if res: generated_cross_tasks.append(res)
             
             save_intermediate_tasks(cross_gen_path, generated_cross_tasks)
         else:
-            logger.info("[Cross-Gen] Skipped (Loaded from Checkpoint)")
+            logger.info(f"[Cross-Gen] Skipped (Loaded {current_count}/{total_cross} from Checkpoint)")
 
         # --- Step 2: Cross Filtering ---
         filtered_cross_tasks = load_intermediate_tasks(cross_filtered_path)
@@ -582,7 +570,6 @@ class TaskManager(object):
             filtered_cross_tasks = generated_cross_tasks
             for f_filter in self.api_llm_pre_filter:
                 filtered_cross_tasks = f_filter.filter(filtered_cross_tasks)
-            
             logger.info(f"[Cross-Filter] {len(generated_cross_tasks)} -> {len(filtered_cross_tasks)} tasks remaining.")
             save_intermediate_tasks(cross_filtered_path, filtered_cross_tasks)
         else:
@@ -594,9 +581,8 @@ class TaskManager(object):
             try:
                 with open(cross_final_path, 'r') as f:
                     cp = json.load(f)
-                    if cp.get('tasks_hash') == current_tasks_hash:
-                        cross_res = [TaskObjective.parse_raw(json.dumps(obj)) for obj in cp.get('results', [])]
-                        logger.info(f"[Cross-Explore] Loaded {len(cross_res)} objectives from checkpoint.")
+                    cross_res = [TaskObjective.parse_raw(json.dumps(obj)) for obj in cp.get('results', [])]
+                    logger.info(f"[Cross-Explore] Loaded {len(cross_res)} objectives from checkpoint.")
             except Exception: pass
 
         if not cross_res and filtered_cross_tasks:
@@ -604,7 +590,6 @@ class TaskManager(object):
             batch_res = []
             with ThreadPoolExecutor(max_workers=1 if debug_mode else self._num_exploration_threads) as pool:
                 futures = {pool.submit(worker_explore_cross, t): i for i, t in enumerate(filtered_cross_tasks)}
-                
                 for future in tqdm(as_completed(futures), total=len(futures), desc="Cross Exploration", disable=not show_progress):
                     try:
                         objs = future.result()
@@ -612,7 +597,6 @@ class TaskManager(object):
                         batch_res.extend(filtered_objs)
                     except Exception as e:
                         logger.error(f"Error in cross exploration future: {e}")
-            
             cross_res = batch_res
             self._save_checkpoint(cross_final_path, cross_res, set(range(len(filtered_cross_tasks))), len(filtered_cross_tasks), current_tasks_hash)
 
@@ -624,6 +608,7 @@ class TaskManager(object):
         total_results = intra_res + cross_res
         logger.info(f"[API-Driven] All stages finished. Total raw results: {len(total_results)}")
         return self._apply_post_filter(total_results)
+
 
     def _save_checkpoint(self, path, results, processed_indices, total, hash_val):
         """保存任务生成的断点信息到 JSON 文件"""
