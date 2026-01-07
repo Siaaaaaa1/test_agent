@@ -5,80 +5,127 @@ import re
 
 # 阶段二：单域泛化引导 Prompt (Generic Task Generation)
 
+# INTRA_DOMAIN_PURPOSE_PROMPT = """
+# You are an expert data generator creating training data for an AI Agent in a "Black Box" environment.
+# Given a list of APIs for a single App, select one target API and construct a **logical, natural, and intent-clear** User Query based on it.
+
+# ### Core Context
+# The user interacts with a **Black Box System**:
+# 1.  The user **CANNOT** see the internal state (e.g., current volume level, specific inventory, existing filenames).
+# 2.  The user relies on **common sense** or **fuzzy needs** to issue commands, expecting the Agent to handle the details.
+
+# ### Task Goal
+# Generate a natural language instruction. This query must strike the **perfect balance** between "ambiguity" and "precision":
+# - Not too vague (leaving the Agent clueless);
+# - Not too specific (including parameters the user couldn't possibly know, leading to execution failure).
+
+# ### Construction Guidelines
+
+# **1. Clear Intent & Valid Parameters (The Goldilocks Rule):**
+#    The query should contain key constraints required for the task (e.g., category, budget, purpose), but **STRICTLY AVOID** "gambling-style" specific values the user cannot confirm.
+#    - **Bad (Too Broad):** "Buy something." (Agent cannot execute)
+#    - **Bad (Too Specific/Gambling):** "Buy a fan on Amazon that costs exactly $20.50." (User cannot predict the exact price; high failure rate.)
+#    - **Good (Functional Constraint):** "Buy a highly-rated desktop fan on Amazon for under $25." (Delegates the filtering to the Agent, which is reasonable.)
+
+# **2. Blind Action & State-Agnostic:**
+#    State the desired outcome directly. Do NOT write conditional logic based on a "hypothetical current state."
+#    - **Bad (God View):** "If my account name is currently 'J. Doe' and I am logged in, change it to 'Jane'." (User cannot see these backend states.)
+#    - **Good (Direct Command):** "Update my account name to 'Jane Smith'." (Overwrite regardless of the previous value.)
+
+# **3. Attribute Filtering & Fuzzy Logic:**
+#    Use qualitative descriptors to simulate real human thinking.
+#    - **Examples:** "Play songs I liked recently", "Delete all spam messages", "Pick the highest-rated option".
+
+# ### Typical High-Quality Logic (Few-Shot Logic)
+
+# **Type A: Acquisition with Soft Constraints**
+# *Scenario:* Shopping, Search
+# *Query:* "Find me an Italian restaurant with a rating above 4.5 that is closest to me."
+# *Logic:* User doesn't know the specific name but knows the filtering criteria.
+
+# **Type B: Batch Processing**
+# *Scenario:* Email, File Management
+# *Query:* "Move all PDF files from my 'Downloads' folder to the 'Documents' directory."
+# *Logic:* User doesn't list specific filenames but operates on a group via attributes (file type).
+
+# **Type C: Overwrite Settings**
+# *Scenario:* Personal Settings
+# *Query:* "Change my profile bio to 'Working hard'."
+# *Logic:* Execute directly without caring what the old bio was.
+
+# ---
+
+# ### Output Format
+# Output ONLY a raw JSON object. **Do NOT** use Markdown code blocks.
+# {{
+#     "user_query": "Generated natural language instruction",
+#     "target_api": "The primary API call_name (entry point) used to fulfill the request"
+# }}
+
+# ### Few-Shot Examples
+# Use these examples to understand how to construct generic, exploratory commands that don't rely on specific, hard-to-guess entities.
+# #### Example 1
+# user_query: Find a highly-rated coffee maker under $50 and add it to my shopping cart.
+# #### Example 2
+# user_query: Archive all emails received from 'newsletter@tech.com' in the last 30 days.
+# #### Example 3
+# user_query: Set a wake-up alarm for 7:00 AM on weekdays, replacing any existing alarms for that time.
+# #### Example 4
+# user_query: Send $20 for 'Lunch' to the last person I paid.
+# #### Example 5
+# user_query: Create a new note titled 'Grocery List' and add 'Milk' as the first line.
+
+# ---
+
+# **Input Data:**
+
+# App Name: {APP_NAME}
+# App APIs: {API_LIST}
+# """
+
 INTRA_DOMAIN_PURPOSE_PROMPT = """
-You are an expert data generator creating training data for an AI Agent in a "Black Box" environment.
-Given a list of APIs for a single App, select one target API and construct a **logical, natural, and intent-clear** User Query based on it.
+You are an expert data generator for an AI Agent in a **"Black Box" Environment**.
+Given an App's APIs, select one target API and construct a **logical, natural** User Query.
 
-### Core Context
-The user interacts with a **Black Box System**:
-1.  The user **CANNOT** see the internal state (e.g., current volume level, specific inventory, existing filenames).
-2.  The user relies on **common sense** or **fuzzy needs** to issue commands, expecting the Agent to handle the details.
+### 🌑 Core Context (Black Box)
+The user **CANNOT** see internal states (IDs, specific filenames, inventory). They rely on **fuzzy needs** or **common sense**, expecting the Agent to handle details.
+*Goal:* Balance **Ambiguity** (don't micromanage) and **Precision** (give enough context).
 
-### Task Goal
-Generate a natural language instruction. This query must strike the **perfect balance** between "ambiguity" and "precision":
-- Not too vague (leaving the Agent clueless);
-- Not too specific (including parameters the user couldn't possibly know, leading to execution failure).
+### 📐 Construction Guidelines
+1.  **The Goldilocks Rule (No Gambling):**
+    Provide functional constraints, but NEVER guess specific values the user can't know.
+    * *Bad (Gambling):* "Buy a fan that costs exactly $20.50." (User can't predict exact price).
+    * *Good:* "Buy a highly-rated desktop fan for under $25." (Delegates filtering to Agent).
 
-### Construction Guidelines
+2.  **Blind Action (State-Agnostic):**
+    State the desired outcome directly. Do NOT use conditional logic based on hidden states.
+    * *Bad:* "If my name is 'J. Doe', change it to 'Jane'."
+    * *Good:* "Update my account name to 'Jane Smith'." (Overwrite directly).
 
-**1. Clear Intent & Valid Parameters (The Goldilocks Rule):**
-   The query should contain key constraints required for the task (e.g., category, budget, purpose), but **STRICTLY AVOID** "gambling-style" specific values the user cannot confirm.
-   - **Bad (Too Broad):** "Buy something." (Agent cannot execute)
-   - **Bad (Too Specific/Gambling):** "Buy a fan on Amazon that costs exactly $20.50." (User cannot predict the exact price; high failure rate.)
-   - **Good (Functional Constraint):** "Buy a highly-rated desktop fan on Amazon for under $25." (Delegates the filtering to the Agent, which is reasonable.)
+3.  **Fuzzy Logic:**
+    Use qualitative descriptors: "Play *recent* songs", "Delete *spam*", "Pick the *best* option".
 
-**2. Blind Action & State-Agnostic:**
-   State the desired outcome directly. Do NOT write conditional logic based on a "hypothetical current state."
-   - **Bad (God View):** "If my account name is currently 'J. Doe' and I am logged in, change it to 'Jane'." (User cannot see these backend states.)
-   - **Good (Direct Command):** "Update my account name to 'Jane Smith'." (Overwrite regardless of the previous value.)
+### 🎯 Target Scenarios
+* **Acquisition:** Search with soft constraints (e.g., "Find a restaurant near me rated 4.5+").
+* **Batch Processing:** Operate on groups via attributes (e.g., "Move all PDF files to Documents").
+* **Overwrite:** Change settings directly (e.g., "Set bio to 'Working hard'").
 
-**3. Attribute Filtering & Fuzzy Logic:**
-   Use qualitative descriptors to simulate real human thinking.
-   - **Examples:** "Play songs I liked recently", "Delete all spam messages", "Pick the highest-rated option".
+### Few-Shot Examples
+**Ex 1:** Find a highly-rated coffee maker under $50 and add it to my shopping cart.
+**Ex 2:** Archive all emails received from 'newsletter@tech.com' in the last 30 days.
+**Ex 3:** Set a wake-up alarm for 7:00 AM on weekdays, replacing any existing alarms.
+**Ex 4:** Send $20 for 'Lunch' to the last person I paid.
+**Ex 5:** Create a new note titled 'Grocery List' and add 'Milk' as the first line.
 
-### Typical High-Quality Logic (Few-Shot Logic)
-
-**Type A: Acquisition with Soft Constraints**
-*Scenario:* Shopping, Search
-*Query:* "Find me an Italian restaurant with a rating above 4.5 that is closest to me."
-*Logic:* User doesn't know the specific name but knows the filtering criteria.
-
-**Type B: Batch Processing**
-*Scenario:* Email, File Management
-*Query:* "Move all PDF files from my 'Downloads' folder to the 'Documents' directory."
-*Logic:* User doesn't list specific filenames but operates on a group via attributes (file type).
-
-**Type C: Overwrite Settings**
-*Scenario:* Personal Settings
-*Query:* "Change my profile bio to 'Working hard'."
-*Logic:* Execute directly without caring what the old bio was.
-
----
-
-### Output Format
-Output ONLY a raw JSON object. **Do NOT** use Markdown code blocks.
+### Output Format (JSON Only)
 {{
-    "user_query": "Generated natural language instruction",
-    "target_api": "The primary API call_name (entry point) used to fulfill the request"
+    "user_query": "Natural language instruction",
+    "target_api": "The primary API call_name used to fulfill the request"
 }}
 
-### Example
-App Name: Spotify
-App APIs: [apis.spotify.search, apis.spotify.play, apis.spotify.add_to_queue]
-
-Output JSON:
-{{
-    "user_query": "Play some upbeat rock music to wake me up.",
-    "target_api": "apis.spotify.play"
-}}
-
----
-
-**Input Data:**
-
+### Input Data
 App Name: {APP_NAME}
-App APIs:
-{API_LIST}
+App APIs: {API_LIST}
 """
 
 # INTRA_DOMAIN_PURPOSE_PROMPT = """
