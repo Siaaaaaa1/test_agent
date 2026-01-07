@@ -307,30 +307,82 @@ class TaskManager(object):
         # WORKER FUNCTIONS
         # =================================================================
 
-        def worker_generate_intra(idx: int, api_dict: dict, seed_task: Task) -> Optional[Task]:
+        def worker_generate_intra(self, idx: int, api_dict: dict, seed_task: Task) -> List[Task]:
+            """
+            [Mod] 现在处理并返回任务列表 List[Task]
+            """
+            generated_tasks_list = []
             try:
-                current_task = copy.deepcopy(seed_task)
-                if current_task.metadata is None: current_task.metadata = {}
-                current_task.metadata['thread_index'] = idx % self._num_exploration_threads
+                # 准备种子任务
+                base_task = copy.deepcopy(seed_task)
+                if base_task.metadata is None: base_task.metadata = {}
+                base_task.metadata['thread_index'] = idx % self._num_exploration_threads
                 
-                # 生成 Query
-                current_task = self._exploration_strategy.generate_intra_task(api_dict, task=current_task)
-                if not current_task: return None
+                # 调用生成器 (返回 List[Task])
+                # 注意：generate_intra_task 内部已经做了 deepcopy，但传入 base_task 作为模板是好的实践
+                tasks = self._exploration_strategy.generate_intra_task(api_dict, task=base_task)
                 
-                # 设置 Data ID (基于 idx 保证唯一和连续)
-                data_id = f"gen_intra_{idx}"
-                current_task.metadata["data_id"] = data_id
+                if not tasks: 
+                    return []
                 
-                debug_log(self._config, "evolution_trace", {
-                    "type": "intra_input",
-                    "data_id": data_id,
-                    "generated_task_query": current_task.query,
-                    "task_metadata": current_task.metadata
-                })
-                return current_task
+                # 遍历生成的任务列表
+                for sub_idx, current_task in enumerate(tasks):
+                    # 设置 Data ID (基于 idx 和 sub_idx 保证唯一)
+                    # 格式: gen_intra_{批次ID}_{列表索引}
+                    data_id = f"gen_intra_{idx}_{sub_idx}"
+                    current_task.metadata["data_id"] = data_id
+                    
+                    debug_log(self._config, "evolution_trace", {
+                        "type": "intra_input",
+                        "data_id": data_id,
+                        "generated_task_query": current_task.query,
+                        "task_metadata": current_task.metadata
+                    })
+                    generated_tasks_list.append(current_task)
+                
+                return generated_tasks_list
+
             except Exception as e:
-                logger.error(f"[Intra-Gen] Error idx {idx}: {e}")
-                return None
+                logger.error(f"[Intra-Gen] Error idx {idx}: {e}", exc_info=True)
+                return []
+
+        def worker_generate_cross(self, idx: int, api_dict1: dict, api_dict2: dict, seed_task: Task) -> List[Task]:
+            """
+            [Mod] 现在处理并返回任务列表 List[Task]
+            """
+            generated_tasks_list = []
+            try:
+                # 准备种子任务
+                base_task = copy.deepcopy(seed_task)
+                if base_task.metadata is None: base_task.metadata = {}
+                base_task.metadata['thread_index'] = idx % self._num_exploration_threads
+                
+                # 调用生成器 (返回 List[Task])
+                tasks = self._exploration_strategy.generate_cross_task(api_dict1=api_dict1, api_dict2=api_dict2, task=base_task)
+                
+                if not tasks: 
+                    return []
+
+                # 遍历生成的任务列表
+                for sub_idx, current_task in enumerate(tasks):
+                    # 设置 Data ID
+                    # 格式: gen_cross_{批次ID}_{列表索引}
+                    data_id = f"gen_cross_{idx}_{sub_idx}"
+                    current_task.metadata["data_id"] = data_id
+
+                    debug_log(self._config, "evolution_trace", {
+                        "type": "cross_input",
+                        "data_id": data_id,
+                        "generated_task_query": current_task.query,
+                        "task_metadata": current_task.metadata
+                    })
+                    generated_tasks_list.append(current_task)
+
+                return generated_tasks_list
+
+            except Exception as e:
+                logger.error(f"[Cross-Gen] Error idx {idx}: {e}", exc_info=True)
+                return []
 
         def worker_explore_intra(task: Task) -> List[TaskObjective]:
             try:
@@ -352,30 +404,7 @@ class TaskManager(object):
             except Exception as e:
                 logger.error(f"[Intra-Explore] Error: {e}", exc_info=True)
                 return []
-
-        def worker_generate_cross(idx: int, api_dict1: dict, api_dict2: dict, seed_task: Task) -> Optional[Task]:
-            try:
-                current_task = copy.deepcopy(seed_task)
-                if current_task.metadata is None: current_task.metadata = {}
-                current_task.metadata['thread_index'] = idx % self._num_exploration_threads
-                
-                current_task = self._exploration_strategy.generate_cross_task(api_dict1=api_dict1, api_dict2=api_dict2, task=current_task)
-                if not current_task: return None
-
-                data_id = f"gen_cross_{idx}"
-                current_task.metadata["data_id"] = data_id
-
-                debug_log(self._config, "evolution_trace", {
-                    "type": "cross_input",
-                    "data_id": data_id,
-                    "generated_task_query": current_task.query,
-                    "task_metadata": current_task.metadata
-                })
-                return current_task
-            except Exception as e:
-                logger.error(f"[Cross-Gen] Error idx {idx}: {e}")
-                return None
-
+            
         def worker_explore_cross(task: Task) -> List[TaskObjective]:
             try:
                 data_id = task.metadata.get("data_id", f"unknown_{random.randint(0,1000)}")
@@ -449,13 +478,24 @@ class TaskManager(object):
             with ThreadPoolExecutor(max_workers=1 if debug_mode else self._num_exploration_threads) as pool:
                 futures = []
                 for idx in range(current_count, total_intra):
+                    # 防止 idx 越界 (如果 api_list 长度小于 total_intra)
+                    if idx >= len(api_list): 
+                        break
                     futures.append(pool.submit(worker_generate_intra, idx, api_list[idx], intra_task_pool[idx]))
                 
                 for f in tqdm(as_completed(futures), total=len(futures), desc="Intra Generation (Supplement)", disable=not show_progress):
-                    res = f.result()
-                    if res: 
-                        generated_intra_tasks.append(res)
-                        new_intra_tasks.append(res) # 记录新样本
+                    try:
+                        res = f.result()
+                        if res: 
+                            # [Mod] 兼容列表返回，进行平铺 (Flatten)
+                            if isinstance(res, list):
+                                generated_intra_tasks.extend(res)
+                                new_intra_tasks.extend(res)
+                            else:
+                                generated_intra_tasks.append(res)
+                                new_intra_tasks.append(res)
+                    except Exception as e:
+                        logger.error(f"[Intra-Gen] Future result error: {e}")
             
             save_intermediate_tasks(intra_gen_path, generated_intra_tasks)
         else:
@@ -576,13 +616,24 @@ class TaskManager(object):
             with ThreadPoolExecutor(max_workers=1 if debug_mode else self._num_exploration_threads) as pool:
                 futures = []
                 for idx in range(current_count, total_cross):
+                    # 防止 idx 越界
+                    if idx >= len(final_pair_data):
+                        break
                     futures.append(pool.submit(worker_generate_cross, idx, final_pair_data[idx][0], final_pair_data[idx][1], cross_task_pool[idx]))
                 
                 for f in tqdm(as_completed(futures), total=len(futures), desc="Cross Generation (Supplement)", disable=not show_progress):
-                    res = f.result()
-                    if res: 
-                        generated_cross_tasks.append(res)
-                        new_cross_tasks.append(res) # 记录新样本
+                    try:
+                        res = f.result()
+                        if res: 
+                            # [Mod] 兼容列表返回，进行平铺 (Flatten)
+                            if isinstance(res, list):
+                                generated_cross_tasks.extend(res)
+                                new_cross_tasks.extend(res)
+                            else:
+                                generated_cross_tasks.append(res)
+                                new_cross_tasks.append(res)
+                    except Exception as e:
+                         logger.error(f"[Cross-Gen] Future result error: {e}")
             
             save_intermediate_tasks(cross_gen_path, generated_cross_tasks)
         else:

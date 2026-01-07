@@ -5,7 +5,7 @@ import time
 import itertools
 import threading
 import copy
-from typing import List, Dict, Any, Optional, Set, Callable
+from typing import List, Dict, Any, Optional, Set, Callable, Union
 from types import SimpleNamespace
 
 from loguru import logger
@@ -256,123 +256,163 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
     #         }
     #     return task
     
-    def generate_intra_task(self, api_dict: dict = None, task: Task = None) -> Optional[Task]:
+    def generate_intra_task(self, api_data: Union[dict, List[dict]], task: Task = None) -> List[Task]:
         """
         生成单域探索任务：针对特定 App 的 API 生成 Prompt。
+        支持传入单个 api_dict 或 api_dict 列表。
+        返回生成的 Task 列表。
         """
-        # [Fix 1] 增加空值校验
-        if not api_dict:
-            logger.error("[Intra-Gen] api_dict is None or empty.")
-            return None
+        generated_tasks = []
 
-        # [Fix 2] 安全获取参数，防止 KeyError
-        target_app = api_dict.get("app_name", "UnknownApp")
+        # [Fix] 统一输入为列表处理
+        api_dict_list = api_data if isinstance(api_data, list) else [api_data]
+
+        for api_dict in api_dict_list:
+            # 1. 空值校验
+            if not api_dict:
+                logger.warning("[Intra-Gen] Encountered empty api_dict, skipping.")
+                continue
+
+            target_app = api_dict.get("app_name", "UnknownApp")
+            
+            # 2. 安全处理 API 列表转字符串
+            raw_api_list = api_dict.get("apis_name_list", [])
+            if isinstance(raw_api_list, list):
+                api_list_str = ",".join([str(x) for x in raw_api_list])
+            else:
+                api_list_str = str(raw_api_list)
+
+            logger.debug(f"[Intra-Gen] Preparing prompt for App: {target_app}")
+
+            # 3. Prompt 格式化 (带容错)
+            try:
+                prompt = INTRA_DOMAIN_PURPOSE_PROMPT.format(
+                    APP_NAME=target_app,
+                    API_LIST=api_list_str
+                )
+            except KeyError as e:
+                logger.warning(f"[Intra-Gen] .format() failed ({e}). Switching to .replace().")
+                prompt = INTRA_DOMAIN_PURPOSE_PROMPT.replace("{APP_NAME}", target_app).replace("{API_LIST}", api_list_str)
+            except Exception as e:
+                logger.error(f"[Intra-Gen] Prompt formatting critical error: {e}")
+                continue
+
+            # 4. 调用 LLM
+            try:
+                response = self._chat_with_retry(messages=[{"role": "user", "content": prompt}])
+            except Exception as e:
+                logger.error(f"[Intra-Gen] Chat API call failed for {target_app}: {e}")
+                continue
+
+            if not response: 
+                logger.warning(f"[Intra-Gen] No response from LLM for {target_app}")
+                continue
+
+            # 5. 解析结果 (现在返回的是 List[dict])
+            parsed_scenarios = parse_intra_purpose_from_response(response.content)
+
+            if not parsed_scenarios:
+                logger.warning(f"[Intra-Gen] Failed to parse JSON for app {target_app}")
+                continue
+            
+            # 6. 为每个场景生成独立的 Task 对象
+            for scenario in parsed_scenarios:
+                # 使用 deepcopy 避免修改原始模板，如果没有模板则新建
+                new_task = copy.deepcopy(task) if task else Task()
+                
+                new_task.query = scenario["user_query"]
+                new_task.metadata = {
+                    "phase": "intra", 
+                    "target_app": target_app,
+                    "app1_apis": list(api_dict.get("apis_name_list", [])),
+                    "origin_query": scenario["user_query"],
+                    "target_api": scenario["target_api"],
+                    "prompt": prompt,
+                }
+                generated_tasks.append(new_task)
+                
+            logger.info(f"[Intra-Gen] Generated {len(parsed_scenarios)} tasks for App: {target_app}")
+
+        return generated_tasks
+
+
+    def generate_cross_task(self, api_dict1: dict, api_dict2: dict, task: Task = None) -> List[Task]:
+        """
+        生成跨域探索任务：选择两个 App，合成跨应用场景。
+        返回 Task 列表 (因为 Prompt 现在一次生成多个场景)。
+        """
+        generated_tasks = []
+
+        # 基础校验
+        if not api_dict1 or not api_dict2:
+            logger.error("[Cross-Gen] One of the api_dicts is None.")
+            return []
+
+        app1_name = api_dict1.get("app_name", "App1")
+        app2_name = api_dict2.get("app_name", "App2")
         
-        # [Fix 3] 安全转换列表为字符串，防止列表元素非 String 导致的 TypeError
-        raw_api_list = api_dict.get("apis_name_list", [])
-        if isinstance(raw_api_list, list):
-            api_list_str = ",".join([str(x) for x in raw_api_list])
-        else:
-            api_list_str = str(raw_api_list)
+        # 安全转换 API List
+        apis1_str = ",".join(api_dict1.get("apis_name_list", []))
+        apis2_str = ",".join(api_dict2.get("apis_name_list", []))
 
-        # [Log] 打印调试信息，确认数据进入
-        logger.debug(f"[Intra-Gen] Preparing prompt for App: {target_app}, APIs: {api_list_str[:50]}...")
-
-        # [Fix 4] 核心修复：处理 .format() 可能遇到的 JSON 花括号冲突
+        # 1. Prompt 格式化 (带容错)
         try:
-            # 尝试标准 format
-            prompt = INTRA_DOMAIN_PURPOSE_PROMPT.format(
-                APP_NAME=target_app,
-                API_LIST=api_list_str
+            prompt = CROSS_DOMAIN_PURPOSE_PROMPT.format(
+                APP_NAME1=app1_name,
+                API_LIST1=apis1_str,
+                APP_NAME2=app2_name,
+                API_LIST2=apis2_str
             )
         except KeyError as e:
-            # 如果 Prompt 里有未转义的 JSON 花括号（如 {"a":1}），.format 会报 KeyError
-            # 此时降级使用 replace 策略，这是更稳健的做法
-            logger.warning(f"[Intra-Gen] .format() failed due to JSON braces conflict ({e}). Switching to .replace().")
-            prompt = INTRA_DOMAIN_PURPOSE_PROMPT.replace("{APP_NAME}", target_app).replace("{API_LIST}", api_list_str)
-        except Exception as e:
-            logger.error(f"[Intra-Gen] Prompt formatting critical error: {e}")
-            return None
+            logger.warning(f"[Cross-Gen] .format() failed ({e}). Switching to .replace().")
+            prompt = CROSS_DOMAIN_PURPOSE_PROMPT \
+                .replace("{APP_NAME1}", app1_name) \
+                .replace("{API_LIST1}", apis1_str) \
+                .replace("{APP_NAME2}", app2_name) \
+                .replace("{API_LIST2}", apis2_str)
 
-        # 调用 LLM
+        # 2. 调用 LLM
         try:
             response = self._chat_with_retry(messages=[{"role": "user", "content": prompt}])
         except Exception as e:
-            logger.error(f"[Intra-Gen] Chat API call failed: {e}")
-            return None
+            logger.error(f"[Cross-Gen] Chat API call failed: {e}")
+            return []
 
         if not response: 
-            logger.warning(f"[Intra-Gen] No response from LLM for {target_app}")
-            return None
-
-        # 解析结果
-        parsed_response = parse_intra_purpose_from_response(response.content)
-
-        if not parsed_response:
-            logger.warning(f"[Intra-Task] Failed to parse JSON for app {target_app}")
-            # 打印部分内容以便调试（截断防止日志爆炸）
-            logger.warning(f"[Intra-Task] Raw content: {response.content[:200]}...")
-            return None
+            return []
         
-        task.query = parsed_response["user_query"]
-        task.metadata = {
-                "phase": "intra", 
-                "target_app": target_app,
-                "app1_apis": list(api_dict["apis_name_list"]),
-                "origin_query": parsed_response["user_query"],
-                "target_api": parsed_response["target_api"],
-                "prompt": prompt,
-            }
-        logger.info(f"[Intra-Gen] Generated task for App: {target_app}, APIs: {api_list_str[:50]}, Query: {task.query}")
-        return task
-
-    def generate_cross_task(self, api_dict1: dict = None, api_dict2: dict = None, task: Task = None) -> Optional[Task]:
-        """
-        生成跨域探索任务：选择两个 App，合成跨应用场景。
-        """
-
-        # system_tools_hint = (
-        #     "Available System Tools:\n"
-        #     "- supervisor: Use to coordinate steps.\n"
-        #     f"- Context: You are exploring functionalities between {info_app_name} and {exec_app_name}."
-        # )
-
-        prompt = CROSS_DOMAIN_PURPOSE_PROMPT.format(
-            APP_NAME1=api_dict1["app_name"],
-            API_LIST1=",".join(api_dict1["apis_name_list"]),
-            APP_NAME2=api_dict2["app_name"],
-            API_LIST2=",".join(api_dict2["apis_name_list"])
-        )
-
-        response = self._chat_with_retry(
-            messages=[{"role": "user", "content": prompt}]
-        )
-
-        if not response: return None
-        
+        # 3. 解析结果 (返回 List[dict])
         try:
-            parsed_response = parse_cross_purpose_from_response(response.content)
-            user_query = parsed_response["user_query"]
-            source_info = parsed_response["source_info_api"]
-            target_action = parsed_response["target_action_api"]
+            parsed_scenarios = parse_cross_purpose_from_response(response.content)
         except Exception as e:
-            debug_log(self.config, "api_gen_cross_error", {"error": f"json_extract_failed: {e}", "content": response.content})
-            return None
-        
-        task.query = user_query
-        task.metadata = {
-                "phase": "extra",
-                "app1": api_dict1["app_name"],
-                "app2": api_dict2["app_name"],
-                "app1_apis": list(api_dict1["apis_name_list"]),
-                "app2_apis": list(api_dict2["apis_name_list"]),
-                "origin_query": parsed_response["user_query"],
-                "source_api" : source_info,
-                "target_api": target_action,
+            logger.error(f"[Cross-Gen] JSON parse logic error: {e}")
+            return []
+
+        if not parsed_scenarios:
+            logger.warning(f"[Cross-Gen] No valid scenarios parsed for {app1_name} <-> {app2_name}")
+            return []
+
+        # 4. 构建 Task 列表
+        for scenario in parsed_scenarios:
+            new_task = copy.deepcopy(task) if task else Task()
+            
+            new_task.query = scenario["user_query"]
+            new_task.metadata = {
+                "phase": "extra", # 注意：你之前的代码是 extra，如果是跨域通常叫 cross 或 inter
+                "app1": app1_name,
+                "app2": app2_name,
+                "app1_apis": list(api_dict1.get("apis_name_list", [])),
+                "app2_apis": list(api_dict2.get("apis_name_list", [])),
+                "origin_query": scenario["user_query"],
+                "source_api" : scenario["source_info_api"],
+                "target_api": scenario["target_action_api"],
+                "logic_pattern": scenario.get("logic_pattern", "Unknown"),
                 "prompt": prompt,
             }
-        logger.info(f"[Intra-Gen] Generated task for App: {api_dict2['app_name']}, APIs: {','.join(api_dict2['apis_name_list'])[:50]}, Query: {task.query}")
-        return task
+            generated_tasks.append(new_task)
+
+        logger.info(f"[Cross-Gen] Generated {len(generated_tasks)} tasks for {app1_name} <-> {app2_name}")
+        return generated_tasks
 
     # ================= 阶段总结逻辑 (Summarize) =================
 

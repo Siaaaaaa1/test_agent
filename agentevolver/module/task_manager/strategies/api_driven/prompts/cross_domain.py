@@ -75,51 +75,6 @@ import re
 # APIs: {API_LIST2}
 # """
 
-CROSS_DOMAIN_PURPOSE_PROMPT = """
-You are an expert Data Synthetic Generator for **Cross-App Automation**.
-Create a realistic, logically robust user command bridging two apps using their APIs. Ensure the connection is **Logically Valid** and **Data-Type Compatible**.
-
-### 🚫 STRICT Constraints
-1.  **Source Uncertainty (Black Box):** Do NOT assume specific data exists. Use queries that imply **retrieval**.
-    * *Bad:* "Take the song 'Hello'..." (Assumes existence).
-    * *Good:* "Find the song I last liked..." (Discovery driven).
-2.  **No "Magic" ID Jumps:** Source Names are NOT valid Target IDs. Logic must imply a **Search** step.
-    * *Bad:* "Get song name -> Add to Amazon Cart." (Missing ID).
-    * *Good:* "Get song name -> **Search it** on Amazon -> Add result to Cart."
-3.  **Type & Semantic Safety:** Do NOT mix Text with Files (e.g., don't "attach" a string). Ensure extracted data logically fits the Target action.
-4.  **Fuzzy Connection:** Connections should be semantic.
-    * *Ex:* "Read note content -> Search Amazon for *keywords* found in it."
-
-### ✅ Logic Patterns
-1.  **Search & Act:** Source gives Name -> Target **Searches** Name -> Act.
-2.  **Notification:** Source gives Content -> Target sends to Contact.
-3.  **Record Keeping:** Source gives Transaction -> Target logs it.
-4.  **File Management:** Source gives File -> Target saves/uploads it.
-
-### Task
-Select ONE compatible API from Source and Target. Construct a natural user query.
-
-### Few-Shot Examples
-**Ex 1:** Find the total cost of my most recent Amazon order and request that amount from a friend on Venmo.
-**Ex 2:** Search my recent emails for song names and create a new Spotify playlist with them.
-**Ex 3:** Get the list of tracks from my 'Favorites' on Spotify and save the titles to a text file.
-**Ex 4:** Retrieve my last Venmo payment description and create a Simple Note with that title.
-
-### Output Format (JSON Only)
-{{
-    "user_query": "Natural language instruction",
-    "source_info_api": "API name from App 1",
-    "target_action_api": "API name from App 2",
-    "logic_pattern": "Pattern Name"
-}}
-
-### Input Data
-App 1 (Source): {APP_NAME1}
-APIs: {API_LIST1}
-
-App 2 (Target): {APP_NAME2}
-APIs: {API_LIST2}
-"""
 
 # CROSS_DOMAIN_PURPOSE_PROMPT = """
 # You are an expert data generator creating Cross-App Automation training data for an AI Agent.
@@ -228,42 +183,126 @@ APIs: {API_LIST2}
 # [{API_LIST2}]
 # """
 
-def parse_cross_purpose_from_response(response_text: str) -> dict:
+CROSS_DOMAIN_PURPOSE_PROMPT = """
+You are an expert Data Synthetic Generator for **Cross-App Automation**.
+Create a realistic, logically robust user command bridging two apps using their APIs. Ensure the connection is **Logically Valid** and **Data-Type Compatible**.
+
+### 🚫 STRICT Constraints
+1.  **Source Uncertainty (Black Box):** Do NOT assume specific data exists. Use queries that imply **retrieval**.
+    * *Bad:* "Take the song 'Hello'..." (Assumes existence).
+    * *Good:* "Find the song I last liked..." (Discovery driven).
+2.  **No "Magic" ID Jumps:** Source Names are NOT valid Target IDs. Logic must imply a **Search** step.
+    * *Bad:* "Get song name -> Add to Amazon Cart." (Missing ID).
+    * *Good:* "Get song name -> **Search it** on Amazon -> Add result to Cart."
+3.  **Type & Semantic Safety:** Do NOT mix Text with Files (e.g., don't "attach" a string). Ensure extracted data logically fits the Target action.
+4.  **Fuzzy Connection:** Connections should be semantic.
+    * *Ex:* "Read note content -> Search Amazon for *keywords* found in it."
+
+### ✅ Logic Patterns
+1.  **Search & Act:** Source gives Name -> Target **Searches** Name -> Act.
+2.  **Notification:** Source gives Content -> Target sends to Contact.
+3.  **Record Keeping:** Source gives Transaction -> Target logs it.
+4.  **File Management:** Source gives File -> Target saves/uploads it.
+
+### Task
+Select compatible APIs from Source and Target. **Generate 3 distinct user scenarios.** Construct natural user queries for each.
+
+### Few-Shot Examples
+**Ex 1:** Find the total cost of my most recent Amazon order and request that amount from a friend on Venmo.
+**Ex 2:** Search my recent emails for song names and create a new Spotify playlist with them.
+**Ex 3:** Get the list of tracks from my 'Favorites' on Spotify and save the titles to a text file.
+**Ex 4:** Retrieve my last Venmo payment description and create a Simple Note with that title.
+
+### Output Format (JSON Only)
+[
+    {{
+        "user_query": "Natural language instruction 1",
+        "source_info_api": "API name from App 1",
+        "target_action_api": "API name from App 2",
+        "logic_pattern": "Pattern Name"
+    }},
+    {{
+        "user_query": "Natural language instruction 2",
+        "source_info_api": "API name from App 1",
+        "target_action_api": "API name from App 2",
+        "logic_pattern": "Pattern Name"
+    }},
+    {{
+        "user_query": "Natural language instruction 3",
+        "source_info_api": "API name from App 1",
+        "target_action_api": "API name from App 2",
+        "logic_pattern": "Pattern Name"
+    }}
+]
+
+### Input Data
+App 1 (Source): {APP_NAME1}
+APIs: {API_LIST1}
+
+App 2 (Target): {APP_NAME2}
+APIs: {API_LIST2}
+"""
+
+
+import json
+import re
+
+def parse_cross_purpose_from_response(response_text: str) -> list:
+    """
+    解析 LLM 返回的 JSON 列表字符串，返回 Python list[dict]。
+    如果解析失败或没有有效数据，返回空列表 []。
+    """
     try:
         content = response_text.strip()
         
-        # 1. [新增] 尝试移除 Markdown 代码块标记 ```json ... ```
+        # 1. [尝试移除 Markdown 代码块]
+        # 兼容 ```json [ ... ] ``` 或 ``` [ ... ] ```
         if "```" in content:
-            pattern = r"```(?:json)?\s*(\{.*?\})\s*```"
+            pattern = r"```(?:json)?\s*(\[.*?\])\s*```"
             match = re.search(pattern, content, re.DOTALL)
             if match:
                 content = match.group(1)
         
-        # 2. [优化] 正则提取最外层的 JSON 对象（使用非贪婪匹配 .*?）
-        match = re.search(r'(\{.*?\})', content, re.DOTALL)
+        # 2. [正则提取最外层的 JSON 列表]
+        # 查找以 [ 开头，以 ] 结尾的内容
+        match = re.search(r'(\[.*\])', content, re.DOTALL)
         
         if match:
             json_str = match.group(1)
         else:
+            # 如果正则没匹配到，尝试直接解析原文本（防止没写中括号但本身就是JSON）
             json_str = content
 
-        data = json.loads(json_str)
+        parsed_data = json.loads(json_str)
 
+        # 3. [类型检查] 确保解析出来的是列表
+        if not isinstance(parsed_data, list):
+            print(f"[Parse Warning] 期望得到 list，但得到了 {type(parsed_data)}")
+            # 如果模型偶尔只返回了一个 dict，可以尝试在这里做一层兼容： return [parsed_data]
+            return []
+
+        # 4. [字段校验] 遍历 List，筛选有效项
+        valid_items = []
         required_keys = ["user_query", "source_info_api", "target_action_api"]
-        missing_keys = [k for k in required_keys if k not in data]
         
-        # [优化] 缺少 Key 时返回 None，而不是返回不完整的字典
-        if missing_keys:
-            print(f"[Parse Warning] 跨域结果缺少必要字段: {missing_keys}")
-            # print(f"--> 原文片段: {content[:100]}...")
-            return None
+        for index, item in enumerate(parsed_data):
+            if not isinstance(item, dict):
+                continue
+                
+            missing_keys = [k for k in required_keys if k not in item]
             
-        return data
+            if missing_keys:
+                print(f"[Parse Warning] 第 {index+1} 项缺少必要字段: {missing_keys}")
+                continue
+            
+            valid_items.append(item)
+            
+        return valid_items
 
     except json.JSONDecodeError as e:
         print(f"[Parse Error] JSON 解码失败: {e}")
         # print(f"--> 原始文本: {response_text}") 
-        return None
+        return []
     except Exception as e:
         print(f"[Parse Error] 未知错误: {e}")
-        return None
+        return []
