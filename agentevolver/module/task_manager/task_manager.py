@@ -430,11 +430,21 @@ class TaskManager(object):
         api_knowledge = getattr(self._exploration_strategy, 'api_knowledge', {})
         active_apps_set = getattr(self._exploration_strategy, 'active_apps', set(api_knowledge.keys()))
 
-        # =================================================================
-        # PART 1: INTRA-DOMAIN (生成 -> 过滤 -> 探索)
-        # =================================================================
+        # 定义文件路径模板
+        intra_gen_path = f"{resume_file}.intra.generated.json"
+        intra_filtered_path = f"{resume_file}.intra.filtered.json"
+        intra_final_path = f"{resume_file}.intra.json"
         
-        # 1.1 准备 API 组合
+        cross_gen_path = f"{resume_file}.cross.generated.json"
+        cross_filtered_path = f"{resume_file}.cross.filtered.json"
+        cross_final_path = f"{resume_file}.extra.json"
+
+        # =================================================================
+        # PART 1: INTRA-DOMAIN (生成 -> 过滤)
+        # =================================================================
+        logger.info("=== Starting PART 1: Intra-Domain Generation & Filtering ===")
+        
+        # 1.1 准备 Intra API 组合
         api_list = []
         for app_name in sorted(active_apps_set):
             if app_name not in api_knowledge: continue
@@ -450,25 +460,21 @@ class TaskManager(object):
         intra_task_pool = list(copy.copy(tasks)) * a
         if debug_mode: intra_task_pool = intra_task_pool[:1]
 
-        target_len = len(intra_task_pool)
+        target_len_intra = len(intra_task_pool)
         
-        if len(api_list) > 0 and target_len > 0:
-            repeat_factor = (target_len // len(api_list)) + 1
-            api_list = (api_list * repeat_factor)[:target_len]
+        if len(api_list) > 0 and target_len_intra > 0:
+            repeat_factor = (target_len_intra // len(api_list)) + 1
+            api_list = (api_list * repeat_factor)[:target_len_intra]
         else:
-            target_len = 0
-        total_intra = target_len
+            target_len_intra = 0
+        total_intra = target_len_intra
         
-        intra_gen_path = f"{resume_file}.intra.generated.json"
-        intra_filtered_path = f"{resume_file}.intra.filtered.json"
-        intra_final_path = f"{resume_file}.intra.json"
-
-        # --- Step 1: Intra Generation (增量生成) ---
+        # --- Step 1.1: Intra Generation (增量生成) ---
         generated_intra_tasks = load_intermediate_tasks(intra_gen_path)
         if generated_intra_tasks is None:
             generated_intra_tasks = []
 
-        new_intra_tasks = [] # 用于记录本轮新生成的样本
+        new_intra_tasks = [] 
 
         current_count = len(generated_intra_tasks)
         if current_count < total_intra:
@@ -478,16 +484,13 @@ class TaskManager(object):
             with ThreadPoolExecutor(max_workers=1 if debug_mode else self._num_exploration_threads) as pool:
                 futures = []
                 for idx in range(current_count, total_intra):
-                    # 防止 idx 越界 (如果 api_list 长度小于 total_intra)
-                    if idx >= len(api_list): 
-                        break
+                    if idx >= len(api_list): break
                     futures.append(pool.submit(worker_generate_intra, idx, api_list[idx], intra_task_pool[idx]))
                 
-                for f in tqdm(as_completed(futures), total=len(futures), desc="Intra Generation (Supplement)", disable=not show_progress):
+                for f in tqdm(as_completed(futures), total=len(futures), desc="Intra Generation", disable=not show_progress):
                     try:
                         res = f.result()
                         if res: 
-                            # [Mod] 兼容列表返回，进行平铺 (Flatten)
                             if isinstance(res, list):
                                 generated_intra_tasks.extend(res)
                                 new_intra_tasks.extend(res)
@@ -496,76 +499,36 @@ class TaskManager(object):
                                 new_intra_tasks.append(res)
                     except Exception as e:
                         logger.error(f"[Intra-Gen] Future result error: {e}")
-            
             save_intermediate_tasks(intra_gen_path, generated_intra_tasks)
         else:
             logger.info(f"[Intra-Gen] Skipped (Loaded {current_count}/{total_intra} from Checkpoint)")
 
-        # --- Step 2: Intra Filtering (增量过滤) ---
+        # --- Step 1.2: Intra Filtering (增量过滤) ---
         filtered_intra_tasks = load_intermediate_tasks(intra_filtered_path)
         
-        # 情况 A: 没有过滤文件 -> 使用全量 generated 任务进行过滤
         if filtered_intra_tasks is None:
-            logger.info(f"[Intra-Filter] No previous filter file found. Filtering all {len(generated_intra_tasks)} tasks...")
+            logger.info(f"[Intra-Filter] Filtering all {len(generated_intra_tasks)} tasks...")
             filtered_intra_tasks = generated_intra_tasks
             for f_filter in self.api_llm_pre_filter:
                 filtered_intra_tasks = f_filter.filter(filtered_intra_tasks)
-            
             save_intermediate_tasks(intra_filtered_path, filtered_intra_tasks)
-        
-        # 情况 B: 有过滤文件，且本轮有新生成的样本 -> 只过滤新样本并追加
         elif len(new_intra_tasks) > 0:
-            logger.info(f"[Intra-Filter] Found {len(new_intra_tasks)} newly generated tasks. Applying filter to new tasks only...")
-            
+            logger.info(f"[Intra-Filter] Filtering {len(new_intra_tasks)} NEW tasks only...")
             tasks_to_filter = new_intra_tasks
             for f_filter in self.api_llm_pre_filter:
                 tasks_to_filter = f_filter.filter(tasks_to_filter)
-            
-            logger.info(f"[Intra-Filter] {len(new_intra_tasks)} new tasks -> {len(tasks_to_filter)} passed filter.")
-            
-            # 追加到原有结果中
             filtered_intra_tasks.extend(tasks_to_filter)
-            logger.info(f"[Intra-Filter] Updated total filtered tasks: {len(filtered_intra_tasks)}")
-            
             save_intermediate_tasks(intra_filtered_path, filtered_intra_tasks)
-            
-        # 情况 C: 有过滤文件且无新样本 -> 跳过
         else:
-            logger.info("[Intra-Filter] Skipped (Loaded from Checkpoint & No new tasks generated)")
-
-
-        # --- Step 3: Intra Exploration ---
-        intra_res = []
-        if os.path.exists(intra_final_path):
-            try:
-                with open(intra_final_path, 'r') as f:
-                    cp = json.load(f)
-                    intra_res = [TaskObjective.parse_raw(json.dumps(obj)) for obj in cp.get('results', [])]
-                    logger.info(f"[Intra-Explore] Loaded {len(intra_res)} objectives from checkpoint.")
-            except Exception: pass
-
-        if not intra_res and filtered_intra_tasks:
-            logger.info(f"[Intra-Explore] Exploring {len(filtered_intra_tasks)} tasks...")
-            batch_res = []
-            with ThreadPoolExecutor(max_workers=1 if debug_mode else self._num_exploration_threads) as pool:
-                futures = {pool.submit(worker_explore_intra, t): i for i, t in enumerate(filtered_intra_tasks)}
-                for future in tqdm(as_completed(futures), total=len(futures), desc="Intra Exploration", disable=not show_progress):
-                    try:
-                        objs = future.result()
-                        filtered_objs = functools.reduce(lambda x, f: f.filter(x), self._realtime_filters, objs)
-                        batch_res.extend(filtered_objs)
-                    except Exception as e:
-                        logger.error(f"Error in exploration future: {e}")
-            intra_res = batch_res
-            self._save_checkpoint(intra_final_path, intra_res, set(range(len(filtered_intra_tasks))), len(filtered_intra_tasks), current_tasks_hash)
-
-        logger.info(f"[Intra-Domain] Completed. Collected {len(intra_res)} objectives.")
+            logger.info("[Intra-Filter] Skipped (Loaded from Checkpoint)")
 
 
         # =================================================================
-        # PART 2: CROSS-DOMAIN (生成 -> 过滤 -> 探索)
+        # PART 2: CROSS-DOMAIN (生成 -> 过滤)
         # =================================================================
-        
+        logger.info("=== Starting PART 2: Cross-Domain Generation & Filtering ===")
+
+        # 2.1 准备 Cross API 组合
         valid_apps_list = [app for app in sorted(active_apps_set) if app in api_knowledge and api_knowledge[app].get("apis")]
         final_pair_data = []
         for app_name_a in valid_apps_list:
@@ -596,17 +559,13 @@ class TaskManager(object):
         else:
             target_len_cross = 0
         total_cross = target_len_cross
-        
-        cross_gen_path = f"{resume_file}.cross.generated.json"
-        cross_filtered_path = f"{resume_file}.cross.filtered.json"
-        cross_final_path = f"{resume_file}.extra.json"
 
-        # --- Step 1: Cross Generation (增量生成) ---
+        # --- Step 2.1: Cross Generation (增量生成) ---
         generated_cross_tasks = load_intermediate_tasks(cross_gen_path)
         if generated_cross_tasks is None:
             generated_cross_tasks = []
         
-        new_cross_tasks = [] # 记录新样本
+        new_cross_tasks = [] 
 
         current_count = len(generated_cross_tasks)
         if current_count < total_cross:
@@ -616,16 +575,13 @@ class TaskManager(object):
             with ThreadPoolExecutor(max_workers=1 if debug_mode else self._num_exploration_threads) as pool:
                 futures = []
                 for idx in range(current_count, total_cross):
-                    # 防止 idx 越界
-                    if idx >= len(final_pair_data):
-                        break
+                    if idx >= len(final_pair_data): break
                     futures.append(pool.submit(worker_generate_cross, idx, final_pair_data[idx][0], final_pair_data[idx][1], cross_task_pool[idx]))
                 
-                for f in tqdm(as_completed(futures), total=len(futures), desc="Cross Generation (Supplement)", disable=not show_progress):
+                for f in tqdm(as_completed(futures), total=len(futures), desc="Cross Generation", disable=not show_progress):
                     try:
                         res = f.result()
                         if res: 
-                            # [Mod] 兼容列表返回，进行平铺 (Flatten)
                             if isinstance(res, list):
                                 generated_cross_tasks.extend(res)
                                 new_cross_tasks.extend(res)
@@ -634,43 +590,71 @@ class TaskManager(object):
                                 new_cross_tasks.append(res)
                     except Exception as e:
                          logger.error(f"[Cross-Gen] Future result error: {e}")
-            
             save_intermediate_tasks(cross_gen_path, generated_cross_tasks)
         else:
             logger.info(f"[Cross-Gen] Skipped (Loaded {current_count}/{total_cross} from Checkpoint)")
 
-        # --- Step 2: Cross Filtering (增量过滤) ---
+        # --- Step 2.2: Cross Filtering (增量过滤) ---
         filtered_cross_tasks = load_intermediate_tasks(cross_filtered_path)
         
-        # 情况 A: 没有过滤文件 -> 全量过滤
         if filtered_cross_tasks is None:
-            logger.info(f"[Cross-Filter] No previous filter file found. Filtering all {len(generated_cross_tasks)} tasks...")
+            logger.info(f"[Cross-Filter] Filtering all {len(generated_cross_tasks)} tasks...")
             filtered_cross_tasks = generated_cross_tasks
             for f_filter in self.api_llm_pre_filter:
                 filtered_cross_tasks = f_filter.filter(filtered_cross_tasks)
             save_intermediate_tasks(cross_filtered_path, filtered_cross_tasks)
-            
-        # 情况 B: 有过滤文件，且有新样本 -> 过滤新样本并追加
         elif len(new_cross_tasks) > 0:
-            logger.info(f"[Cross-Filter] Found {len(new_cross_tasks)} newly generated tasks. Applying filter to new tasks only...")
-            
+            logger.info(f"[Cross-Filter] Filtering {len(new_cross_tasks)} NEW tasks only...")
             tasks_to_filter = new_cross_tasks
             for f_filter in self.api_llm_pre_filter:
                 tasks_to_filter = f_filter.filter(tasks_to_filter)
-                
-            logger.info(f"[Cross-Filter] {len(new_cross_tasks)} new tasks -> {len(tasks_to_filter)} passed filter.")
-            
             filtered_cross_tasks.extend(tasks_to_filter)
-            logger.info(f"[Cross-Filter] Updated total filtered tasks: {len(filtered_cross_tasks)}")
-            
             save_intermediate_tasks(cross_filtered_path, filtered_cross_tasks)
-            
-        # 情况 C: 有文件且无新样本 -> 跳过
         else:
-            logger.info("[Cross-Filter] Skipped (Loaded from Checkpoint & No new tasks generated)")
+            logger.info("[Cross-Filter] Skipped (Loaded from Checkpoint)")
 
-        # --- Step 3: Cross Exploration ---
+
+        # =================================================================
+        # PART 3: INTRA-DOMAIN (探索)
+        # =================================================================
+        logger.info("=== Starting PART 3: Intra-Domain Exploration ===")
+        
+        intra_res = []
+        # 尝试加载最终结果
+        if os.path.exists(intra_final_path):
+            try:
+                with open(intra_final_path, 'r') as f:
+                    cp = json.load(f)
+                    intra_res = [TaskObjective.parse_raw(json.dumps(obj)) for obj in cp.get('results', [])]
+                    logger.info(f"[Intra-Explore] Loaded {len(intra_res)} objectives from checkpoint.")
+            except Exception: pass
+
+        # 如果没有结果，但有过滤后的任务，开始探索
+        if not intra_res and filtered_intra_tasks:
+            logger.info(f"[Intra-Explore] Exploring {len(filtered_intra_tasks)} tasks...")
+            batch_res = []
+            with ThreadPoolExecutor(max_workers=1 if debug_mode else self._num_exploration_threads) as pool:
+                futures = {pool.submit(worker_explore_intra, t): i for i, t in enumerate(filtered_intra_tasks)}
+                for future in tqdm(as_completed(futures), total=len(futures), desc="Intra Exploration", disable=not show_progress):
+                    try:
+                        objs = future.result()
+                        filtered_objs = functools.reduce(lambda x, f: f.filter(x), self._realtime_filters, objs)
+                        batch_res.extend(filtered_objs)
+                    except Exception as e:
+                        logger.error(f"Error in exploration future: {e}")
+            intra_res = batch_res
+            self._save_checkpoint(intra_final_path, intra_res, set(range(len(filtered_intra_tasks))), len(filtered_intra_tasks), current_tasks_hash)
+
+        logger.info(f"[Intra-Domain] Completed. Collected {len(intra_res)} objectives.")
+
+
+        # =================================================================
+        # PART 4: CROSS-DOMAIN (探索)
+        # =================================================================
+        logger.info("=== Starting PART 4: Cross-Domain Exploration ===")
+
         cross_res = []
+        # 尝试加载最终结果
         if os.path.exists(cross_final_path):
             try:
                 with open(cross_final_path, 'r') as f:
@@ -679,6 +663,7 @@ class TaskManager(object):
                     logger.info(f"[Cross-Explore] Loaded {len(cross_res)} objectives from checkpoint.")
             except Exception: pass
 
+        # 如果没有结果，但有过滤后的任务，开始探索
         if not cross_res and filtered_cross_tasks:
             logger.info(f"[Cross-Explore] Exploring {len(filtered_cross_tasks)} tasks...")
             batch_res = []
@@ -695,6 +680,7 @@ class TaskManager(object):
             self._save_checkpoint(cross_final_path, cross_res, set(range(len(filtered_cross_tasks))), len(filtered_cross_tasks), current_tasks_hash)
 
         logger.info(f"[Cross-Domain] Completed. Collected {len(cross_res)} objectives.")
+
 
         # =================================================================
         # Final Merge
