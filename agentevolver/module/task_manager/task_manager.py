@@ -457,7 +457,7 @@ class TaskManager(object):
                 api_list.append({"app_name":app_name, "apis_name_list":this_turn_apis})
 
         random.shuffle(api_list)
-        intra_task_pool = list(copy.copy(tasks)) * a
+        intra_task_pool = (list(copy.copy(tasks)) * int(a + 1))[:int(len(tasks) * a)]
         if debug_mode: intra_task_pool = intra_task_pool[:1]
 
         target_len_intra = len(intra_task_pool)
@@ -548,7 +548,7 @@ class TaskManager(object):
                 ])
 
         random.shuffle(final_pair_data)
-        cross_task_pool = list(copy.copy(tasks)) * b
+        cross_task_pool = (list(copy.copy(tasks)) * int(b + 1))[:int(len(tasks) * b)]
         if debug_mode: cross_task_pool = cross_task_pool[:1]
 
         target_len_cross = len(cross_task_pool)
