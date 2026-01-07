@@ -106,19 +106,19 @@ Task Query: "{query}"
     * *Good (Clear Intent):* "Help me pick a highly-rated cooling fan suitable for a desktop on Amazon." (Delegates filtering to the Agent.)
     * *Good (Functional Constraint):* "Update my account name to 'Jane Smith'."
 
-### Automatic FAIL Triggers (Immediate False):
-1.  **Hallucinated Constraints:** Contains internal IDs, hashes, or overly precise unnecessary values unknown to the user (e.g., "Buy item with ID 83920").
-2.  **Too Trivial:** Extremely simple parameter-less operations (e.g., "Click Confirm").
-3.  **Impossible Logic:** Asks the Agent to access physical world objects or private states outside its permissions.
-4.  **Refusals/Non-commands:** "I can't do that", "Hello", etc.
-
-### Decision Logic:
-- If the query has clear intent, reasonable parameters, and is actionable by the Agent in an unknown environment -> True.
-- If the query relies on the user guessing the environment state (e.g., guessing a specific price or specific stock count) or is too vague -> False.
-
 Is this a high-quality query?
 Return strictly in this format: <answer>True</answer> or <answer>False</answer>
 """
+        
+# ### Automatic FAIL Triggers (Immediate False):
+# 1.  **Hallucinated Constraints:** Contains internal IDs, hashes, or overly precise unnecessary values unknown to the user (e.g., "Buy item with ID 83920").
+# 2.  **Too Trivial:** Extremely simple parameter-less operations (e.g., "Click Confirm").
+# 3.  **Impossible Logic:** Asks the Agent to access physical world objects or private states outside its permissions.
+# 4.  **Refusals/Non-commands:** "I can't do that", "Hello", etc.
+
+# ### Decision Logic:
+# - If the query has clear intent, reasonable parameters, and is actionable by the Agent in an unknown environment -> True.
+# - If the query relies on the user guessing the environment state (e.g., guessing a specific price or specific stock count) or is too vague -> False.
         return [{"role": "user", "content": content}]
 
     def _parse_response(self, content: str) -> bool:
