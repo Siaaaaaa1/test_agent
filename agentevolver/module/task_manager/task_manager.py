@@ -481,7 +481,7 @@ class TaskManager(object):
                     # 防止 idx 越界 (如果 api_list 长度小于 total_intra)
                     if idx >= len(api_list): 
                         break
-                    futures.append(pool.submit(worker_generate_intra, idx, api_list[idx], intra_task_pool[idx]))
+                    futures.append(pool.submit(self.worker_generate_intra, idx, api_list[idx], intra_task_pool[idx]))
                 
                 for f in tqdm(as_completed(futures), total=len(futures), desc="Intra Generation (Supplement)", disable=not show_progress):
                     try:
@@ -619,7 +619,7 @@ class TaskManager(object):
                     # 防止 idx 越界
                     if idx >= len(final_pair_data):
                         break
-                    futures.append(pool.submit(worker_generate_cross, idx, final_pair_data[idx][0], final_pair_data[idx][1], cross_task_pool[idx]))
+                    futures.append(pool.submit(self.worker_generate_cross, idx, final_pair_data[idx][0], final_pair_data[idx][1], cross_task_pool[idx]))
                 
                 for f in tqdm(as_completed(futures), total=len(futures), desc="Cross Generation (Supplement)", disable=not show_progress):
                     try:
