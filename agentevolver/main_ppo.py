@@ -296,7 +296,7 @@ class TaskRunner:
                 use_original=config.task_manager.mixture.use_original_tasks,
                 synthetic_ratio=config.task_manager.mixture.synthetic_data_ratio,
                 shuffle=config.task_manager.mixture.shuffle,
-                seed=42,
+                seed=seed,
             ),
             reward_config=config.task_manager.grader,
             tokenizer=tokenizer,

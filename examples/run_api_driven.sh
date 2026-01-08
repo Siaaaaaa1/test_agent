@@ -121,6 +121,7 @@ python3 -m agentevolver.main_ppo \
     task_manager.exploration_strategy_args.active_apps="['amazon','gmail','spotify','venmo','simple_note','todoist','splitwise','phone','file_system']" \
     task_manager.exploration_strategy_args.task_labels_path="./environments/appworld/data/datasets/train.jsonl" \
     debug_log=True \
+    seed=1 \
     2>&1 | tee "$log_file"
 
 # 脚本底部的 kill 不需要了，因为 trap 会自动处理

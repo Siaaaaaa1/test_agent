@@ -7,3 +7,5 @@ defaults:
   - ppo_trainer
   - agentevolver
   - _self_
+
+seed: 42
