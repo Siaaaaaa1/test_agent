@@ -38,6 +38,46 @@ from agentevolver.utils.debug_utils import debug_log
 from agentevolver.module.task_manager.filters.api_llm_pre_filter import LlmQualityPreFilter
 
 # --- 类型定义 ---
+LEVEL_WEIGHTS = {
+    "Very High": 10.0,
+    "High": 5.0,
+    "Medium": 2.0,
+    "Low": 1.0,
+    "Very Low": 0.5,
+}
+
+def get_weighted_api_sample(api_dict, k=5):
+    """
+    基于 Generality 等级进行加权无放回采样
+    """
+    apis = list(api_dict.values())
+    if len(apis) <= k:
+        return apis
+
+    # 计算每个 API 的权重
+    weights = []
+    for api in apis:
+        assessment = api.get("generality_assessment", {})
+        level = assessment.get("generality_level", "Unknown")
+        # 获取权重，如果 LLM 返回了不在表里的字符串，默认给个中等权重或保底
+        w = LEVEL_WEIGHTS.get(level, 1.0)
+        weights.append(w)
+
+    # 执行加权无放回采样
+    # 原理：利用 random.choices 依次选出不重复的元素
+    sampled_apis = []
+    available_apis = apis[:]
+    available_weights = weights[:]
+
+    for _ in range(k):
+        if not available_apis:
+            break
+        # 选出一个索引
+        choice_idx = random.choices(range(len(available_apis)), weights=available_weights, k=1)[0]
+        sampled_apis.append(available_apis.pop(choice_idx))
+        available_weights.pop(choice_idx)
+    
+    return sampled_apis
 
 class TaskManagerProps(TypedDict):
     """TaskManager 的可选配置参数"""
@@ -531,22 +571,28 @@ class TaskManager(object):
         # 2.1 准备 Cross API 组合
         valid_apps_list = [app for app in sorted(active_apps_set) if app in api_knowledge and api_knowledge[app].get("apis")]
         final_pair_data = []
+
         for app_name_a in valid_apps_list:
-            apis_a_all = api_knowledge[app_name_a].get("apis", [])
+            apis_a_all = api_knowledge[app_name_a].get("apis", {})
             other_apps = [x for x in valid_apps_list if x != app_name_a]
             if not other_apps: continue
+            
             random.shuffle(other_apps)
             loop_count = max(len(apis_a_all), len(other_apps))
+            
             for i in range(loop_count):
                 app_name_b = other_apps[i % len(other_apps)]
-                apis_b_all = api_knowledge[app_name_b].get("apis", [])
-                s_a = random.sample(list(apis_a_all.values()), min(len(apis_a_all), 5))
-                s_b = random.sample(list(apis_b_all.values()), min(len(apis_b_all), 5))
+                apis_b_all = api_knowledge[app_name_b].get("apis", {})
+                
+                # 使用加权采样替代原来的 random.sample
+                s_a = get_weighted_api_sample(apis_a_all, k=5)
+                s_b = get_weighted_api_sample(apis_b_all, k=5)
+                
                 final_pair_data.append([
                     {"app_name": app_name_a, "apis_name_list": [x["call_name"] for x in s_a]},
                     {"app_name": app_name_b, "apis_name_list": [x["call_name"] for x in s_b]}
                 ])
-
+                
         random.shuffle(final_pair_data)
         cross_task_pool = (list(copy.copy(tasks)) * int(b + 1))[:int(len(tasks) * b)]
         if debug_mode: cross_task_pool = cross_task_pool[:1]
