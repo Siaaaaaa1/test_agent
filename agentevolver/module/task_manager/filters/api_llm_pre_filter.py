@@ -107,8 +107,8 @@ class LlmQualityPreFilter:
             # 将当前 Task 转为字典并追加
             # 优先检查是否有 to_dict 方法，否则使用 __dict__
             simple_task_info = {
-                "query": task.query,
-                "data_id": task.metadata.data_id
+                "query": task['query'],
+                "data_id": task['metadata']['data_id']
             }
             data_list.append(simple_task_info)
 
