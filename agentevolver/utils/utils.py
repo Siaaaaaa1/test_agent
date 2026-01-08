@@ -192,3 +192,22 @@ def extract_json_from_str(content: str) -> Union[Dict, List, Any]:
 
     logger.warning(f"Failed to extract JSON from string: {content[:100]}...")
     return {}
+
+def seed_everything(seed: int = 42):
+    """
+    设置全局随机种子，确保实验可复现。
+    涵盖 Python, Numpy, PyTorch (CPU & GPU).
+    """
+    import random
+    import numpy as np
+    import os
+    
+    random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    logger.info(f"Global seed set to {seed}")

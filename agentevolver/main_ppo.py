@@ -10,7 +10,7 @@ import torch
 import os
 import hydra
 import ray
-
+from agentevolver.utils.utils import seed_everything
 # 引入 AgentEvolver 特有的模块
 from agentevolver.client.llm_client import DashScopeClient
 from agentevolver.module.task_manager.base import NaiveTaskObjectiveRetrieval
@@ -128,6 +128,8 @@ def main(config):
     """
     PPO 训练的主入口点。
     """
+    seed = config.get("seed", 42)
+    seed_everything(seed)
     run_ppo(config)
 
 
@@ -176,6 +178,9 @@ class TaskRunner:
         from pprint import pprint
         from omegaconf import OmegaConf
         from verl.utils.fs import copy_to_local
+
+        seed = config.get("seed", 42)
+        seed_everything(seed)
 
         pprint(OmegaConf.to_container(config, resolve=True))
         OmegaConf.resolve(config)
