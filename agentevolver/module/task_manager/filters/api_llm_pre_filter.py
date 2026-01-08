@@ -63,7 +63,9 @@ class LlmQualityPreFilter:
         """
         对单个任务进行 LLM 判别。
         返回 Task 对象表示保留，返回 None 表示丢弃。
-        同时将结果分别存入指定目录下的 tasks_keep.json 和 tasks_drop.json。
+        同时将结果分别存入：
+        1. 标准日志 (tasks_keep/drop_pre_filter.json)
+        2. 详细响应日志 (tasks_keep/drop_pre_filter_with_response.json)
         """
         import os
         import json
@@ -84,59 +86,75 @@ class LlmQualityPreFilter:
         # 3. 解析结果
         is_good = self._parse_response(response_content)
         
-        # --- 新增逻辑：带文件锁的安全保存 ---
+        # --- 数据准备 ---
+        # 基础信息 (用于原有的 json)
+        simple_task_info = {
+            "query": task.query,
+            "data_id": task.metadata.get('data_id', 'unknown') if task.metadata else 'unknown'
+        }
+
+        # 详细信息 (用于新的 json，增加了 response_content)
+        detailed_task_info = {
+            "query": task.query,
+            "data_id": task.metadata.get('data_id', 'unknown') if task.metadata else 'unknown',
+            "response_content": response_content  # <--- 新增字段
+        }
+
+        # --- 保存逻辑 ---
         try:
             base_dir = "./tmp"
-            target_filename = "tasks_keep.json" if is_good else "tasks_drop.json"
-            file_path = os.path.join(base_dir, target_filename)
-
             if not os.path.exists(base_dir):
                 os.makedirs(base_dir, exist_ok=True)
 
-            # 准备要保存的数据字典
-            # 注意：这里解决了 'Task' object is not subscriptable 错误
-            # 使用 task.query 而不是 task['query']
-            # 使用 task.metadata.get(...) 防止 metadata 为空
-            simple_task_info = {
-                "query": task.query,
-                "data_id": task.metadata.get('data_id', 'unknown') if task.metadata else 'unknown'
-            }
+            # 定义两个文件名：原有文件 和 新的详细文件
+            if is_good:
+                file_name_std = "tasks_keep_pre_filter.json"
+                file_name_detail = "tasks_keep_pre_filter_with_response.json" # 新文件
+            else:
+                file_name_std = "tasks_drop_pre_filter.json"
+                file_name_detail = "tasks_drop_pre_filter_with_response.json" # 新文件
 
-            # 使用 'a+' 模式打开文件，并加排他锁 (LOCK_EX)
-            # 这一步是为了防止多个进程同时写入导致 JSON 文件损坏
-            with open(file_path, 'a+', encoding='utf-8') as f:
-                try:
-                    fcntl.flock(f, fcntl.LOCK_EX)  # 获取文件锁
-                    
-                    # 移动指针到文件开头读取现有数据
-                    f.seek(0)
-                    content = f.read()
-                    
-                    data_list = []
-                    if content:
-                        try:
-                            data_list = json.loads(content)
-                        except json.JSONDecodeError:
-                            data_list = [] # 文件损坏或不完整时重置
-                    
-                    # 追加新数据
-                    data_list.append(simple_task_info)
-                    
-                    # 清空文件并写入新数据
-                    f.seek(0)
-                    f.truncate()
-                    json.dump(data_list, f, ensure_ascii=False, indent=4)
-                    
-                except Exception as file_e:
-                    logger.error(f"[PreFilter] File write error: {file_e}")
-                finally:
-                    fcntl.flock(f, fcntl.LOCK_UN)  # 务必释放锁
+            # 定义一个内部函数来处理加锁写入，避免代码重复
+            def _append_to_json_locked(filename, data_dict):
+                full_path = os.path.join(base_dir, filename)
+                with open(full_path, 'a+', encoding='utf-8') as f:
+                    try:
+                        fcntl.flock(f, fcntl.LOCK_EX)  # 获取排他锁
+                        
+                        # 读取现有内容
+                        f.seek(0)
+                        content = f.read()
+                        data_list = []
+                        if content:
+                            try:
+                                data_list = json.loads(content)
+                            except json.JSONDecodeError:
+                                data_list = []
+                        
+                        # 追加新数据
+                        data_list.append(data_dict)
+                        
+                        # 覆写文件
+                        f.seek(0)
+                        f.truncate()
+                        json.dump(data_list, f, ensure_ascii=False, indent=4)
+                        
+                    except Exception as file_e:
+                        logger.error(f"[PreFilter] File write error for {filename}: {file_e}")
+                    finally:
+                        fcntl.flock(f, fcntl.LOCK_UN)  # 释放锁
+
+            # 4.1 保存原有格式 (仅 query, data_id)
+            _append_to_json_locked(file_name_std, simple_task_info)
+
+            # 4.2 保存新格式 (包含 response_content)
+            _append_to_json_locked(file_name_detail, detailed_task_info)
 
         except Exception as e:
-            logger.error(f"[PreFilter] Failed to save task to json: {e}")
+            logger.error(f"[PreFilter] Failed to save task logs: {e}")
         # -----------------------------------
 
-        # 4. 打印日志并返回结果
+        # 5. 打印日志并返回结果
         if is_good:
             logger.info(f"[PreFilter] ✅ KEEP | Query: {query[:100]}...")
             return task
