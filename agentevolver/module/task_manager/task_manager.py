@@ -592,7 +592,7 @@ class TaskManager(object):
                     {"app_name": app_name_a, "apis_name_list": [x["call_name"] for x in s_a]},
                     {"app_name": app_name_b, "apis_name_list": [x["call_name"] for x in s_b]}
                 ])
-                
+
         random.shuffle(final_pair_data)
         cross_task_pool = (list(copy.copy(tasks)) * int(b + 1))[:int(len(tasks) * b)]
         if debug_mode: cross_task_pool = cross_task_pool[:1]
@@ -835,6 +835,23 @@ class FullDataset(Dataset):
         # -------------------
 
         self._dataset = to_rl_dataset(self._objectives, self._tokenizer, self._config, self._processor)
+
+    def update(self):
+        """
+        Manually triggers the rebuilding of the dataset.
+
+        This method first checks if there are any synthetic objectives available. If not, it logs a warning suggesting
+        that `load_from_file()` or `reload()` should be called first. It then rebuilds the dataset and logs an
+        informational message upon completion.
+
+        Returns:
+            None
+        """
+        if not self._synthetic_objectives:
+            logger.warning("No synthetic objectives available, did you call load_from_file() or reload() first?")
+        self._rebuild_dataset()  # ⭐ Rebuilds the dataset
+        logger.info("Dataset updated manually via update().")
+
 
     def set_mixture_strategy(self, strategy: MixtureStrategy):
         """
