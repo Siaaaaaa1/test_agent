@@ -106,8 +106,11 @@ class LlmQualityPreFilter:
 
             # 将当前 Task 转为字典并追加
             # 优先检查是否有 to_dict 方法，否则使用 __dict__
-            task_dict = task.to_dict() if hasattr(task, 'to_dict') else task.__dict__
-            data_list.append(task_dict)
+            simple_task_info = {
+                "query": task.query,
+                "data_id": task.metadata.data_id
+            }
+            data_list.append(simple_task_info)
 
             # 写回文件
             with open(file_path, 'w', encoding='utf-8') as f:
