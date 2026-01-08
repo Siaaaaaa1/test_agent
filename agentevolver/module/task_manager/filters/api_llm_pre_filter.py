@@ -65,9 +65,9 @@ class LlmQualityPreFilter:
         返回 Task 对象表示保留，返回 None 表示丢弃。
         同时将结果分别存入指定目录下的 tasks_keep.json 和 tasks_drop.json。
         """
-        # 为了满足“只在此函数内实现”，我们在函数内导入库
         import os
         import json
+        import fcntl  # 必须导入 fcntl 以处理并发写入锁
 
         query = task.query
         
@@ -84,41 +84,57 @@ class LlmQualityPreFilter:
         # 3. 解析结果
         is_good = self._parse_response(response_content)
         
-        # --- 新增逻辑：保存到 JSON 文件 ---
+        # --- 新增逻辑：带文件锁的安全保存 ---
         try:
-            # 定义保存目录和文件名
             base_dir = "./tmp"
             target_filename = "tasks_keep.json" if is_good else "tasks_drop.json"
             file_path = os.path.join(base_dir, target_filename)
 
-            # 确保目录存在
             if not os.path.exists(base_dir):
-                os.makedirs(base_dir)
+                os.makedirs(base_dir, exist_ok=True)
 
-            # 读取现有数据（如果文件存在）
-            data_list = []
-            if os.path.exists(file_path):
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    try:
-                        data_list = json.load(f)
-                    except json.JSONDecodeError:
-                        data_list = []  # 文件损坏或为空时初始化为空列表
-
-            # 将当前 Task 转为字典并追加
-            # 优先检查是否有 to_dict 方法，否则使用 __dict__
+            # 准备要保存的数据字典
+            # 注意：这里解决了 'Task' object is not subscriptable 错误
+            # 使用 task.query 而不是 task['query']
+            # 使用 task.metadata.get(...) 防止 metadata 为空
             simple_task_info = {
                 "query": task.query,
-                "data_id": task.metadata['data_id']
+                "data_id": task.metadata.get('data_id', 'unknown') if task.metadata else 'unknown'
             }
-            data_list.append(simple_task_info)
 
-            # 写回文件
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(data_list, f, ensure_ascii=False, indent=4)
+            # 使用 'a+' 模式打开文件，并加排他锁 (LOCK_EX)
+            # 这一步是为了防止多个进程同时写入导致 JSON 文件损坏
+            with open(file_path, 'a+', encoding='utf-8') as f:
+                try:
+                    fcntl.flock(f, fcntl.LOCK_EX)  # 获取文件锁
+                    
+                    # 移动指针到文件开头读取现有数据
+                    f.seek(0)
+                    content = f.read()
+                    
+                    data_list = []
+                    if content:
+                        try:
+                            data_list = json.loads(content)
+                        except json.JSONDecodeError:
+                            data_list = [] # 文件损坏或不完整时重置
+                    
+                    # 追加新数据
+                    data_list.append(simple_task_info)
+                    
+                    # 清空文件并写入新数据
+                    f.seek(0)
+                    f.truncate()
+                    json.dump(data_list, f, ensure_ascii=False, indent=4)
+                    
+                except Exception as file_e:
+                    logger.error(f"[PreFilter] File write error: {file_e}")
+                finally:
+                    fcntl.flock(f, fcntl.LOCK_UN)  # 务必释放锁
 
         except Exception as e:
             logger.error(f"[PreFilter] Failed to save task to json: {e}")
-        # -------------------------------
+        # -----------------------------------
 
         # 4. 打印日志并返回结果
         if is_good:
