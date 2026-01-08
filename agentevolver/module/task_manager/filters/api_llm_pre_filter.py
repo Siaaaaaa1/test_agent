@@ -148,7 +148,7 @@ class LlmQualityPreFilter:
         """
         构造用于判断任务质量的 Prompt。
         """
-        content = f"""You are a Data Quality Evaluator for an AI Agent dataset. Your goal is to identify meaningful and actionable user commands. You should accept queries that have a clear intent, even if they are concise or slightly broad. REJECT only those that contain logical fallacies, unverifiable assumptions, or are fundamentally impossible to execute.
+        content = f"""You are a Data Quality Evaluator for an AI Agent dataset.
 Task Query: "{query}"
 Evaluation Criteria:
 The query must express a clear goal. Moderate vagueness is acceptable (e.g., not specifying a brand or model) as long as the Agent can supplement those details using common sense or search capabilities.
