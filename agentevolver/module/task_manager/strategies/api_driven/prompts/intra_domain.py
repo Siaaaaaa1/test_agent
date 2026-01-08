@@ -146,13 +146,15 @@ The user **CANNOT** see internal states (IDs, specific filenames, inventory). Th
     * *Bad (Gambling):* "Buy a fan that costs exactly $20.50." (User can't predict exact price).
     * *Good:* "Buy a highly-rated desktop fan for under $25." (Delegates filtering to Agent).
 
-2.  **Blind Action (State-Agnostic):**
+2.  **No Hard-coded Containers/Files (Robustness):**
+    Do not assume specific user-defined folder names or filenames exist unless you are creating them.
+    * *Bad:* "Compress my 'Projects' folder." (Assumes a specific folder exists).
+    * *Good:* "Find all documents from last week and archive them." (Discovery based).
+
+3.  **Blind Action (State-Agnostic):**
     State the desired outcome directly. Do NOT use conditional logic based on hidden states.
     * *Bad:* "If my name is 'J. Doe', change it to 'Jane'."
-    * *Good:* "Update my account name to 'Jane Smith'." (Overwrite directly).
-
-3.  **Fuzzy Logic:**
-    Use qualitative descriptors: "Play *recent* songs", "Delete *spam*", "Pick the *best* option".
+    * *Good:* "Update my account name to 'Jane Smith'."
 
 ### 🎯 Target Scenarios
 * **Acquisition:** Search with soft constraints (e.g., "Find a restaurant near me rated 4.5+").
@@ -163,11 +165,18 @@ The user **CANNOT** see internal states (IDs, specific filenames, inventory). Th
 Select compatible APIs from the list. **Generate 3 distinct, realistic user scenarios.** Construct a natural user query for each.
 
 ### Few-Shot Examples
-**Ex 1:** Find a highly-rated coffee maker under $50 and add it to my shopping cart.
-**Ex 2:** Archive all emails received from 'newsletter@tech.com' in the last 30 days.
-**Ex 3:** Set a wake-up alarm for 7:00 AM on weekdays, replacing any existing alarms.
-**Ex 4:** Send $20 for 'Lunch' to the last person I paid.
-**Ex 5:** Create a new note titled 'Grocery List' and add 'Milk' as the first line.
+
+**❌ BAD Examples (Overly specific/Hard-coded logic):**
+- **Bad 1:** Get the names of all tasks under my 'Concert Prep' section and search for them online. (*Reason: Assumes a specific section name exists.*)
+- **Bad 2:** Check if a file named 'weekly_report.pdf' exists in my directory and send it to my boss. (*Reason: Hard-codes a specific filename.*)
+- **Bad 3:** Move all images from my 'Projects' folder to the cloud. (*Reason: Assumes a specific folder name exists.*)
+
+**✅ GOOD Examples (Robust & Natural):**
+- **Good 1:** Find a highly-rated coffee maker under $50 and add it to my shopping cart.
+- **Good 2:** Archive all emails received from 'newsletter@tech.com' in the last 30 days.
+- **Good 3:** Set a wake-up alarm for 7:00 AM on weekdays, replacing any existing alarms.
+- **Good 4:** Send $20 for 'Lunch' to the last person I paid.
+- **Good 5:** Create a new note titled 'Grocery List' and add 'Milk' as the first line.
 
 ### Output Format (JSON Only)
 [

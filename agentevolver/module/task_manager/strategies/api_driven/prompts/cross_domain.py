@@ -188,15 +188,10 @@ You are an expert Data Synthetic Generator for **Cross-App Automation**.
 Create a realistic, logically robust user command bridging two apps using their APIs. Ensure the connection is **Logically Valid** and **Data-Type Compatible**.
 
 ### 🚫 STRICT Constraints
-1.  **Source Uncertainty (Black Box):** Do NOT assume specific data exists. Use queries that imply **retrieval**.
-    * *Bad:* "Take the song 'Hello'..." (Assumes existence).
-    * *Good:* "Find the song I last liked..." (Discovery driven).
-2.  **No "Magic" ID Jumps:** Source Names are NOT valid Target IDs. Logic must imply a **Search** step.
-    * *Bad:* "Get song name -> Add to Amazon Cart." (Missing ID).
-    * *Good:* "Get song name -> **Search it** on Amazon -> Add result to Cart."
-3.  **Type & Semantic Safety:** Do NOT mix Text with Files (e.g., don't "attach" a string). Ensure extracted data logically fits the Target action.
-4.  **Fuzzy Connection:** Connections should be semantic.
-    * *Ex:* "Read note content -> Search Amazon for *keywords* found in it."
+1.  **Source Uncertainty (Black Box):** Do NOT assume specific data exists. Use queries that imply **retrieval** (e.g., "Find my last...", "Search for...").
+2.  **No Hard-coded Containers/Files:** Do not assume specific user-defined folder names (e.g., "Work") or filenames (e.g., "data.csv") exist.
+3.  **No "Magic" ID Jumps:** Source Names are NOT valid Target IDs. Logic must imply a **Search** step.
+4.  **Type & Semantic Safety:** Do NOT mix Text with Files. Ensure extracted data logically fits the Target action.
 
 ### ✅ Logic Patterns
 1.  **Search & Act:** Source gives Name -> Target **Searches** Name -> Act.
@@ -204,14 +199,20 @@ Create a realistic, logically robust user command bridging two apps using their 
 3.  **Record Keeping:** Source gives Transaction -> Target logs it.
 4.  **File Management:** Source gives File -> Target saves/uploads it.
 
+### Few-Shot Examples
+
+**❌ BAD Examples (Overly specific/Hard-coded logic):**
+- **Bad 1:** Get the names of all tasks under my 'Concert Prep' section in Todoist and search Spotify for each name to add any matching live recordings to my queue. (*Reason: Assumes a specific project named 'Concert Prep' exists.*)
+- **Bad 2:** Check if a file named 'weekly_report.pdf' exists in my Downloads directory, and if so, create a Gmail draft. (*Reason: Hard-codes a specific filename.*)
+- **Bad 3:** Compress all files in my 'Projects' folder into a single archive. (*Reason: Assumes a specific folder named 'Projects' exists.*)
+
+**✅ GOOD Examples (Robust & Discovery-driven):**
+- **Good 1:** Find the total cost of my most recent Amazon order and request that amount from a friend on Venmo.
+- **Good 2:** Search my recent emails for song names and create a new Spotify playlist with them.
+- **Good 3:** Retrieve my last Venmo payment description and create a Simple Note with that title.
+
 ### Task
 Select compatible APIs from Source and Target. **Generate 3 distinct user scenarios.** Construct natural user queries for each.
-
-### Few-Shot Examples
-**Ex 1:** Find the total cost of my most recent Amazon order and request that amount from a friend on Venmo.
-**Ex 2:** Search my recent emails for song names and create a new Spotify playlist with them.
-**Ex 3:** Get the list of tracks from my 'Favorites' on Spotify and save the titles to a text file.
-**Ex 4:** Retrieve my last Venmo payment description and create a Simple Note with that title.
 
 ### Output Format (JSON Only)
 [
@@ -242,7 +243,6 @@ APIs: {API_LIST1}
 App 2 (Target): {APP_NAME2}
 APIs: {API_LIST2}
 """
-
 
 import json
 import re

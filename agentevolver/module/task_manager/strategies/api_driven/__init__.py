@@ -152,7 +152,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         )
         
         # 动态设置最大步数
-        agent_flow.max_steps = self.config.get("max_explore_step", 10) 
+        agent_flow.max_steps = self.config.get("max_explore_step", 25) 
         agent_flow.max_model_len = self.config.get("max_model_len", 102400)
 
         # 5. 执行 Agent，获取轨迹
