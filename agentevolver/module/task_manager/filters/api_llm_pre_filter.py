@@ -93,22 +93,36 @@ class LlmQualityPreFilter:
         """
         构造用于判断任务质量的 Prompt。
         """
-        content = f"""You are a strict Data Quality Auditor for an advanced AI Agent dataset.
-Your goal is to accept **ONLY** high-quality, intent-clear, and logically robust user commands, and **REJECT** vague, trivial, or queries containing unreasonable assumptions.
-
+        content = f"""You are a Data Quality Evaluator for an AI Agent dataset. Your goal is to identify meaningful and actionable user commands. You should accept queries that have a clear intent, even if they are concise or slightly broad. REJECT only those that contain logical fallacies, unverifiable assumptions, or are fundamentally impossible to execute.
 Task Query: "{query}"
+Evaluation Criteria:
+The query must express a clear goal. Moderate vagueness is acceptable (e.g., not specifying a brand or model) as long as the Agent can supplement those details using common sense or search capabilities.
+ACCEPT (Clear Intent): Commands with a clear action and object (e.g., "Buy a fan," "Book me a flight to London").
+REJECT (Logical Flaws/Over-specification): Commands that include precise values or prerequisites that the user cannot guarantee, which would likely lead to execution failure.
+Unacceptable: "Buy a fan that costs exactly $20.50" (Price fluctuations make this high-risk).
+Unacceptable: "If my current balance is $100, then pay my phone bill" (The user should not speculate on internal states that only the Agent can verify).
+ACCEPT (Delegated Commands): Queries where the user sets a goal and lets the Agent handle the filtering/optimization.
+Example: "Help me find a good desktop fan," "Update my username to 'Alex'."
+Is this a valid and usable query? Return strictly in this format: <answer>True</answer> or <answer>False</answer>"""
+        
+        
+        
+#         f"""You are a strict Data Quality Auditor for an advanced AI Agent dataset.
+# Your goal is to accept **ONLY** high-quality, intent-clear, and logically robust user commands, and **REJECT** vague, trivial, or queries containing unreasonable assumptions.
 
-### Evaluation Criteria:
-    The query contains key information needed to execute the task (e.g., category, usage, preferences) but **avoids including overly specific values that the user cannot verify (risking execution failure)**.
-    * *Bad (Too Vague):* "Buy a fan."
-    * *Bad (Overly Specific/Guessing):* "Buy a fan on Amazon that costs exactly $20.50." (User cannot predict exact pricing; high failure risk.)
-    * *Bad (Presumed State):* "Update my account name to 'Jane Smith' only if the current name is 'J. Doe'." (User should not speculate on current state in the command; just order the rename directly.)
-    * *Good (Clear Intent):* "Help me pick a highly-rated cooling fan suitable for a desktop on Amazon." (Delegates filtering to the Agent.)
-    * *Good (Functional Constraint):* "Update my account name to 'Jane Smith'."
+# Task Query: "{query}"
 
-Is this a high-quality query?
-Return strictly in this format: <answer>True</answer> or <answer>False</answer>
-"""
+# ### Evaluation Criteria:
+#     The query contains key information needed to execute the task (e.g., category, usage, preferences) but **avoids including overly specific values that the user cannot verify (risking execution failure)**.
+#     * *Bad (Too Vague):* "Buy a fan."
+#     * *Bad (Overly Specific/Guessing):* "Buy a fan on Amazon that costs exactly $20.50." (User cannot predict exact pricing; high failure risk.)
+#     * *Bad (Presumed State):* "Update my account name to 'Jane Smith' only if the current name is 'J. Doe'." (User should not speculate on current state in the command; just order the rename directly.)
+#     * *Good (Clear Intent):* "Help me pick a highly-rated cooling fan suitable for a desktop on Amazon." (Delegates filtering to the Agent.)
+#     * *Good (Functional Constraint):* "Update my account name to 'Jane Smith'."
+
+# Is this a high-quality query?
+# Return strictly in this format: <answer>True</answer> or <answer>False</answer>
+# """
         
 # ### Automatic FAIL Triggers (Immediate False):
 # 1.  **Hallucinated Constraints:** Contains internal IDs, hashes, or overly precise unnecessary values unknown to the user (e.g., "Buy item with ID 83920").
