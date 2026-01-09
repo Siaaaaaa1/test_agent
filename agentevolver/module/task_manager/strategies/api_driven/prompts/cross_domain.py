@@ -207,10 +207,12 @@ Create a realistic, logically robust user command bridging two apps using their 
 - Bad 2: Check if a file named 'weekly_report.pdf' exists in my Downloads directory, and if so, create a Gmail draft. (*Reason: Hard-codes a specific filename.*)
 - Bad 3: Compress all files in my 'Projects' folder into a single archive. (*Reason: Assumes a specific folder named 'Projects' exists.*)
 
-✅ GOOD Examples (Robust & Discovery-driven):
-- Good 1: Check the total cost of my most recent Amazon order and request that amount from a friend on Venmo.
-- Good 2: If my recent emails mention any song names, create a new Spotify playlist with them.
-- Good 3: Create a Simple Note titled with the description of my last Venmo payment.
+✅ GOOD Examples:
+- Good 1: Forward the full content of the most recent text message I received to my work email address for archiving.
+- Good 2: Retrieve the total cost of my very last Amazon order and request exactly half of that amount from 'Roommate' on Venmo with the note 'Split purchase'.
+- Good 3: Get the share link for the song currently playing on Spotify and text it to the last person I called on the Phone.
+- Good 4: Summarize the titles of all Amazon orders placed in the last 30 days and create a new list in SimpleNote containing these names.
+- Good 5: Locate the last Venmo payment I made. Extract the transaction ID and amount, and email these details to my accountant for tax tracking.
 
 ### Task
 Select the most naturally compatible APIs from Source and Target. Generate 1 highly realistic user scenario that fits a provided Logic Pattern and addresses a genuine need. Construct a natural query.
