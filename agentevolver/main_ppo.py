@@ -147,8 +147,8 @@ def run_ppo(config) -> None:
                 "VLLM_LOGGING_LEVEL": "WARN",
                 "VLLM_ALLOW_RUNTIME_LORA_UPDATING": "true", # 允许 vLLM 运行时更新 LoRA
                 "VLLM_USE_V1": "1", 
-                "WANDB_API_KEY": "local-e93291bd40698a593a1fcc5b99da6a71a753a383", # 示例 Key
-                "WANDB_BASE_URL": "http://22.6.186.25:8080"
+                "WANDB_API_KEY": "e0a53bc21f8007dfb8dc043a7a44a591a9235f7f", # 示例 Key
+                "WANDB_BASE_URL": "https://api.wandb.ai"
             }},
             include_dashboard=False,  # <--- 添加这一行，彻底关闭 Dashboard
             ignore_reinit_error=True, # <--- 建议加上这个，防止反复 init 报错

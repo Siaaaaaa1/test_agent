@@ -96,9 +96,9 @@ trainer:
   n_gpus_per_node: 8
   nnodes: 1
   critic_warmup: 0
-  logger: ["console"]
-  project_name: "appworld_qwen25-7b"
-  experiment_name: "appworld_qwen25-7b_baseline"
+  logger: ["console","wandb"]
+  project_name: "agentevolver"
+  experiment_name: "appworld_qwen25-7b_test1"
   save_freq: 10000
   test_freq: 10
   total_epochs: 40
