@@ -188,7 +188,7 @@ You are an expert Data Synthetic Generator for Cross-App Automation.
 Create a realistic, logically robust user command bridging two apps using their APIs. Ensure the connection is Logically Valid and Data-Type Compatible.
 
 ### 🚫 STRICT Constraints
-1.  Source Uncertainty (Black Box): Do NOT assume specific data exists. Use queries that imply retrieval (e.g., "Find my last...", "Search for...").
+1.  Source Uncertainty (Black Box): Do NOT assume specific data exists. You must refer to data dynamically (e.g., "my last email", "the current song"), **but avoid always starting with "Find" or "Search".**
 2.  No Hard-coded Containers/Files: Do not assume specific user-defined folder names (e.g., "Work") or filenames (e.g., "data.csv") exist.
 3.  No "Magic" ID Jumps: Source Names are NOT valid Target IDs. Logic must imply a Search step.
 4.  Type & Semantic Safety: Do NOT mix Text with Files. Ensure extracted data logically fits the Target action.
@@ -208,9 +208,9 @@ Create a realistic, logically robust user command bridging two apps using their 
 - Bad 3: Compress all files in my 'Projects' folder into a single archive. (*Reason: Assumes a specific folder named 'Projects' exists.*)
 
 ✅ GOOD Examples (Robust & Discovery-driven):
-- Good 1: Find the total cost of my most recent Amazon order and request that amount from a friend on Venmo.
-- Good 2: Search my recent emails for song names and create a new Spotify playlist with them.
-- Good 3: Retrieve my last Venmo payment description and create a Simple Note with that title.
+- Good 1: Check the total cost of my most recent Amazon order and request that amount from a friend on Venmo.
+- Good 2: If my recent emails mention any song names, create a new Spotify playlist with them.
+- Good 3: Create a Simple Note titled with the description of my last Venmo payment.
 
 ### Task
 Select the most naturally compatible APIs from Source and Target. Generate 1 highly realistic user scenario that fits a provided Logic Pattern and addresses a genuine need. Construct a natural query.
