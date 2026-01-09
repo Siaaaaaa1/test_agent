@@ -28,14 +28,14 @@ sleep 10
 conda activate agentevolver
 
 # 线程限制 (保持你原有的)
-export OMP_NUM_THREADS=1
-export MKL_NUM_THREADS=1
-export TORCH_NUM_THREADS=1
+# export OMP_NUM_THREADS=1
+# export MKL_NUM_THREADS=1
+# export TORCH_NUM_THREADS=1
 
 # 【修改点 2】：强制限制 Ray 可见的 CPU 数量
 # 你的训练任务使用了 4 张 GPU，给 Ray 分配 32 个 CPU 核 (每卡8核) 通常足够且高效
 # 这能极大减少 Ray 启动的闲置进程数，避免 'Resource temporarily unavailable'
-export RAY_NUM_CPUS=32
+# export RAY_NUM_CPUS=32
 
 # ---- Start Training ----
 PROJECT_DIR="$(pwd)"
@@ -45,7 +45,7 @@ current_time=$(date "+%Y%m%d_%H%M%S")
 log_file="log_${current_time}.log"
 
 # 指定使用后 4 个 GPU (ID: 4,5,6,7)
-export CUDA_VISIBLE_DEVICES=4,5,6,7
+# export CUDA_VISIBLE_DEVICES=4,5,6,7
 
 echo "Starting Training..."
 # 注意：不需要在 python 参数里手动加 ray.init 了，RAY_NUM_CPUS 环境变量会自动生效
@@ -89,7 +89,7 @@ python3 -m agentevolver.main_ppo \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     algorithm.use_kl_in_reward=False \
-    trainer.n_gpus_per_node=4 \
+    trainer.n_gpus_per_node=8 \
     trainer.critic_warmup=0 \
     trainer.logger="['console']" \
     trainer.project_name="appworld_qwen25-7b" \
@@ -115,8 +115,8 @@ python3 -m agentevolver.main_ppo \
     actor_rollout_ref.rollout.val_kwargs.n=8 \
     task_manager.train_data_path=./tasks_explored/tasks_explored.train.json \
     task_manager.val_data_path=.tasks_explored/tasks_explored.val.json \
-    task_manager.exploration_strategy_args.a=0.1 \
-    task_manager.exploration_strategy_args.b=0.1 \
+    task_manager.exploration_strategy_args.a=0.2 \
+    task_manager.exploration_strategy_args.b=1 \
     task_manager.strategy=api_driven \
     task_manager.exploration_strategy_args.active_apps="['amazon','gmail','spotify','venmo','simple_note','todoist','splitwise','phone','file_system']" \
     task_manager.exploration_strategy_args.task_labels_path="./environments/appworld/data/datasets/train.jsonl" \
