@@ -115,8 +115,8 @@ python3 -m agentevolver.main_ppo \
     actor_rollout_ref.rollout.val_kwargs.n=8 \
     task_manager.train_data_path=./tasks_explored/tasks_explored.train.json \
     task_manager.val_data_path=.tasks_explored/tasks_explored.val.json \
-    task_manager.exploration_strategy_args.a=0.2 \
-    task_manager.exploration_strategy_args.b=1 \
+    task_manager.exploration_strategy_args.a=0.5 \
+    task_manager.exploration_strategy_args.b=2 \
     task_manager.strategy=api_driven \
     task_manager.exploration_strategy_args.active_apps="['amazon','gmail','spotify','venmo','simple_note','todoist','splitwise','phone','file_system']" \
     task_manager.exploration_strategy_args.task_labels_path="./environments/appworld/data/datasets/train.jsonl" \

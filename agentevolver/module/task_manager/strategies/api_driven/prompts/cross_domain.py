@@ -213,7 +213,7 @@ Create a realistic, logically robust user command bridging two apps using their 
 - Good 3: Retrieve my last Venmo payment description and create a Simple Note with that title.
 
 ### Task
-Select the most naturally compatible APIs from Source and Target. Generate 1 highly realistic user scenario that fits a provided Logic Pattern and addresses a genuine, everyday need. Construct a natural, intent-driven query that strictly adheres to the Source Uncertainty constraint.
+Select the most naturally compatible APIs from Source and Target. Generate 1 highly realistic user scenario that fits a provided Logic Pattern and addresses a genuine need. Construct a natural query.
 
 ### Output Format (JSON Only)
 [
