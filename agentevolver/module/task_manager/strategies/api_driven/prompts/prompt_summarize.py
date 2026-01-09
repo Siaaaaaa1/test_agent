@@ -1,6 +1,6 @@
 import json
 from typing import Optional, Sequence, Tuple
-
+import re
 from agentevolver.module.task_manager.env_profiles import EnvProfile
 from agentevolver.schema.task import Task, TaskObjective
 from agentevolver.schema.trajectory import Trajectory
@@ -163,17 +163,17 @@ Please identify the specific tasks the agent is attempting to complete in these 
     return AGENT_SUMMARIZE_SYSTEM_PROMPT, user_prompt
 
 
-def parse_tasks_from_response(task: Task, response: str) -> list[TaskObjective]:
-    task = task.copy()
-
+def parse_tasks_from_response(seed_task: Task, response: str) -> list[TaskObjective]:
+    # 建议重命名参数为 seed_task 以区分
     tasks: list[TaskObjective] = []
     try:
-        import re
-
         task_matches = re.findall(r"<task>(.*?)</task>", response, re.DOTALL)
 
         for task_content in task_matches:
-            t = json.loads(task_content)
+            try:
+                t = json.loads(task_content)
+            except json.JSONDecodeError:
+                continue
 
             if (
                 "query" not in t
@@ -181,14 +181,20 @@ def parse_tasks_from_response(task: Task, response: str) -> list[TaskObjective]:
                 or "action_sequence" not in t
             ):
                 continue
-            task.query = t["query"]
-            task.open_query = True
-            x=TaskObjective(
-                task=task,
+            
+            # [修正]：在循环内部进行 copy，确保每个生成的任务是独立的实例
+            current_task = seed_task.copy()
+            
+            # 修改新实例的属性
+            current_task.query = t["query"]
+            current_task.open_query = True
+            
+            x = TaskObjective(
+                task=current_task,  # 传入新实例
                 confidence=t["confidence"],
                 reward=None,
             )
-            x.ground_truth=t["action_sequence"]
+            x.ground_truth = t["action_sequence"]
             tasks.append(x)
 
     except Exception as e:
