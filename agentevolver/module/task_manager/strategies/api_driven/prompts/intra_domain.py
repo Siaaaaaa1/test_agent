@@ -162,7 +162,7 @@ The user **CANNOT** see internal states (IDs, specific filenames, inventory). Th
 * **Overwrite:** Change settings directly (e.g., "Set bio to 'Working hard'").
 
 ### Task
-Select compatible APIs from the list. **Generate 3 distinct, realistic user scenarios.** Construct a natural user query for each.
+Select a target API. Generate 1 realistic user scenario based on fuzzy needs or functional constraints. Construct a natural, discovery-oriented user query.
 
 ### Few-Shot Examples
 
@@ -182,14 +182,6 @@ Select compatible APIs from the list. **Generate 3 distinct, realistic user scen
 [
     {{
         "user_query": "Natural language instruction 1",
-        "target_api": "The primary API call_name used"
-    }},
-    {{
-        "user_query": "Natural language instruction 2",
-        "target_api": "The primary API call_name used"
-    }},
-    {{
-        "user_query": "Natural language instruction 3",
         "target_api": "The primary API call_name used"
     }}
 ]

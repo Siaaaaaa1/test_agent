@@ -566,7 +566,7 @@ class TaskManager(object):
             if app_name not in api_knowledge: continue
             apis = api_knowledge[app_name].get("apis", [])
             if not apis: continue
-            sample_count = min(len(apis), 5)
+            sample_count = min(len(apis), 3)
             for _ in range(len(apis)):
                 selected_apis = random.sample(list(apis.values()), sample_count)
                 this_turn_apis = [api["call_name"] for api in selected_apis]
