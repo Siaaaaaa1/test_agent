@@ -138,12 +138,6 @@ def get_task_summarize_prompt(
 
     user_prompt = f"""Please analyze the following agent interaction sequence and abstract specific tasks from it.
 
-# Context (Original Intent)
-The agent was originally instructed to explore or solve the following objective:
-"{old_objectives}"
-
-Please use this objective as a reference to understand the user's initial intent. However, your generated task must be based on the **actual successful actions** taken in the history below. If the agent deviated from the plan but successfully performed a valid action sequence, summarize what it *actually* did.
-
 # Actual Interaction History
 {x}
 
@@ -151,11 +145,21 @@ Please use this objective as a reference to understand the user's initial intent
 
 {profile.get_task_preference_instruction() if profile is not None else "Please follow the instructions to generate tasks."}
 
+# Constraints for Task Abstraction
+1. **Specific Grounding**: The task query MUST include **specific details** found in the environment history (e.g., exact filenames, specific contact names, exact dollar amounts, song titles). Do NOT use generic terms like "a file" or "someone".
+2. **High Quality & Unique**: Summarize into **1 to 3** distinct, high-quality tasks. 
+3. **No Repetition**: Do not generate multiple tasks that describe the exact same action sequence. If the agent performed one main workflow, output only the single best description for it.
+
 # Now Start
 
 Please identify the specific tasks the agent is attempting to complete in these interactions, and abstract them into clear task descriptions and queries following the specified format.
 """
 
+# # Context (Original Intent)
+# The agent was originally instructed to explore or solve the following objective:
+# "{old_objectives}"
+
+# Please use this objective as a reference to understand the user's initial intent. However, your generated task must be based on the **actual successful actions** taken in the history below. If the agent deviated from the plan but successfully performed a valid action sequence, summarize what it *actually* did.
     return AGENT_SUMMARIZE_SYSTEM_PROMPT, user_prompt
 
 

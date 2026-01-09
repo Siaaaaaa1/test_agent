@@ -225,6 +225,77 @@ class TaskManager(object):
         val = hashlib.md5(combined_str.encode()).hexdigest()
         return val
 
+    # ================= 过滤器统计与调试工具方法 (NEW) =================
+    
+    def _get_item_identifier(self, item: Any) -> str:
+        """尝试获取任务的唯一标识符用于对比"""
+        if isinstance(item, TaskObjective):
+            return item.task.task_id
+        elif isinstance(item, Task):
+            return item.task_id
+        elif isinstance(item, dict):
+            return item.get("task_id", str(id(item)))
+        else:
+            return str(id(item))
+
+    def _get_item_desc(self, item: Any) -> str:
+        """尝试获取任务的描述（Query），用于展示被过滤的原因"""
+        task = None
+        if isinstance(item, TaskObjective):
+            task = item.task
+        elif isinstance(item, Task):
+            task = item
+        
+        if task:
+            # 优先展示 query，如果没有则展示 metadata 中的 data_id
+            return f"[Query]: {task.query}" if task.query else f"[ID]: {task.task_id} (No Query)"
+        return str(item)[:100]
+
+    def _apply_filters_with_report(self, items: List[Any], filters: List[Any], stage_name: str) -> List[Any]:
+        """
+        替代 functools.reduce 的过滤器执行链。
+        功能：执行过滤并打印统计报告，展示被过滤掉的样本详情。
+        """
+        if not items:
+            return []
+        
+        current_items = items
+        # 仅在非空时记录开始，避免刷屏
+        if len(current_items) > 0:
+            logger.info(f"🛡️ [过滤器报告 - {stage_name}] 初始数量: {len(current_items)}")
+
+        for f in filters:
+            filter_name = f.__class__.__name__
+            before_count = len(current_items)
+            
+            # 建立索引以便查找被丢弃的项
+            before_map = {self._get_item_identifier(item): item for item in current_items}
+            
+            # 执行过滤
+            current_items = f.filter(current_items)
+            
+            after_count = len(current_items)
+            dropped_count = before_count - after_count
+            
+            if dropped_count > 0:
+                logger.warning(f"❌ [Filter: {filter_name}] 过滤掉了 {dropped_count} 个样本 (剩余: {after_count})")
+                
+                # 找出被丢弃的样本
+                after_ids = set(self._get_item_identifier(item) for item in current_items)
+                dropped_items = [item for uid, item in before_map.items() if uid not in after_ids]
+                
+                # 打印前 3 个被丢弃样本的原因（Query）
+                for i, dropped in enumerate(dropped_items[:3]):
+                    logger.warning(f"   -> 丢弃样本示例 #{i+1}: {self._get_item_desc(dropped)}")
+                if dropped_count > 3:
+                    logger.warning(f"   -> ... 以及其他 {dropped_count - 3} 个")
+            else:
+                logger.info(f"✅ [Filter: {filter_name}] 无损通过 (剩余: {after_count})")
+
+        return current_items
+
+    # =================================================================
+
     # --- 核心任务生成流程 ---
 
     def generate_task(self, tasks: Sequence[Task], *, show_progress=False, resume_file: Optional[str] = None) -> list[TaskObjective]:
@@ -281,13 +352,18 @@ class TaskManager(object):
                     for task in task_q[i : i + parallel_num]
                 ]
                 task_objectives = sum([future.result() for future in futures], [])
-                res.extend(task_objectives)
                 
-                # 3. 每批次后进行实时过滤并更新检索库，防止后续生成重复任务
-                res = functools.reduce(lambda x, f: f.filter(x), self._realtime_filters, res)
+                # [MODIFIED] 使用带报告的过滤器替代 functools.reduce
+                batch_filtered = self._apply_filters_with_report(
+                    task_objectives, 
+                    self._realtime_filters, 
+                    f"Random-Batch-{idx}-Realtime"
+                )
+                
+                res.extend(batch_filtered)
                 
                 self._old_retrival.reset()
-                for j in res:
+                for j in batch_filtered:
                     self._old_retrival.add_objective(j)
 
                 processed_indices.add(idx)
@@ -548,15 +624,24 @@ class TaskManager(object):
         
         if filtered_intra_tasks is None:
             logger.info(f"[Intra-Filter] Filtering all {len(generated_intra_tasks)} tasks...")
-            filtered_intra_tasks = generated_intra_tasks
-            for f_filter in self.api_llm_pre_filter:
-                filtered_intra_tasks = f_filter.filter(filtered_intra_tasks)
+            
+            # [MODIFIED] 使用带报告的过滤器
+            filtered_intra_tasks = self._apply_filters_with_report(
+                generated_intra_tasks, 
+                self.api_llm_pre_filter, 
+                "Intra-Pre-Filter-All"
+            )
             save_intermediate_tasks(intra_filtered_path, filtered_intra_tasks)
+            
         elif len(new_intra_tasks) > 0:
             logger.info(f"[Intra-Filter] Filtering {len(new_intra_tasks)} NEW tasks only...")
-            tasks_to_filter = new_intra_tasks
-            for f_filter in self.api_llm_pre_filter:
-                tasks_to_filter = f_filter.filter(tasks_to_filter)
+            
+            # [MODIFIED] 使用带报告的过滤器
+            tasks_to_filter = self._apply_filters_with_report(
+                new_intra_tasks, 
+                self.api_llm_pre_filter, 
+                "Intra-Pre-Filter-Incremental"
+            )
             filtered_intra_tasks.extend(tasks_to_filter)
             save_intermediate_tasks(intra_filtered_path, filtered_intra_tasks)
         else:
@@ -645,15 +730,25 @@ class TaskManager(object):
         
         if filtered_cross_tasks is None:
             logger.info(f"[Cross-Filter] Filtering all {len(generated_cross_tasks)} tasks...")
-            filtered_cross_tasks = generated_cross_tasks
-            for f_filter in self.api_llm_pre_filter:
-                filtered_cross_tasks = f_filter.filter(filtered_cross_tasks)
+            
+            # [MODIFIED] 使用带报告的过滤器
+            filtered_cross_tasks = self._apply_filters_with_report(
+                generated_cross_tasks, 
+                self.api_llm_pre_filter, 
+                "Cross-Pre-Filter-All"
+            )
             save_intermediate_tasks(cross_filtered_path, filtered_cross_tasks)
+            
         elif len(new_cross_tasks) > 0:
             logger.info(f"[Cross-Filter] Filtering {len(new_cross_tasks)} NEW tasks only...")
-            tasks_to_filter = new_cross_tasks
-            for f_filter in self.api_llm_pre_filter:
-                tasks_to_filter = f_filter.filter(tasks_to_filter)
+            
+            # [MODIFIED] 使用带报告的过滤器
+            tasks_to_filter = self._apply_filters_with_report(
+                new_cross_tasks, 
+                self.api_llm_pre_filter, 
+                "Cross-Pre-Filter-Incremental"
+            )
+            
             filtered_cross_tasks.extend(tasks_to_filter)
             save_intermediate_tasks(cross_filtered_path, filtered_cross_tasks)
         else:
@@ -684,7 +779,8 @@ class TaskManager(object):
                 for future in tqdm(as_completed(futures), total=len(futures), desc="Intra Exploration", disable=not show_progress):
                     try:
                         objs = future.result()
-                        filtered_objs = functools.reduce(lambda x, f: f.filter(x), self._realtime_filters, objs)
+                        # [MODIFIED] 使用带报告的过滤器 (Realtime)
+                        filtered_objs = self._apply_filters_with_report(objs, self._realtime_filters, "Intra-Worker-Realtime")
                         batch_res.extend(filtered_objs)
                     except Exception as e:
                         logger.error(f"Error in exploration future: {e}")
@@ -718,7 +814,8 @@ class TaskManager(object):
                 for future in tqdm(as_completed(futures), total=len(futures), desc="Cross Exploration", disable=not show_progress):
                     try:
                         objs = future.result()
-                        filtered_objs = functools.reduce(lambda x, f: f.filter(x), self._realtime_filters, objs)
+                        # [MODIFIED] 使用带报告的过滤器 (Realtime)
+                        filtered_objs = self._apply_filters_with_report(objs, self._realtime_filters, "Cross-Worker-Realtime")
                         batch_res.extend(filtered_objs)
                     except Exception as e:
                         logger.error(f"Error in cross exploration future: {e}")
@@ -754,12 +851,15 @@ class TaskManager(object):
     def _apply_post_filter(self, res: List[TaskObjective]) -> List[TaskObjective]:
         """应用耗时较长的后置过滤器（如 LLM 质量核验），并打乱数据顺序"""
         
-        # 先应用实时过滤器（确保最终一致性）
-        res = functools.reduce(lambda x, f: f.filter(x), self._realtime_filters, res)
+        # [MODIFIED] 先应用实时过滤器（确保最终一致性）- 带报告
+        res = self._apply_filters_with_report(res, self._realtime_filters, "PostProcess-Realtime")
         
         logger.info("正在对生成的任务进行后置过滤（Post-Filter）...")
         cnt_before = len(res)
-        res = functools.reduce(lambda x, f: f.filter(x), self._post_filter, res)
+        
+        # [MODIFIED] 应用后置过滤器 - 带报告
+        res = self._apply_filters_with_report(res, self._post_filter, "PostProcess-LLM")
+        
         logger.info(f"后置过滤完成: 过滤前={cnt_before}, 过滤后={len(res)}")
         
         random.shuffle(res)
