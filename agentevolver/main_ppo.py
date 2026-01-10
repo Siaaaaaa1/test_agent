@@ -147,13 +147,13 @@ def run_ppo(config) -> None:
                 "VLLM_LOGGING_LEVEL": "WARN",
                 "VLLM_ALLOW_RUNTIME_LORA_UPDATING": "true", # 允许 vLLM 运行时更新 LoRA
                 "VLLM_USE_V1": "1", 
-                "WANDB_API_KEY": "e0a53bc21f8007dfb8dc043a7a44a591a9235f7f", # 示例 Key
-                "WANDB_BASE_URL": "https://api.wandb.ai"
+                "WANDB_API_KEY": "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", # 示例 Key
             }},
             include_dashboard=False,  # <--- 添加这一行，彻底关闭 Dashboard
             ignore_reinit_error=True, # <--- 建议加上这个，防止反复 init 报错
             num_cpus=config.ray_init.num_cpus,
         )
+        # "WANDB_BASE_URL": "https://api.wandb.ai"
 
     # 2. 配置检查
     max_model_len: int = config.actor_rollout_ref.rollout.max_model_len
