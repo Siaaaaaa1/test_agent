@@ -5,7 +5,7 @@
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+#      http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -34,7 +34,7 @@ import random
 import json
 from omegaconf import OmegaConf, open_dict
 from tqdm import tqdm
-from torch.utils.data import SequentialSampler,IterableDataset,Dataset,Sampler
+from torch.utils.data import SequentialSampler, IterableDataset, Dataset, Sampler
 from torchdata.stateful_dataloader import StatefulDataLoader
 from agentevolver.client.env_client import EnvClient
 from agentevolver.module.task_manager.task_manager import AutoReloadDataset, FullDataset
@@ -58,7 +58,7 @@ from agentevolver.client.llm_client import DashScopeClient
 from agentevolver.client.em_client import EMClient
 from agentevolver.module.env_manager.env_manager import ParallelEnvManager
 from agentevolver.module.task_manager import adapter as task_adapter
-from agentevolver.module.task_manager import TaskManager,NaiveTaskObjectiveRetrieval
+from agentevolver.module.task_manager import TaskManager, NaiveTaskObjectiveRetrieval
 from agentevolver.schema.task import Task
 from agentevolver.schema.trajectory import Trajectory
 
@@ -410,6 +410,17 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
         self.train_task_manager=train_task_manager
         self.val_task_manager=val_task_manager
         self._collate_fn=collate_fn
+        
+        # 初始化 LLM Client (用于 Hindsight 等 ADCA 功能)
+        self.llm_client = None
+        if hasattr(self.config, 'attribution_driven_credit_assignment'):
+            # 假设 config 中有相关配置，或者使用默认的 DashScopeClient
+            # 这里简单初始化，实际可能需要更多参数
+            try:
+                self.llm_client = DashScopeClient()
+                logger.info("LLM Client initialized for ADCA/Hindsight.")
+            except Exception as e:
+                logger.warning(f"Failed to initialize LLM Client: {e}")
 
         # 创建数据加载器
         self._create_dataloader_from_manager(collate_fn, shuffle_trainset)  # ⭐ 从管理器创建数据加载器
@@ -1108,6 +1119,27 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
         
         # 训练 Epoch 循环
         for epoch in range(self.config.trainer.total_epochs):
+            
+            # ================= [NEW] 动态数据注入逻辑 =================
+            # 在每个 Epoch 开始前，检查是否有新的 Hindsight 任务
+            # 确保 TaskManager 实现了这个方法
+            if hasattr(self.train_task_manager, 'load_new_hindsight_tasks'):
+                new_count = self.train_task_manager.load_new_hindsight_tasks()
+                
+                if new_count > 0:
+                    print(f"🔄 Detected {new_count} new tasks. Refreshing DataLoader...")
+                    
+                    # 重新创建 DataLoader
+                    self._create_dataloader_from_manager(
+                        collate_fn=self._collate_fn, 
+                        shuffle_trainset=True # 通常训练集需要 shuffle
+                    )
+                    
+                    # 更新进度条，因为总步数可能增加了
+                    progress_bar.total = self.total_training_steps
+                    progress_bar.refresh()
+            # ========================================================
+
             for i, batch_dict in enumerate(self.train_dataloader):
                 metrics = {}
                 timing_raw = {}
@@ -1152,7 +1184,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                                         open_query=gen_batch.non_tensor_batch["extras"][i]['open_query'],
                                         evaluator=gen_batch.non_tensor_batch['extras'][i]['evaluator'],
                                         ground_truth=gen_batch.non_tensor_batch['extras'][i]['ground_truth']
-                                      ) for i in range(len(gen_batch))
+                                    ) for i in range(len(gen_batch))
                                     ]
                             # 获取经验配置
                             task_exp_configs = self.exp_manager.get_complete_exp_configs(tasks, mode="sample")
@@ -1172,9 +1204,9 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                             context_time_cost = [x.metadata["context_time_cost"] for x in trajectories if "context_time_cost" in x.metadata]
                             if context_time_cost:
                                 metrics.update({
-                                  "exp_manager/context_cost_avg":   np.mean(context_time_cost),
-                                  "exp_manager/context_cost_max":   np.max(context_time_cost),
-                                  "exp_manager/context_cost_min":   np.min(context_time_cost),
+                                    "exp_manager/context_cost_avg":   np.mean(context_time_cost),
+                                    "exp_manager/context_cost_max":   np.max(context_time_cost),
+                                    "exp_manager/context_cost_min":   np.min(context_time_cost),
                                 })
 
                             print(f"gen_batch_output.info batch.keys={gen_batch_output.batch.keys()}")
@@ -1336,6 +1368,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                                 global_steps=self.global_steps,
                                 epoch=epoch,
                                 i=i,
+                                llm_client=self.llm_client, # [Modified] 传入 LLM Client
                             )
                             metrics.update(adca_metrics)
                         # ==================== 结束 ADCA GRPO ====================

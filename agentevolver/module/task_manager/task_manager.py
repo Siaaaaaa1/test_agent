@@ -174,6 +174,8 @@ class TaskManager(object):
         ]
 
         self._tasks: list[Task] = [] # 存储加载的种子任务
+        self._hindsight_file_offset = 0  # 记录读取文件的位置
+        self._hindsight_file_path = "./agentevolver/module/tasks_explored/hindsight_supplement.jsonl" # 默认路径
         
 
     @property
@@ -217,6 +219,62 @@ class TaskManager(object):
     def register_filter(self, filter: TaskPostFilter):
         """允许外部注册额外的实时过滤器"""
         self._realtime_filters.append(filter)
+
+    def load_new_hindsight_tasks(self, file_path: str = None) -> int:
+        """
+        尝试从 Hindsight 文件中增量加载新任务。
+        
+        Args:
+            file_path: 文件路径，如果为 None 则使用默认路径。
+            
+        Returns:
+            int: 新加载的任务数量。
+        """
+        target_path = file_path or self._hindsight_file_path
+        if not os.path.exists(target_path):
+            return 0
+
+        new_tasks = []
+        try:
+            with open(target_path, 'r', encoding='utf-8') as f:
+                # 移动到上次读取的位置
+                f.seek(self._hindsight_file_offset)
+                
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                        # 构造新的 Task 对象
+                        # 注意：确保这里使用了正确的 grader/evaluator 配置
+                        task = Task(
+                            task_id=data['task_id'],
+                            query=data['query'], # Hindsight 生成的 Query 已经是具体的了
+                            env_type="hindsight", # 或者沿用原始 env_type，如 'appworld'
+                            open_query=True, # 标记为 True 以便 Adapter 处理
+                            evaluator=self._reward_config.get("synthetic_grader", "default"),
+                            extra_info={"ground_truth": data.get('ground_truth')}
+                        )
+                        new_tasks.append(task)
+                    except json.JSONDecodeError:
+                        logger.warning(f"Skipping invalid json line in hindsight file.")
+                        continue
+                
+                # 更新文件指针位置
+                self._hindsight_file_offset = f.tell()
+                
+        except Exception as e:
+            logger.error(f"Failed to load hindsight tasks: {e}")
+            return 0
+
+        if new_tasks:
+            # 将新任务加入到内部任务列表中
+            self._tasks.extend(new_tasks)
+            logger.info(f"🔥 [Dynamic Loading] Successfully added {len(new_tasks)} new hindsight tasks to dataset!")
+            return len(new_tasks)
+        
+        return 0
 
     def _compute_tasks_hash(self, tasks: Sequence[Task]) -> str:
         """根据当前任务列表计算 MD5 哈希，用于验证断点文件是否过期"""
