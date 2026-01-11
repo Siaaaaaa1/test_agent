@@ -1072,8 +1072,17 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
         轻量级的优势 (Advantage) 计算在 Driver 进程上完成。
         """
         from omegaconf import OmegaConf
-
         from agentevolver.utils.tracking import Tracking
+        import threading
+        import uuid
+        
+        # 引入 hindsight manager
+        # 请确保该模块路径正确，且 _hindsight_manager 已在其中初始化
+        try:
+            from agentevolver.module.adv_processor.adca_grpo import _hindsight_manager
+        except ImportError:
+            _hindsight_manager = None
+            print("[Warning] Could not import _hindsight_manager. Hindsight logic may fail.")
 
         logger = Tracking(
             project_name=self.config.trainer.project_name,
@@ -1099,16 +1108,12 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
         # 在训练前执行验证
         # 目前，我们只支持使用 reward_function 进行验证
         if self.val_reward_fn is not None and self.config.trainer.get("val_before_train", True):
-            val_metrics = self._validate()  # ⭐ 执行初始验证并获取指标
+            val_metrics = self._validate()
             assert val_metrics, f"{val_metrics=}"
             pprint(f"Initial validation metrics: {val_metrics}")
             logger.log(data=val_metrics, step=self.global_steps)
             if self.config.trainer.get("val_only", False):
                 return
-
-        # [0616] qingxu: 添加 `RAY_DEBUG_POST_MORTEM` 环境变量以激活断点调试
-        # vscode_conditional_breakpoint()
-        # breakpoint()
 
         # 添加进度条
         progress_bar = tqdm(total=self.total_training_steps, initial=self.global_steps, desc="Training Progress")
@@ -1121,8 +1126,6 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
         for epoch in range(self.config.trainer.total_epochs):
             
             # ================= [NEW] 动态数据注入逻辑 =================
-            # 在每个 Epoch 开始前，检查是否有新的 Hindsight 任务
-            # 确保 TaskManager 实现了这个方法
             if hasattr(self.train_task_manager, 'load_new_hindsight_tasks'):
                 new_count = self.train_task_manager.load_new_hindsight_tasks()
                 
@@ -1132,10 +1135,10 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                     # 重新创建 DataLoader
                     self._create_dataloader_from_manager(
                         collate_fn=self._collate_fn, 
-                        shuffle_trainset=True # 通常训练集需要 shuffle
+                        shuffle_trainset=True 
                     )
                     
-                    # 更新进度条，因为总步数可能增加了
+                    # 更新进度条
                     progress_bar.total = self.total_training_steps
                     progress_bar.refresh()
             # ========================================================
@@ -1174,7 +1177,6 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                             gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
                         else:
                             self.async_rollout_manager.wake_up()
-                            # gen_batch_output = self.explorer_manager.rollout(gen_batch)
 
                             # 构造 Task 列表
                             tasks = [Task(
@@ -1190,12 +1192,11 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                             task_exp_configs = self.exp_manager.get_complete_exp_configs(tasks, mode="sample")
                             assert len(task_exp_configs)==len(tasks), "{len(task_exp_configs)=}, {len(gen_batch)=}"
 
-                            # TODO enable tracing by jinli 0619
                             print("=" * 10 + "start fit rollout" + "=" * 10)
-                            trajectories = self.env_manager.rollout(tasks, task_exp_configs, mode="sample", epoch=f"train.{epoch}.{i}")  # ⭐ 使用环境管理器生成轨迹
+                            trajectories = self.env_manager.rollout(tasks, task_exp_configs, mode="sample", epoch=f"train.{epoch}.{i}")
                             assert len(trajectories)>0, "{len(trajectories)=}?"
                             print("=" * 10 + "end fit rollout" + "=" * 10)
-                            # 将轨迹转换为训练数据格式
+                            
                             gen_batch_output = self.env_manager.to_dataproto(trajectories)
                             
                             # 更新关于经验管理器的指标
@@ -1213,7 +1214,6 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                             num_term_traj = sum([traj.is_terminated  for traj in trajectories])
                             num_not_none_traj = sum([len(traj.steps)>0  for traj in trajectories])
 
-                            # gen_batch_output = self.async_rollout_manager.generate_sequences(gen_batch)
                             self.async_rollout_manager.sleep()
 
                     # 如果使用 RE-Max，需要生成 Baseline
@@ -1221,7 +1221,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                         with _timer("gen_max", timing_raw):
                             gen_baseline_batch = deepcopy(gen_batch)
                             gen_baseline_batch.meta_info["do_sample"] = False
-                            gen_baseline_output = self.actor_rollout_wg.generate_sequences(gen_baseline_batch)  # ⭐ 生成用于优势估计的基线序列
+                            gen_baseline_output = self.actor_rollout_wg.generate_sequences(gen_baseline_batch)
 
                             batch = batch.union(gen_baseline_output)
                             reward_baseline_tensor = self.reward_fn(batch)
@@ -1229,47 +1229,41 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
 
                             batch.pop(batch_keys=list(gen_baseline_output.batch.keys()))
 
-                            batch.batch["reward_baselines"] = reward_baseline_tensor  # ⭐ 将奖励基线添加到批次中
+                            batch.batch["reward_baselines"] = reward_baseline_tensor
 
                             del gen_baseline_batch, gen_baseline_output
 
-                    batch.non_tensor_batch["uid"] = np.array([str(uuid.uuid4()) for _ in range(len(batch.batch))], dtype=object)  # ⭐ 为批次中的每个项目生成唯一的 UID
+                    batch.non_tensor_batch["uid"] = np.array([str(uuid.uuid4()) for _ in range(len(batch.batch))], dtype=object)
 
-                    # 在新代码中，rollout 过程生成新的 extras，应该与原始 extra 合并。
-                    # 目前，它们是分开存储的。
-                    # assert len(gen_batch_output.non_tensor_batch["extras"].keys()&batch_extras.keys())==0, "extra of extra should not overlap with existing extra...how funny..."
-                    batch.non_tensor_batch['original_extras']=batch_extras  # ⭐ 存储原始 extras
-                    batch = union_gen_batch_via_task_id(tasks, batch, gen_batch_output)  # ⭐ 将生成的批次与当前批次合并
+                    batch.non_tensor_batch['original_extras']=batch_extras
+                    batch = union_gen_batch_via_task_id(tasks, batch, gen_batch_output)
 
-                    batch.batch["response_mask"] = compute_response_mask(batch)  # ⭐ 计算并添加响应掩码
+                    batch.batch["response_mask"] = compute_response_mask(batch)
 
                     # 更新经验池
                     summary_task = self.exp_manager.submit_summary_task(trajectories, self.global_steps)
 
-
-                    # 平衡每个 DP Rank 上的有效 Token 数量。
-                    # 注意这会打乱批次内数据的顺序。
-                    # 实现基于组的优势计算 (如 GRPO 和 RLOO) 时请注意。
+                    # 平衡批次
                     if self.config.trainer.balance_batch:
-                        self._balance_batch(batch, metrics=metrics)  # ⭐ 平衡批次以均匀分布有效 Token
+                        self._balance_batch(batch, metrics=metrics)
 
                     # 计算全局有效 Token
-                    batch.meta_info["global_token_num"] = torch.sum(batch.batch["attention_mask"], dim=-1).tolist()  # ⭐ 计算并存储全局 Token 数量
+                    batch.meta_info["global_token_num"] = torch.sum(batch.batch["attention_mask"], dim=-1).tolist()
 
                     with _timer("reward", timing_raw):
                         # 计算奖励模型分数
                         if self.use_rm:
-                            reward_tensor = self.rm_wg.compute_rm_score(batch)  # ⭐ 使用奖励模型计算分数
+                            reward_tensor = self.rm_wg.compute_rm_score(batch)
                             batch = batch.union(reward_tensor)
 
                         if self.config.reward_model.launch_reward_fn_async:
                             future_reward = compute_reward_async.remote(batch, self.config, self.tokenizer)
                         else:
-                            reward_tensor, reward_extra_infos_dict = compute_reward(batch, self.reward_fn)  # ⭐ 计算奖励和额外信息
+                            reward_tensor, reward_extra_infos_dict = compute_reward(batch, self.reward_fn)
 
-                    # 重新计算 old_log_probs (因为在 Rollout 后模型可能已经更新，或者需要更精确的 logprobs)
+                    # 重新计算 old_log_probs
                     with _timer("old_log_prob", timing_raw):
-                        old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)  # ⭐ 计算旧的对数概率
+                        old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
                         entropys = old_log_prob.batch["entropys"]
                         response_masks = batch.batch["response_mask"]
                         loss_agg_mode = self.config.actor_rollout_ref.actor.loss_agg_mode
@@ -1280,7 +1274,6 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                         batch = batch.union(old_log_prob)
 
                         if "rollout_log_probs" in batch.batch.keys():
-                            # TODO: 我们可能也想添加概率差异的指标。
                             rollout_old_log_probs = batch.batch["rollout_log_probs"]
                             actor_old_log_probs = batch.batch["old_log_probs"]
                             attention_mask = batch.batch["attention_mask"]
@@ -1304,47 +1297,39 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                             )
 
                     if self.use_reference_policy:
-                        # 计算参考策略的 log_prob
                         with _timer("ref", timing_raw):
                             if not self.ref_in_actor:
-                                ref_log_prob = self.ref_policy_wg.compute_ref_log_prob(batch)  # ⭐ 计算参考对数概率
+                                ref_log_prob = self.ref_policy_wg.compute_ref_log_prob(batch)
                             else:
                                 ref_log_prob = self.actor_rollout_wg.compute_ref_log_prob(batch)
                             batch = batch.union(ref_log_prob)
 
-                    # 计算 Values (如果使用 Critic)
                     if self.use_critic:
                         with _timer("values", timing_raw):
-                            values = self.critic_wg.compute_values(batch)  # ⭐ 使用 Critic 计算状态价值
+                            values = self.critic_wg.compute_values(batch)
                             batch = batch.union(values)
 
                     with _timer("adv", timing_raw):
-                        # 我们结合基于规则的 RM
                         reward_extra_infos_dict: dict[str, list]
                         if self.config.reward_model.launch_reward_fn_async:
-                            reward_tensor, reward_extra_infos_dict = ray.get(future_reward)  # ⭐ 从异步调用获取奖励
+                            reward_tensor, reward_extra_infos_dict = ray.get(future_reward)
                         batch.batch["token_level_scores"] = reward_tensor
 
-                        print(f"{list(reward_extra_infos_dict.keys())=}")
+                        # print(f"{list(reward_extra_infos_dict.keys())=}")
                         if reward_extra_infos_dict:
                             batch.non_tensor_batch.update({k: np.array(v) for k, v in reward_extra_infos_dict.items()})
 
-                        # 计算最终奖励。如果可用，应用 KL 惩罚。
                         if self.config.algorithm.use_kl_in_reward:
-                            batch, kl_metrics = apply_kl_penalty(batch, kl_ctrl=self.kl_ctrl_in_reward, kl_penalty=self.config.algorithm.kl_penalty)  # ⭐ 应用 KL 散度惩罚
+                            batch, kl_metrics = apply_kl_penalty(batch, kl_ctrl=self.kl_ctrl_in_reward, kl_penalty=self.config.algorithm.kl_penalty)
                             metrics.update(kl_metrics)
                         else:
                             batch.batch["token_level_rewards"] = batch.batch["token_level_scores"]
 
-                        # 计算优势 (Advantage)，在 Driver 进程上执行
-                        norm_adv_by_std_in_grpo = self.config.algorithm.get("norm_adv_by_std_in_grpo", True)  # GRPO 优势归一化因子
+                        norm_adv_by_std_in_grpo = self.config.algorithm.get("norm_adv_by_std_in_grpo", True)
                         if os.environ.get("DEBUG_ARG","").find("disable_adv_std")!=-1:
                             if epoch==0 and i==0:
                                 print("DEBUG: change norm_adv_by_std_in_grpo from True to False, using batch std!")
                             norm_adv_by_std_in_grpo = False
-
-                        # 调用原始的 compute_advantage 以兼容
-                        norm_adv_by_std_in_grpo = self.config.algorithm.get("norm_adv_by_std_in_grpo", True)
 
                         batch = compute_advantage(
                             batch,
@@ -1356,10 +1341,51 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                             multi_turn=self.config.actor_rollout_ref.rollout.multi_turn.enable,
                             config=self.config.algorithm,
                         )
-                        # shuchang
-                        # ==================== 开始 ADCA GRPO  ====================
-                        # 应用基于归因的信用分配 (Attribution-Driven Credit Assignment)
+
+                        # ==================== [NEW] Hindsight 反向归纳逻辑 ====================
+                        # 这部分逻辑不再依赖于 ADCA 是否开启，而是通过 enable_hindsight 控制
                         attribution_cfg = self._get_attribution_config()
+                        
+                        if getattr(attribution_cfg, "enable_hindsight", False) and _hindsight_manager is not None:
+                            try:
+                                # 1. 提取 Prompt 和 Response
+                                prompts = batch.batch['prompts'].tolist()
+                                responses = batch.batch['responses'].tolist()
+                                
+                                # 2. 尝试获取 Task ID
+                                # 优先从 extras 获取，因为 rollout 会更新它
+                                if "extras" in batch.non_tensor_batch:
+                                    task_ids = [e.get("task_id", "unknown") for e in batch.non_tensor_batch["extras"]]
+                                else:
+                                    task_ids = batch.non_tensor_batch.get('data_id', ["unknown"] * len(prompts))
+
+                                # 3. 计算分数 (Sample Scores)
+                                # 假设我们没有 ADCA flags，我们使用总奖励是否 > 0 作为简单的成功/失败判断
+                                # 对于 GRPO，token_level_rewards 通常只在最后一步非零
+                                sample_scores = []
+                                token_rewards = batch.batch['token_level_rewards']
+                                if hasattr(token_rewards, 'cpu'):
+                                    token_rewards = token_rewards.cpu()
+                                
+                                for _idx in range(len(prompts)):
+                                    # 聚合当前样本的奖励
+                                    score = token_rewards[_idx].sum().item()
+                                    # 转换为 1.0 (Success) 或 0.0 (Fail)
+                                    sample_scores.append(1.0 if score > 0 else 0.0)
+
+                                # 4. 启动反向归纳线程
+                                # 这里设置 threshold=0.0，表示只处理得分为 0 (失败) 的路径
+                                threading.Thread(
+                                    target=_hindsight_manager.process_failed_batch,
+                                    args=(prompts, responses, sample_scores, task_ids),
+                                    kwargs={"threshold": 0.0}
+                                ).start()
+                                
+                            except Exception as e:
+                                print(f"[Warning] Hindsight logic encountered an error: {e}")
+                        # =======================================================================
+
+                        # ==================== 开始 ADCA GRPO (如果开启) ====================
                         if getattr(attribution_cfg, 'enable', False):
                             batch, adca_metrics = apply_adca_grpo(
                                 batch=batch,
@@ -1368,12 +1394,11 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                                 global_steps=self.global_steps,
                                 epoch=epoch,
                                 i=i,
-                                llm_client=self.llm_client, # [Modified] 传入 LLM Client
+                                llm_client=self.llm_client,
                             )
                             metrics.update(adca_metrics)
                         # ==================== 结束 ADCA GRPO ====================
                         
-                        # 调试选项：对非环境评估器（即合成数据）生成的优势应用 0.5 的衰减因子
                         if os.environ.get("DEBUG_ARG","").find("synth_decay")!=-1:
                             if epoch==0 and i==0:
                                 print("DEBUG: change ratio of synthetic data from 1 to 0.5")
@@ -1383,12 +1408,12 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                                     assert 'evaluator' in batch.non_tensor_batch['extras'][i]
                                     evaluator = batch.non_tensor_batch['extras'][i]['evaluator']
                                     if evaluator != 'env':
-                                        batch.batch["advantages"][i] *= 0.5  # ⭐ 对合成数据应用衰减因子
+                                        batch.batch["advantages"][i] *= 0.5
 
                     # 更新 Critic
                     if self.use_critic:
                         with _timer("update_critic", timing_raw):
-                            critic_output = self.critic_wg.update_critic(batch)  # ⭐ 更新 Critic 模型
+                            critic_output = self.critic_wg.update_critic(batch)
                         critic_output_metrics = reduce_metrics(critic_output.meta_info["metrics"])
                         metrics.update(critic_output_metrics)
 
@@ -1397,7 +1422,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                         # 更新 Actor
                         with _timer("update_actor", timing_raw):
                             batch.meta_info["multi_turn"] = self.config.actor_rollout_ref.rollout.multi_turn.enable
-                            actor_output = self.actor_rollout_wg.update_actor(batch)  # ⭐ 使用新批次更新 Actor
+                            actor_output = self.actor_rollout_wg.update_actor(batch)
                         actor_output_metrics = reduce_metrics(actor_output.meta_info["metrics"])
                         metrics.update(actor_output_metrics)
                     
@@ -1411,7 +1436,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                     rollout_data_dir = self.config.trainer.get("rollout_data_dir", None)
                     if rollout_data_dir:
                         with _timer("dump_rollout_generations", timing_raw):
-                            print(batch.batch.keys())
+                            # print(batch.batch.keys())
                             inputs = self.tokenizer.batch_decode(batch.batch["prompts"], skip_special_tokens=True)
                             outputs = self.tokenizer.batch_decode(batch.batch["responses"], skip_special_tokens=True)
                             scores = batch.batch["token_level_scores"].sum(-1).cpu().tolist()
@@ -1421,7 +1446,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                                 scores=scores,
                                 reward_extra_infos_dict=reward_extra_infos_dict,
                                 dump_path=rollout_data_dir,
-                            )  # ⭐ 转储生成的经验和轨迹
+                            )
 
                             # 保存原始轨迹
                             filename = os.path.join(rollout_data_dir, f"traj_{self.global_steps}.jsonl")
@@ -1431,20 +1456,20 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                             # 保存任务
                             filename = os.path.join(rollout_data_dir, f"task_{self.global_steps}.jsonl")
                             with open(filename,"w") as f:
-                                for task in tasks: # this must be bounded # type: ignore
+                                for task in tasks:
                                     f.write(task.json() + "\n")
 
                     # 验证
                     if self.val_reward_fn is not None and self.config.trainer.test_freq > 0 and (is_last_step or self.global_steps % self.config.trainer.test_freq == 0):
                         with _timer("testing", timing_raw):
-                            val_metrics: dict = self._validate()  # ⭐ 验证模型并收集指标
+                            val_metrics: dict = self._validate()
                             if is_last_step:
                                 last_val_metrics = val_metrics
                         metrics.update(val_metrics)
 
                     if self.config.trainer.save_freq > 0 and (is_last_step or self.global_steps % self.config.trainer.save_freq == 0):
                         with _timer("save_checkpoint", timing_raw):
-                            self._save_checkpoint()  # ⭐ 保存当前模型状态为检查点
+                            self._save_checkpoint()
 
                 # 训练指标
                 metrics.update(
@@ -1458,12 +1483,11 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                 # 收集指标
                 metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic))
                 metrics.update(compute_timing_metrics(batch=batch, timing_raw=timing_raw))
-                # TODO: implement actual tflpo and theoretical tflpo
                 n_gpus = self.resource_pool_manager.get_n_gpus()
                 metrics.update(compute_throughout_metrics(batch=batch, timing_raw=timing_raw, n_gpus=n_gpus))
 
                 # 记录日志
-                logger.log(data=metrics, step=self.global_steps)  # ⭐ 记录收集到的指标
+                logger.log(data=metrics, step=self.global_steps)
 
                 progress_bar.update(1)
                 self.global_steps += 1
@@ -1472,10 +1496,9 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                     progress_bar.close()
                     return
 
-            # 调试选项：随着训练进行，减少合成数据的比例
             if os.environ.get("DEBUG_ARG",'').find("ratio_decay")!=-1:
                 from agentevolver.module.task_manager.data_mixture import UnifiedMixtureStrategy
                 print("DEBUG: change ratio of synthetic data from 1 to 0.5")
                 assert isinstance(self.train_dataset._mixture_strategy,UnifiedMixtureStrategy)
-                self.train_dataset._mixture_strategy._synthetic_ratio-=1/5 # 初始为 1, 约在第 5 个 epoch (约第 30 步) 降为 0
-            self.train_dataset.update()  # ⭐ 更新训练数据集 (生成新任务或混合数据) 以进行下一个 Epoch
+                self.train_dataset._mixture_strategy._synthetic_ratio-=1/5
+            self.train_dataset.update()

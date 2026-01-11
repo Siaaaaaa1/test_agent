@@ -175,7 +175,7 @@ class TaskManager(object):
 
         self._tasks: list[Task] = [] # 存储加载的种子任务
         self._hindsight_file_offset = 0  # 记录读取文件的位置
-        self._hindsight_file_path = "./agentevolver/module/tasks_explored/hindsight_supplement.jsonl" # 默认路径
+        self._hindsight_file_path = self._config.task_manager.get('exploration_strategy_args', {}).get('hindsight_data_path', './tasks_explored/hindsight_supplement.jsonl')
         
 
     @property

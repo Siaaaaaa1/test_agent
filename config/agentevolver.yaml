@@ -183,6 +183,7 @@ task_manager:
       - "api_docs"
     task_labels_path: "./environments/appworld/data/datasets/train.jsonl"
     api_knowledge_path: "./agentevolver/preprocess/output/appworld_tool_manual.json"
+    hindsight_data_path: "./tasks_explored/hindsight_supplement.jsonl"
 
 exp_manager:
   # rollout mode on dev/test set: ["mixed", "all", "woexp"]
@@ -261,3 +262,5 @@ attribution_driven_credit_assignment:
     skip_type: "none"
     # recommended to be true to monitor the attribution module's internal state
     enable_adca_metric: false
+    # whether to use hindsight data for attribution
+    enable_hindsight: false
