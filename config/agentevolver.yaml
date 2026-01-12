@@ -263,4 +263,4 @@ attribution_driven_credit_assignment:
     # recommended to be true to monitor the attribution module's internal state
     enable_adca_metric: false
     # whether to use hindsight data for attribution
-    enable_hindsight: false
+  enable_hindsight: false
