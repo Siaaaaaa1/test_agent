@@ -336,6 +336,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
         collate_fn=None,
         shuffle_trainset:bool=False,
         device_name="cuda",
+        hindsight_manager=Optional[None],
     ):
         """
         初始化基于 Ray 后端的分布式 PPO 训练器。
@@ -424,6 +425,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
 
         # 创建数据加载器
         self._create_dataloader_from_manager(collate_fn, shuffle_trainset)  # ⭐ 从管理器创建数据加载器
+        self.hindsight_manager = hindsight_manager
 
 
     def init_workers(self):
