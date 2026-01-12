@@ -33,7 +33,8 @@ export RAY_NUM_CPUS=32
 # 指定 GPU (如使用后4张)
 # export CUDA_VISIBLE_DEVICES=4,5,6,7
 
-echo "Starting Training with Total Context: 25580 (Prompt: 4000, Response: 21580)..."
+# 修改提示：显示新的 Context 分配
+echo "Starting Training with Total Context: 100000 (Prompt: 5000, Response: 95000)..."
 
 python3 -m agentevolver.main_ppo \
     --config-path="$CONFIG_PATH" \
@@ -52,8 +53,8 @@ python3 -m agentevolver.main_ppo \
     data.filter_overlong_prompts=True \
     data.train_files=null \
     data.val_files=null \
-    data.max_prompt_length=4000 \
-    data.max_response_length=21580 \
+    data.max_prompt_length=5000 \
+    data.max_response_length=95000 \
     \
     actor_rollout_ref.model.path=./model/Qwen2.5-7B-Instruct \
     actor_rollout_ref.model.use_remove_padding=True \
@@ -69,7 +70,7 @@ python3 -m agentevolver.main_ppo \
     actor_rollout_ref.actor.off_cliprange_high=0.6 \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
-    actor_rollout_ref.actor.ppo_max_token_len_per_gpu=25580 \
+    actor_rollout_ref.actor.ppo_max_token_len_per_gpu=100000 \
     \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.mode=async \
@@ -79,26 +80,26 @@ python3 -m agentevolver.main_ppo \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.temperature=0.8 \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
-    actor_rollout_ref.rollout.max_model_len=32768 \
-    actor_rollout_ref.rollout.prompt_length=4000 \
-    actor_rollout_ref.rollout.response_length=21580 \
+    actor_rollout_ref.rollout.max_model_len=100000 \
+    actor_rollout_ref.rollout.prompt_length=5000 \
+    actor_rollout_ref.rollout.response_length=95000 \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
-    actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=25580 \
+    actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=100000 \
     actor_rollout_ref.rollout.val_kwargs.n=8 \
     \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=1 \
-    actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=25580 \
+    actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=100000 \
     \
-    critic.ppo_max_token_len_per_gpu=25580 \
-    critic.forward_max_token_len_per_gpu=25580 \
+    critic.ppo_max_token_len_per_gpu=100000 \
+    critic.forward_max_token_len_per_gpu=100000 \
     \
     trainer.n_gpus_per_node=8 \
     trainer.nnodes=1 \
     trainer.critic_warmup=0 \
     trainer.logger="['console']" \
     trainer.project_name="AgentEvolver" \
-    trainer.experiment_name="appworld_test_0110" \
+    trainer.experiment_name="appworld_test_0110_100k" \
     trainer.save_freq=2 \
     trainer.test_freq=1 \
     trainer.total_epochs=40 \
