@@ -66,8 +66,8 @@ python3 -m agentevolver.main_ppo \
     actor_rollout_ref.actor.ppo_mini_batch_size=32 \
     actor_rollout_ref.actor.use_kl_loss=False \
     actor_rollout_ref.actor.off_cliprange_high=0.6 \
-    actor_rollout_ref.actor.fsdp_config.param_offload=True \
-    actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
+    actor_rollout_ref.actor.fsdp_config.param_offload=False \
+    actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
     actor_rollout_ref.actor.ppo_max_token_len_per_gpu=32768 \
     \
     actor_rollout_ref.rollout.name=vllm \
@@ -75,14 +75,14 @@ python3 -m agentevolver.main_ppo \
     actor_rollout_ref.rollout.n=8 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.temperature=0.8 \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.85 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.5 \
     actor_rollout_ref.rollout.max_model_len=32768 \
     actor_rollout_ref.rollout.prompt_length=4000 \
     actor_rollout_ref.rollout.response_length=21580 \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=32768 \
     \
-    actor_rollout_ref.ref.fsdp_config.param_offload=True \
+    actor_rollout_ref.ref.fsdp_config.param_offload=False \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=32768 \
     \
