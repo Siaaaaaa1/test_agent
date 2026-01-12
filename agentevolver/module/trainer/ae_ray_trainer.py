@@ -1076,13 +1076,8 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
         import threading
         import uuid
         
-        # 引入 hindsight manager
-        # 请确保该模块路径正确，且 _hindsight_manager 已在其中初始化
-        try:
-            from agentevolver.module.adv_processor.adca_grpo import _hindsight_manager
-        except ImportError:
-            _hindsight_manager = None
-            print("[Warning] Could not import _hindsight_manager. Hindsight logic may fail.")
+        # [修改 1] 移除了从模块导入 _hindsight_manager 的代码
+        # 因为我们现在使用 self.hindsight_manager
 
         logger = Tracking(
             project_name=self.config.trainer.project_name,
@@ -1343,10 +1338,11 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                         )
 
                         # ==================== [NEW] Hindsight 反向归纳逻辑 ====================
-                        # 这部分逻辑不再依赖于 ADCA 是否开启，而是通过 enable_hindsight 控制
+                        # [修改 2] 使用 self.hindsight_manager
                         attribution_cfg = self._get_attribution_config()
                         
-                        if getattr(attribution_cfg, "enable_hindsight", False) and _hindsight_manager is not None:
+                        # 检查开关，并确保 self.hindsight_manager 已被正确注入
+                        if getattr(attribution_cfg, "enable_hindsight", False) and getattr(self, "hindsight_manager", None) is not None:
                             try:
                                 # 1. 提取 Prompt 和 Response
                                 prompts = batch.batch['prompts'].tolist()
@@ -1374,9 +1370,9 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                                     sample_scores.append(1.0 if score > 0 else 0.0)
 
                                 # 4. 启动反向归纳线程
-                                # 这里设置 threshold=0.0，表示只处理得分为 0 (失败) 的路径
+                                # [修改 3] 调用 self.hindsight_manager.process_failed_batch
                                 threading.Thread(
-                                    target=_hindsight_manager.process_failed_batch,
+                                    target=self.hindsight_manager.process_failed_batch,
                                     args=(prompts, responses, sample_scores, task_ids),
                                     kwargs={"threshold": 0.0}
                                 ).start()
@@ -1501,4 +1497,4 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                 print("DEBUG: change ratio of synthetic data from 1 to 0.5")
                 assert isinstance(self.train_dataset._mixture_strategy,UnifiedMixtureStrategy)
                 self.train_dataset._mixture_strategy._synthetic_ratio-=1/5
-            self.train_dataset.update()
+            self.train_dataset.update_hindsight_data()

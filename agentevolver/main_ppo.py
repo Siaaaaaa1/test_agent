@@ -19,6 +19,8 @@ from agentevolver.module.task_manager.strategies.random import LlmRandomSampling
 from agentevolver.module.task_manager.task_manager import TaskManager
 from agentevolver.module.task_manager.env_profiles import EnvProfile
 from agentevolver.module.trainer.ae_ray_trainer import AgentEvolverRayPPOTrainer
+from agentevolver.module.adv_processor.hindsight import HindsightManager  # [新增] 引入 HindsightManager
+
 
 # 引入 verl 库的相关模块
 from verl.trainer.ppo.reward import load_reward_manager
@@ -321,6 +323,26 @@ class TaskRunner:
             n=config.task_manager.n,
         )
 
+        # ==================== [NEW] Hindsight Manager Initialization ====================
+        # 在这里初始化 HindsightManager 并注入到 Trainer 中，解决 ae_ray_trainer.py 中的初始化问题
+        hindsight_manager = None
+        attribution_cfg = config.get("attribution", {})
+        if attribution_cfg.get("enable_hindsight", False):
+            print("[Main] Initializing HindsightManager for AgentEvolver...")
+            try:
+                # 获取保存路径，默认为 tasks_explored 下
+                save_path = attribution_cfg.get("hindsight_save_path", "tasks_explored/hindsight_supplement.jsonl")
+                # 使用已有的 llm_client 和 tokenizer
+                hindsight_manager = HindsightManager(
+                    llm_client=llm_client,
+                    tokenizer=tokenizer,
+                    saved_path=save_path,
+                    num_threads=config.task_manager.get("num_explore_threads", 4)
+                )
+            except Exception as e:
+                print(f"[Warning] Failed to initialize HindsightManager in main_ppo: {e}")
+        # ================================================================================
+
         # 10. 初始化 Trainer 并开始训练
         # 使用自定义的 AgentEvolverRayPPOTrainer
         trainer = AgentEvolverRayPPOTrainer(
@@ -336,6 +358,7 @@ class TaskRunner:
             val_task_manager=val_task_manager,
             collate_fn=collate_fn,
             device_name=config.trainer.device,
+            hindsight_manager=hindsight_manager,   # [新增] 传入 HindsightManager 实例
         )
         trainer.init_workers() # 初始化分布式 Worker
         trainer.fit()          # 开始训练循环

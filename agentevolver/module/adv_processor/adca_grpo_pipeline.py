@@ -13,7 +13,6 @@ from verl import DataProto
 # Note: These imports are moved from the trainer's fit loop.
 from agentevolver.utils.step_parser import verify_step_alignment, verify_step_content
 from agentevolver.module.adv_processor.semantic_attribution import evaluate_step_flags_parallel_sync
-from agentevolver.module.adv_processor.hindsight import HindsightManager
 from agentevolver.module.adv_processor.adca_grpo import (
     compute_prm_grpo_advantages, PRMHyper
 )
