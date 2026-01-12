@@ -72,7 +72,7 @@ python3 -m agentevolver.main_ppo \
     \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.mode=async \
-    actor_rollout_ref.rollout.n=4 \
+    actor_rollout_ref.rollout.n=8 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.temperature=0.8 \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.85 \
@@ -102,7 +102,7 @@ python3 -m agentevolver.main_ppo \
     trainer.validation_data_dir="experiments/tech_synthetic/${experiment_name}/validation_log" \
     trainer.rollout_data_dir="experiments/tech_synthetic/${experiment_name}/rollout_log" \
     \
-    task_manager.n=10 \
+    task_manager.n=32 \
     task_manager.mixture.synthetic_data_ratio=2.0 \
     task_manager.mixture.use_original_tasks=False \
     task_manager.train_data_path=./tasks_explored/tasks_explored.train.json \
