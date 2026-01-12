@@ -29,7 +29,7 @@ current_time=$(date "+%Y%m%d_%H%M%S")
 log_file="log_${current_time}.log"
 
 # Ray 配置: 限制 Ray 使用的 CPU 核数，防止资源争抢
-export RAY_NUM_CPUS=32
+# export RAY_NUM_CPUS=32
 # 指定 GPU (如使用后4张)
 # export CUDA_VISIBLE_DEVICES=4,5,6,7
 
@@ -54,6 +54,7 @@ python3 -m agentevolver.main_ppo \
     data.val_files=null \
     data.max_prompt_length=4000 \
     data.max_response_length=21580 \
+    data.val_batch_size=32 \
     \
     actor_rollout_ref.model.path=./model/Qwen2.5-7B-Instruct \
     actor_rollout_ref.model.use_remove_padding=True \
@@ -62,7 +63,7 @@ python3 -m agentevolver.main_ppo \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.actor.ppo_mini_batch_size=8 \
-    actor_rollout_ref.actor.use_kl_loss=True \
+    actor_rollout_ref.actor.use_kl_loss=False \
     actor_rollout_ref.actor.kl_loss_coef=0.001 \
     actor_rollout_ref.actor.kl_loss_type=low_var_kl \
     actor_rollout_ref.actor.entropy_coeff=0 \
@@ -96,13 +97,13 @@ python3 -m agentevolver.main_ppo \
     trainer.n_gpus_per_node=8 \
     trainer.nnodes=1 \
     trainer.critic_warmup=0 \
-    trainer.logger="['console']" \
+    trainer.logger="['console','wandb']" \
     trainer.project_name="AgentEvolver" \
     trainer.experiment_name="appworld_test_0110" \
     trainer.save_freq=2 \
     trainer.test_freq=1 \
     trainer.total_epochs=40 \
-    trainer.val_before_train=False \
+    trainer.val_before_train=false \
     trainer.validation_data_dir="experiments/tech_synthetic/${experiment_name}/validation_log" \
     trainer.rollout_data_dir="experiments/tech_synthetic/${experiment_name}/rollout_log" \
     \
