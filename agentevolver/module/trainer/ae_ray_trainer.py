@@ -1141,6 +1141,11 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
             # ========================================================
 
             for i, batch_dict in enumerate(self.train_dataloader):
+
+                # Need Delete: hindsight data after each batch to save memory
+                if self.hindsight_manager is not None:
+                    self.train_dataset.update_hindsight_data()
+
                 metrics = {}
                 timing_raw = {}
                 batch: DataProto = DataProto.from_single_dict(batch_dict)
@@ -1499,4 +1504,5 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                 print("DEBUG: change ratio of synthetic data from 1 to 0.5")
                 assert isinstance(self.train_dataset._mixture_strategy,UnifiedMixtureStrategy)
                 self.train_dataset._mixture_strategy._synthetic_ratio-=1/5
-            self.train_dataset.update_hindsight_data()
+            if self.hindsight_manager is not None:
+                self.train_dataset.update_hindsight_data()
