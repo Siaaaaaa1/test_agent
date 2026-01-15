@@ -85,7 +85,7 @@ class AgentFlow(BaseAgentFlow):
                 # indent=4 实现格式化保存，ensure_ascii=False 保证中文正常显示
                 json.dump(data_list, f, ensure_ascii=False, indent=4)
 
-    def execute(self, context_manager, init_messages: List[dict], env: EnvClient, instance_id: str, tmux, stop, thread_index, task_id, traj_exp_config, data_id="", rollout_id="", query="", **kwargs) -> Linear_CMT:
+    def execute(self, context_manager, init_messages: List[dict], env: EnvClient, instance_id: str, tmux, stop, thread_index, task_id, traj_exp_config, data_id="", rollout_id="", query="", ground_truth="", **kwargs) -> Linear_CMT:
         """
         核心执行逻辑：管理 AI Agent 与环境的交互，生成轨迹、处理经验并计算奖励。
         """
@@ -110,6 +110,15 @@ class AgentFlow(BaseAgentFlow):
         request_id: str = ""
         err_in_env = False
         
+        # [新增] 读取过程奖励开关 (默认开启)
+        enable_gt_process_reward = self.config.actor_rollout_ref.rollout.get("enable_gt_process_reward", False)
+        
+        # [新增] 检查当前 RewardCalculator 是否支持过程奖励 (duck typing)
+        can_calculate_process = (
+            self._reward_calculator is not None and 
+            hasattr(self._reward_calculator, 'calculate_step_reward')
+        )
+
         # ---------------- 交互循环 (ReAct Loop) ----------------
         for act_step in range(self.max_steps):
             tmux['step'][thread_index] = act_step
@@ -138,6 +147,8 @@ class AgentFlow(BaseAgentFlow):
             self.cmt.save_llm_output(llm_output, input_msg_ref=step_input_message_arr)  
             tmux['token'][thread_index] += self.cmt.generated_token_cnt
 
+            step_process_reward = 0.0
+
             try:
                 action_content = self.cmt.prepare_world_interaction()
                 env_output = env.step(instance_id, {"content": action_content, "role": "assistant"})  
@@ -145,6 +156,20 @@ class AgentFlow(BaseAgentFlow):
                 assert len(env_output['state']) == 1
                 env_output["state"] = env_output["state"][0]
                 
+                # [新增] 计算过程奖励逻辑
+                # 仅当 env.step 成功，且配置开启，且计算器支持时调用
+                if enable_gt_process_reward and can_calculate_process:
+                    # 调用 APIProcessRewardCalculator 的特有方法
+                    step_process_reward = self._reward_calculator.calculate_step_reward(action_content)
+                    
+                    # 将奖励累加到 env_output 中 (假设 env 可能返回 sparse reward = 0)
+                    current_val = env_output.get('reward', 0.0)
+                    if current_val is None: current_val = 0.0
+                    env_output['reward'] = current_val + step_process_reward
+                    
+                    if step_process_reward > 0 and self.console_debug_mode:
+                        logger.info(f"[Process Reward] Step {act_step}: +{step_process_reward}")
+
                 if env_output["state"]["role"] == "tool":
                     env_output["state"] = convert_tool_to_user_message(env_output["state"], self.tokenizer, format="qwen")
                 
@@ -175,6 +200,7 @@ class AgentFlow(BaseAgentFlow):
 
         # 10. 计算奖励
         if self._reward_calculator is not None:
+            # 这里调用的是 Outcome Reward 逻辑 (LLM Judge)
             grader_res = self._reward_calculator.calculate_reward(self.cmt, env, instance_id)  
             score = grader_res["score"] 
             reason = grader_res["reason"] or "No reason provided."

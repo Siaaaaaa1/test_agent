@@ -98,6 +98,7 @@ actor_rollout_ref:
     do_sample: True
     # number of responses (i.e. num sample times)
     n: 1 # > 1 for grpo
+    enable_gt_process_reward: False
 
 critic:
   strategy: fsdp

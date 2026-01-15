@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List, Dict, Any
 import uuid
 
 from omegaconf import DictConfig
@@ -12,7 +12,6 @@ from agentevolver.module.context_manager.cmt_linear import Linear_CMT, ExtendedM
 from agentevolver.module.context_manager.cmt_linear_think import LinearThinkCMT
 from agentevolver.module.context_manager.cmt_context_clip import SelfContextClipCMT
 from agentevolver.module.exp_manager.exp_manager import TrajExpConfig
-from typing import List, Dict, Any, Optional
 
 
 class EnvWorker(object):
@@ -147,6 +146,7 @@ class EnvWorker(object):
                 data_id=data_id,
                 rollout_id=rollout_id,
                 query=self.task.query,
+                ground_truth=self.task.ground_truth, # [新增] 传入 ground_truth 用于过程奖励
                 **kwargs
             )  # ⭐ 执行任务并生成完整轨迹
             
