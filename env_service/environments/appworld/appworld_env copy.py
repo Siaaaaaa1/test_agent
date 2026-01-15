@@ -20,8 +20,6 @@ from typing import Any, Dict, List
 import re
 import json
 from copy import deepcopy
-import shutil  # [新增] 用于递归删除目录
-import os      # [新增] 用于路径检查
 
 from fastapi.encoders import ENCODERS_BY_TYPE
 from jinja2 import Template
@@ -836,37 +834,7 @@ class AppworldEnv(BaseEnv):
 
     def close(self):
         if self.world:
-            # 1. 尝试获取该 AppWorld 实例的输出目录路径
-            # AppWorld 对象通常有一个 output_directory 属性指向其数据存储位置
-            target_dir = getattr(self.world, 'output_directory', None)
-            
-            # 如果没有找到 output_directory，尝试根据 instance_id (即 experiment_name) 猜测路径
-            # 注意：这里假设 AppWorld 的默认输出路径结构，根据实际情况可能需要调整
-            if not target_dir and self.instance_id:
-                # 这是一个常见的默认路径猜测，但最好依赖 self.world 对象的属性
-                # 假设 APPWORLD_ROOT 在环境变量中，或者是当前目录
-                base_root = os.environ.get("APPWORLD_ROOT", ".")
-                potential_path = os.path.join(base_root, "outputs", self.instance_id)
-                if os.path.exists(potential_path):
-                    target_dir = potential_path
-
-            # 2. 关闭 AppWorld 连接
-            try:
-                self.world.close()
-            except Exception as e:
-                # 仅打印错误，不要阻断清理流程
-                print(f"Warning: Error closing AppWorld connection: {e}")
-
-            # 3. [关键步骤] 强制删除该实例生成的数据库和文件
-            if target_dir and os.path.exists(target_dir):
-                try:
-                    shutil.rmtree(target_dir, ignore_errors=True)
-                    # 可选：打印日志确认清理
-                    # print(f"Cleaned up AppWorld directory: {target_dir}")
-                except Exception as e:
-                    print(f"Error cleaning up AppWorld directory {target_dir}: {e}")
-            
-            self.world = None
+            self.world.close()
 
     def transition(
         self,
