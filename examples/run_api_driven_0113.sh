@@ -102,6 +102,9 @@ python3 -m agentevolver.main_ppo \
     trainer.validation_data_dir="experiments/tech_synthetic/${experiment_name}/validation_log" \
     trainer.rollout_data_dir="experiments/tech_synthetic/${experiment_name}/rollout_log" \
     \
+    attribution_driven_credit_assignment.enable=false \
+    attribution_driven_credit_assignment.enable_hindsight=false \
+    \
     task_manager.n=128 \
     task_manager.mixture.synthetic_data_ratio=2.0 \
     task_manager.mixture.use_original_tasks=False \
