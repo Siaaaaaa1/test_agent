@@ -22,111 +22,85 @@ class LlmException(Exception):
         return self._type
 
 class DashScopeClient:
-    """Aliyun DashScope API Client (Modified for Custom API & .env Support)"""
+    """
+    Modified DashScopeClient to support internal Azure Proxy.
+    Class name and method signatures are preserved.
+    """
     
     def __init__(self, api_key: Optional[str] = None, model_name: str = "qwen-plus", 
                  temperature: float = 0.7, max_tokens: int = 2048):
         # ----------------------------------------------------------------------
-        # Modification: Load config from .env and support Aliyun API
+        # Modification: Implementation changed for new Azure Proxy API
         # ----------------------------------------------------------------------
         
-        # 1. Load environment variables from .env file
         if load_dotenv:
             load_dotenv()
-        else:
-            logger.warning("python-dotenv not installed. Relying on system environment variables.")
 
-        # 2. Get API Key from environment variables or argument
-        # Prioritize DASHSCOPE_API_KEY, then OPENAI_API_KEY (compatible with example.env)
-        self.api_key = api_key or os.getenv("DASHSCOPE_API_KEY") or os.getenv("OPENAI_API_KEY")
+        # 1. API Key is not required by the new curl, but we keep the interface.
+        # We store it if provided, but won't raise error if missing.
+        self.api_key = api_key or os.getenv("DASHSCOPE_API_KEY") or os.getenv("OPENAI_API_KEY") or "dummy_key"
         
-        if not self.api_key:
-            # Fallback check for keys with quotes in .env if not parsed correctly
-            raise ValueError("API key is required. Please set DASHSCOPE_API_KEY or OPENAI_API_KEY in .env or environment.")
-        
-        # Clean up key if it was loaded with quotes
-        if self.api_key.startswith('"') and self.api_key.endswith('"'):
-            self.api_key = self.api_key[1:-1]
-
-        # 3. Get Model Name from environment or argument
-        # Checks LLM_MODEL or MODEL_NAME in env, otherwise uses the passed default
+        # 2. Model Name
+        # User defaults to qwen-plus in signature, but new API uses azure-gpt-5.
+        # We respect the passed arg, but checking env is good practice.
         self.model_name = os.getenv("LLM_MODEL") or os.getenv("MODEL_NAME") or model_name
         
         self.temperature = temperature
         self.max_tokens = max_tokens
         
-        # 4. Get Base URL from environment or use Aliyun default
-        # Checks OPENAI_BASE_URL (from example.env), DASHSCOPE_BASE_URL, or defaults to Aliyun
-        default_aliyun_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-        self.base_url = os.getenv("OPENAI_BASE_URL") or os.getenv("DASHSCOPE_BASE_URL") or default_aliyun_url
+        # 3. Base URL - Hardcoded to the new proxy address provided
+        # The curl URL is http://ichatproxy.devops.weread.woa.com/api/chat_completions?source=exp
+        # We set the base part here.
+        self.base_url = os.getenv("AZURE_PROXY_URL") or "http://ichatproxy.devops.weread.woa.com"
         
+        # 4. Headers - Removed Authorization as per curl command
         self.headers = {
-            "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
         
-        logger.info(f"Initialized DashScopeClient with model: {self.model_name}, base_url: {self.base_url}")
+        logger.info(f"Initialized DashScopeClient (Proxy) with model: {self.model_name}, base_url: {self.base_url}")
     
     def set_model(self, model_name: str):
         """
         Sets the model name for the DashScopeClient instance.
-
-        Args:
-            model_name (str): The name of the model to be used for API interactions.
         """
         self.model_name = model_name
 
     def chat(self, messages: list[dict[str, str]], sampling_params: dict[str, Any] = None, **kwargs) -> str:
         """
         Sends a chat request to the LLM.
-        Modified to support optional sampling_params and additional kwargs (like response_format).
         """
-        # 1. 合并参数：优先使用传入的 kwargs，同时兼容旧的 sampling_params
         params = sampling_params.copy() if sampling_params else {}
         params.update(kwargs)
         
-        # 2. 直接调用 chat_completion 的非流式模式
-        # 这样可以将 response_format 等参数直接透传给 API
         result = self.chat_completion(messages, stream=False, **params)
         
-        # 3. 确保返回字符串 (chat_completion 在出错时可能返回 generator 或空字符串)
         if isinstance(result, str):
             return result
         return ""
 
     def chat_stream(self, messages: list[dict[str, str]], sampling_params: dict[str, Any]) -> Generator[str, None, None]:
         """
-        Initiates a streaming chat session and returns a generator that yields the response as it is being generated.
-
-        Args:
-            messages (list[dict[str, str]]): A list of message objects, each containing 'role' and 'content'.
-            sampling_params (dict[str, Any]): Parameters for controlling the sampling behavior of the model.
-
-        Returns:
-            Generator[str, None, None]: A generator that yields the response text as it is being generated.
+        Initiates a streaming chat session.
         """
         return self.chat_stream_with_retry(messages, **sampling_params)
 
     def chat_completion(self, messages: list[dict[str, str]], stream: bool = False, **kwargs) -> str | Generator[str, None, None]:
         """
-        Sends a request to the chat completion API, supporting both non-streaming and streaming modes, and handles various exceptions.
-
-        Args:
-            messages (list[dict[str, str]]): A list of message objects, each containing 'role' and 'content'.
-            stream (bool, optional): If True, the response will be streamed. Defaults to False.
-            **kwargs: Additional parameters to be passed to the API.
-
-        Returns:
-            str | Generator[str, None, None]: The full response text if not streaming, or a generator yielding the response text if streaming.
+        Sends a request to the chat completion API.
+        Modified to use the specific path and query parameters for the new Proxy API.
         """
-        # Ensure base_url does not end with / to avoid double slashes if needed, though standard usually omits it
         base = self.base_url.rstrip('/')
-        url = f"{base}/chat/completions"
+        
+        # Modification: Change URL path and add query parameter ?source=exp
+        url = f"{base}/api/chat_completions?source=exp"
         
         # Merge parameters
         params = {
             "model": self.model_name,
             "messages": messages,
+            # Note: The new API might or might not strictly support these at top level,
+            # but we keep them as per standard OpenAI/DashScope format usually forwarded by proxies.
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
             "stream": stream,
@@ -151,21 +125,15 @@ class DashScopeClient:
 
     def _handle_normal_response(self, url: str, params: dict) -> str:
         """
-        Handles the non-streaming (normal) response from the API.
-
-        Args:
-            url (str): The URL to which the POST request is sent.
-            params (dict): The parameters to be included in the JSON body of the POST request.
-
-        Returns:
-            str: The content of the first choice's message in the response, or an empty string if the response format is unexpected.
+        Handles the non-streaming (normal) response.
         """
+        # Note: headers=self.headers no longer contains Authorization
         response = requests.post(url, headers=self.headers, json=params, timeout=600)
+        
         if not response.ok:
-            # check inappropriate content
             try:
                 error_json = response.json().get('error', {})
-                message = error_json.get('message', '')
+                message = error_json.get('message', '') if isinstance(error_json, dict) else str(error_json)
                 if "inappropriate content" in message:
                     raise LlmException("inappropriate content")
                 if "limit" in message:
@@ -173,7 +141,7 @@ class DashScopeClient:
             except LlmException as e:
                 raise
             except:
-                logger.error(f"API request failed: {response.text}")
+                logger.error(f"API request failed: {response.status_code} {response.text}")
                 response.raise_for_status()
         
         result = response.json()
@@ -185,21 +153,13 @@ class DashScopeClient:
 
     def _handle_stream_response(self, url: str, params: dict) -> Generator[str, None, None]:
         """
-        Handles the streaming response from a POST request to the specified URL.
-
-        Args:
-            url (str): The URL to which the POST request is sent.
-            params (dict): The parameters to be sent with the POST request.
-
-        Yields:
-            str: The content of the response, if it meets the specified conditions.
+        Handles the streaming response.
         """
         response = requests.post(url, headers=self.headers, json=params, stream=True, timeout=600)
         if not response.ok:
-            # check inappropriate content
             try:
                 error_json = response.json().get('error', {})
-                message = error_json.get('message', '')
+                message = error_json.get('message', '') if isinstance(error_json, dict) else str(error_json)
                 if "inappropriate content" in message:
                     raise LlmException("inappropriate content")
                 if "limit" in message:
@@ -207,14 +167,14 @@ class DashScopeClient:
             except LlmException as e:
                 raise
             except:
-                logger.error(f"API request failed: {response.text}")
+                logger.error(f"API request failed: {response.status_code} {response.text}")
                 response.raise_for_status()
         
         for line in response.iter_lines():
             if line:
                 line = line.decode('utf-8')
                 if line.startswith('data: '):
-                    data = line[6:]  # remove the prefix 'data: '
+                    data = line[6:]
                     if data == '[DONE]':
                         break
                     
@@ -227,21 +187,12 @@ class DashScopeClient:
                                 if content:
                                     yield content
                     except json.JSONDecodeError:
-                        continue  # skip the bad line
+                        continue
 
     def chat_with_retry(self, messages: list[dict[str, str]], max_retries: int = 3, 
                        retry_delay: float = 1.0, **kwargs) -> str:
         """
-        Sends a chat completion request to the LLM with a retry mechanism.
-
-        Args:
-            messages (list[dict[str, str]]): A list of message dictionaries for the chat.
-            max_retries (int, optional): Maximum number of retries. Defaults to 3.
-            retry_delay (float, optional): Initial delay between retries in seconds. Defaults to 1.0.
-            **kwargs: Additional keyword arguments to be passed to the `chat_completion` method.
-
-        Returns:
-            str: The response from the LLM or a predefined message if all attempts fail.
+        Sends a chat completion request with retry mechanism.
         """
         for attempt in range(max_retries):
             try:
@@ -265,28 +216,17 @@ class DashScopeClient:
     def chat_stream_with_retry(self, messages: list[dict[str, str]], max_retries: int = 3, 
                               retry_delay: float = 10.0, **kwargs) -> Generator[str, None, None]:
         """
-        Attempts to establish a streaming chat completion with a retry mechanism.
-
-        Args:
-            messages (list[dict[str, str]]): A list of message dictionaries, each containing 'role' and 'content'.
-            max_retries (int, optional): The maximum number of retry attempts. Defaults to 3.
-            retry_delay (float, optional): The initial delay in seconds before the first retry. Defaults to 10.0.
-            **kwargs: Additional keyword arguments to pass to the chat_completion method.
-
-        Yields:
-            str: Chunks of the streaming response.
+        Attempts to establish a streaming chat completion with retry mechanism.
         """
         for attempt in range(max_retries):
             try:
                 stream_generator = cast(Generator[str, None, None], self.chat_completion(messages, stream=True, **kwargs))
-                # try to fetch the first chunk to verify the connection
                 first_chunk = next(stream_generator, None)
                 if first_chunk is not None:
                     yield first_chunk
-                    # yield the rest chunks
                     for chunk in stream_generator:
                         yield chunk
-                    return  # success
+                    return
             except LlmException as e:
                 if e.typ == 'inappropriate content':
                     logger.warning(f"llm return inappropriate content, which is blocked by the remote")
@@ -300,36 +240,3 @@ class DashScopeClient:
         
         logger.error(f"All {max_retries} stream attempts failed")
         return
-
-
-# demo
-if __name__ == "__main__":
-    # Ensure .env is loaded if running directly
-    try:
-        from dotenv import load_dotenv
-        load_dotenv()
-    except ImportError:
-        pass
-
-    # Initialize client (will pick up defaults from env if not passed)
-    # You can set LLM_MODEL in .env to change the default model
-    client = DashScopeClient()
-    
-    messages = [
-        {"role": "user", "content": "Write a poem about Spring."}
-    ]
-    
-    print(f"Using model: {client.model_name}")
-    print(f"Using API URL: {client.base_url}")
-
-    # print("=== request ===")
-    # response = client.chat_completion(messages)
-    # print(response)
-    
-    print("\n=== streaming ===")
-    for chunk in client.chat_completion(messages, stream=True):
-        print(chunk, end='', flush=True)
-    
-    print("\n\n=== streaming with retry ===")
-    for chunk in client.chat_stream(messages, {}):
-        print(chunk, end='', flush=True)
