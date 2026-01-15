@@ -171,6 +171,32 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> Dict[str,
         "prompt_length/min": torch.min(prompt_length).detach().item(),
         "prompt_length/clip_ratio": torch.mean(torch.eq(prompt_length, max_prompt_length).float()).detach().item(),
     }
+
+    # [新增] 统计环境执行时间
+    if "reward_scores" in batch.non_tensor_batch:
+        reward_scores = batch.non_tensor_batch["reward_scores"]
+        env_times = []
+        for r in reward_scores:
+            # 兼容 Reward 对象或字典形式
+            if isinstance(r, dict):
+                meta = r.get("metadata", {})
+            else:
+                meta = getattr(r, "metadata", {})
+            
+            # 如果 metadata 为 None，设为空字典
+            if meta is None:
+                meta = {}
+                
+            env_times.append(meta.get("env_time", 0.0))
+        
+        if env_times:
+            env_times_tensor = torch.tensor(env_times, dtype=torch.float32)
+            metrics.update({
+                "timing/env_exec_time/mean": torch.mean(env_times_tensor).detach().item(),
+                "timing/env_exec_time/max": torch.max(env_times_tensor).detach().item(),
+                "timing/env_exec_time/min": torch.min(env_times_tensor).detach().item(),
+            })
+
     # if data consist of the original and synthetic data, calculate metrics separately.
     if is_llm_reward.int().sum()!=batch.batch.size(0) and is_llm_reward.int().sum()!=0:
         metrics.update({

@@ -875,6 +875,11 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
         sample_outputs = []
         sample_scores = []
 
+        # ================= [新增代码 1/3] 初始化合并记录列表 =================
+        validation_merged_records = []
+        val_data_dir = self.config.trainer.get("validation_data_dir", None)
+        # ===================================================================
+
         for i, test_data in enumerate(self.val_dataloader):
             test_batch = DataProto.from_single_dict(test_data)
 
@@ -968,21 +973,67 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                 for key, lst in result["reward_extra_info"].items():
                     reward_extra_infos_dict[key].extend(lst)
 
+            # ================= [新增代码 2/3] 构建全量合并记录 =================
+            if val_data_dir:
+                # 注意：此时 input_texts, output_texts, trajectories, tasks, scores 都是当前 batch 的变量
+                # 它们在长度和顺序上是一一对应的
+                for idx, (traj, task, score, inp_txt, out_txt) in enumerate(zip(trajectories, tasks, scores, input_texts, output_texts)):
+                    record = {
+                        "step": self.global_steps,
+                        "batch_index": i,
+                        "sample_index": idx,
+                        
+                        # --- 基础信息 ---
+                        "input": inp_txt,
+                        "output": out_txt,
+                        "score": score,
+                        
+                        # --- 任务元数据 ---
+                        "task_id": task.task_id,
+                        "query": task.query,
+                        "ground_truth": getattr(task, 'ground_truth', "N/A"),
+                        
+                        # --- 交互历史 (关键) ---
+                        "interaction_trace": [
+                            {
+                                "order": step_i,
+                                "action": s.action if hasattr(s, 'action') else str(s),
+                                "observation": s.observation if hasattr(s, 'observation') else str(s),
+                                "reward": s.reward if hasattr(s, 'reward') else 0.0,
+                                "is_terminal": s.done if hasattr(s, 'done') else False
+                            }
+                            for step_i, s in enumerate(traj.steps)
+                        ],
+                        
+                        # --- 错误诊断 ---
+                        "error_info": traj.metadata.get("error", None) if hasattr(traj, "metadata") else None,
+                        "termination_reason": "success" if traj.is_successful else "failed",
+                        
+                        # --- 额外奖励信息 ---
+                        **{k: v[idx] for k, v in reward_extra_infos_dict.items() if len(v) > idx}
+                    }
+                    validation_merged_records.append(record)
+            # ===================================================================
+
             data_source_lst.append(test_batch.non_tensor_batch.get("data_source", ["unknown"] * reward_tensor.shape[0]))
 
         self._maybe_log_val_generations(inputs=sample_inputs, outputs=sample_outputs, scores=sample_scores)
 
         # 转储生成结果
-        val_data_dir = self.config.trainer.get("validation_data_dir", None)
-        # val_data_dir = "experiments/validation_log"
         if val_data_dir:
-            self._dump_generations(
-                inputs=sample_inputs,
-                outputs=sample_outputs,
-                scores=sample_scores,
-                reward_extra_infos_dict=reward_extra_infos_dict,
-                dump_path=val_data_dir,
-            )
+            # self._dump_generations( ... )  <-- 移除旧调用
+            
+            # ================= [新增代码 3/3] 保存全量合并的 Validation 轨迹文件 =================
+            if validation_merged_records:
+                save_path = os.path.join(val_data_dir, f"{self.global_steps}.jsonl")
+                try:
+                    with open(save_path, "w", encoding='utf-8') as f:
+                        for record in validation_merged_records:
+                            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+                    logger.info(f"Saved merged validation traces to {save_path}")
+                except Exception as e:
+                    print(f"Failed to save validation traces: {e}")
+            # ==============================================================================
 
         for key_info, lst in reward_extra_infos_dict.items():
             assert len(lst) == 0 or len(lst) == len(sample_scores), f"{key_info}: {len(lst)=}, {len(sample_scores)=}"
@@ -1439,24 +1490,69 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                     rollout_data_dir = self.config.trainer.get("rollout_data_dir", None)
                     if rollout_data_dir:
                         with _timer("dump_rollout_generations", timing_raw):
-                            # print(batch.batch.keys())
-                            inputs = self.tokenizer.batch_decode(batch.batch["prompts"], skip_special_tokens=True)
-                            outputs = self.tokenizer.batch_decode(batch.batch["responses"], skip_special_tokens=True)
-                            scores = batch.batch["token_level_scores"].sum(-1).cpu().tolist()
-                            self._dump_generations(
-                                inputs=inputs,
-                                outputs=outputs,
-                                scores=scores,
-                                reward_extra_infos_dict=reward_extra_infos_dict,
-                                dump_path=rollout_data_dir,
-                            )
+                            os.makedirs(rollout_data_dir, exist_ok=True)
+                            
+                            # 1. 准备数据
+                            # 从 batch 中获取 PPO 计算后的最终分数 (outcome score)
+                            scores_list = batch.batch["token_level_scores"].sum(-1).cpu().tolist()
+                            
+                            # 获取 inputs/outputs 用于快速预览
+                            inputs_text = self.tokenizer.batch_decode(batch.batch["prompts"], skip_special_tokens=True)
+                            outputs_text = self.tokenizer.batch_decode(batch.batch["responses"], skip_special_tokens=True)
+                            
+                            # self._dump_generations( ... )  <-- 移除旧调用
 
-                            # 保存原始轨迹
+                            # 2. 构建全量合并记录 (Merged Record)
+                            merged_records = []
+                            for idx, (traj, task, score) in enumerate(zip(trajectories, tasks, scores_list)):
+                                record = {
+                                    "step": self.global_steps,
+                                    "sample_index": idx,
+                                    
+                                    # --- 基础字段 ---
+                                    "input": inputs_text[idx],
+                                    "output": outputs_text[idx],
+                                    "score": score,
+                                    
+                                    # --- 任务元数据 ---
+                                    "task_id": task.task_id,
+                                    "ground_truth": getattr(task, 'ground_truth', "N/A"),
+                                    "query": task.query,
+                                    
+                                    # --- 关键：保存交互历史 ---
+                                    "interaction_trace": [
+                                        {
+                                            "order": i,
+                                            "action": s.action if hasattr(s, 'action') else str(s),
+                                            "observation": s.observation if hasattr(s, 'observation') else str(s),
+                                            "reward": s.reward if hasattr(s, 'reward') else 0.0,
+                                            "is_terminal": s.done if hasattr(s, 'done') else False
+                                        }
+                                        for i, s in enumerate(traj.steps)
+                                    ],
+                                    
+                                    # --- 错误诊断信息 ---
+                                    "error_info": traj.metadata.get("error", None) if hasattr(traj, "metadata") else None,
+                                    
+                                    # --- 额外奖励信息 ---
+                                    **{k: v[idx] for k, v in reward_extra_infos_dict.items() if len(v) > idx}
+                                }
+                                merged_records.append(record)
+
+                            # 3. 写入同一个文件
+                            save_path = os.path.join(rollout_data_dir, f"{self.global_steps}.jsonl")
+                            with open(save_path, "w", encoding='utf-8') as f:
+                                for record in merged_records:
+                                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
+                            
+                            logger.info(f"Saved merged generations and traces to {save_path}")
+
+                            # 保存原始轨迹 (备份)
                             filename = os.path.join(rollout_data_dir, f"traj_{self.global_steps}.jsonl")
                             with open(filename, "w") as f:
                                 for traj in trajectories:
                                     f.write(traj.json() + "\n")
-                            # 保存任务
+                            # 保存任务 (备份)
                             filename = os.path.join(rollout_data_dir, f"task_{self.global_steps}.jsonl")
                             with open(filename,"w") as f:
                                 for task in tasks:

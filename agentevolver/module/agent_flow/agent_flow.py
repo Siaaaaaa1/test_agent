@@ -19,7 +19,7 @@ from agentevolver.module.exp_manager.exp_manager import TrajExpConfig, Experienc
 
 # 全局锁，用于控制日志生成的线程安全
 log_generate_lock = threading.Lock()
-# 新增：用于多线程安全写入同一个 JSON 文件的锁
+# 新增：用于多线程安全写入同一个 JSON 文件锁
 json_save_lock = threading.Lock()
 
 class AgentFlow(BaseAgentFlow):
@@ -119,6 +119,9 @@ class AgentFlow(BaseAgentFlow):
             hasattr(self._reward_calculator, 'calculate_step_reward')
         )
 
+        # [新增] 初始化环境耗时统计
+        total_env_time = 0.0
+
         # ---------------- 交互循环 (ReAct Loop) ----------------
         for act_step in range(self.max_steps):
             tmux['step'][thread_index] = act_step
@@ -151,7 +154,12 @@ class AgentFlow(BaseAgentFlow):
 
             try:
                 action_content = self.cmt.prepare_world_interaction()
+                
+                # [修改] 增加计时逻辑
+                st_time = time.time()
                 env_output = env.step(instance_id, {"content": action_content, "role": "assistant"})  
+                # 累加环境执行时间
+                total_env_time += (time.time() - st_time)
                 
                 assert len(env_output['state']) == 1
                 env_output["state"] = env_output["state"][0]
@@ -210,6 +218,12 @@ class AgentFlow(BaseAgentFlow):
 
         success_rate = 1.0 if score >= 1 else 0.0
         self.cmt.reward = Reward(outcome=score, success_rate=success_rate, madness=self.cmt.compute_madness(), description=reason)  
+        
+        # [新增] 将统计的环境时间写入 Reward 的 metadata 中
+        if self.cmt.reward.metadata is None:
+            self.cmt.reward.metadata = {}
+        self.cmt.reward.metadata["env_time"] = total_env_time
+
         self.cmt.reward = self.cmt.reward_patch(self.cmt.reward)
         self.cmt.remove_last_context()
 

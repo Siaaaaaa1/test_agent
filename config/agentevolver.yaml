@@ -103,8 +103,8 @@ trainer:
   test_freq: 10
   total_epochs: 40
   val_before_train: true
-  validation_data_dir: "experiments/tech_synthetic/${trainer.experiment_name}/validation_log"
-  rollout_data_dir: "experiments/tech_synthetic/${trainer.experiment_name}/rollout_log"
+  validation_data_dir: "./experiments/${trainer.experiment_name}/validation_log"
+  rollout_data_dir: "./experiments/${trainer.experiment_name}/rollout_log"
   val_only: false
 
 debug_log: false
