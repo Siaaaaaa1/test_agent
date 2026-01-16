@@ -57,7 +57,7 @@ python3 -m agentevolver.main_ppo \
     data.max_response_length=21580 \
     data.val_batch_size=32 \
     \
-    actor_rollout_ref.model.path=./model/Qwen2.5-7B-Instruct \
+    actor_rollout_ref.model.path=./models/Qwen2.5-7B-Instruct \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     \
