@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# ---- 0. 获取本机 IP 地址 ----
+export MASTER_ADDRESS=$(ip route get 1.1.1.1 | grep -oP 'src \K\S+')
+echo "Detected Master Address: $MASTER_ADDRESS"
+
 # ---- Start Environment Service ----
 
 # 1. 确保 conda 可以在脚本中使用
@@ -10,7 +14,8 @@ source "$CONDA_BASE/etc/profile.d/conda.sh"
 conda activate appworld
 
 # 3. 启动 Server 并放入后台运行
-echo "Starting AppWorld Environment Service..."
+echo "Starting AppWorld Environment Service on $MASTER_ADDRESS..."
+# 注意：这里会调用 sh2，sh2 内部也需要支持 MASTER_ADDRESS
 bash env_service/launch_script/appworld.sh > server.log 2>&1 &
 SERVER_PID=$!
 
@@ -26,7 +31,8 @@ conda activate agentevolver
 # ---- Start Training ----
 PROJECT_DIR="$(pwd)"
 CONFIG_PATH="$PROJECT_DIR/config"
-env_url=http://localhost:8080
+# 使用动态获取的 IP 配置 env_url
+env_url="http://$MASTER_ADDRESS:8080"
 current_time=$(date "+%Y%m%d_%H%M%S")
 log_file="log_${current_time}.log"
 
@@ -34,7 +40,8 @@ log_file="log_${current_time}.log"
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export RAY_NUM_CPUS=64
 
-echo "Starting Training with Total Context: 25580 (Prompt: 4000, Response: 21580)..."
+echo "Starting Training with env_url: $env_url"
+echo "Total Context: 25580 (Prompt: 4000, Response: 21580)..."
 
 python3 -m agentevolver.main_ppo \
     --config-path="$CONFIG_PATH" \
@@ -118,9 +125,3 @@ python3 -m agentevolver.main_ppo \
     task_manager.llm_client="azure-gpt-5" \
     ray_init.num_cpus=64 \
     2>&1 | tee "$log_file"
-
-
-
-    #     actor_rollout_ref.actor.kl_loss_coef=0.001 \
-    # actor_rollout_ref.actor.kl_loss_type=low_var_kl \
-    # actor_rollout_ref.actor.entropy_coeff=0 \
