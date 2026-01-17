@@ -24,10 +24,23 @@ class EnvClient:
         params: Dict[str, Any] = None,
         **kwargs,
     ) -> Dict:
-        # 1. 构建 URL (已修复双斜杠问题)
-        url = f"{self.base_url}/{endpoint.lstrip('/')}"
+        """
+        处理向指定 API 端点发送 POST 请求的通用方法。
+
+        参数 (Args):
+            endpoint (str): 要发送请求的 API 端点路径（例如 "create" 或 "step"）。
+            env_type (str, optional): 环境的类型（例如 "appworld", "webshop"）。默认为 "default"。
+            task_id (str, optional): 任务 ID，用于标识具体的环境配置（如特定的用户角色）。默认为 None。
+            instance_id (str, optional): 实例 ID，用于标识正在运行的具体会话。默认为 None。
+            messages (Dict[str, Any], optional): 要发送的消息内容（例如 Agent 的动作或对话历史）。默认为 None。
+            params (Dict[str, Any], optional): 额外的请求参数。默认为 None。
+
+        返回 (Returns):
+            Dict: 来自 API 的 JSON 响应数据。
+        """
+        url = f"{self.base_url}/{endpoint}"  # ⭐ 构建完整 URL
         
-        # 2. 封装数据
+        # 封装所有请求参数到数据字典中
         data = {
             "env_type": env_type,
             "task_id": task_id,
@@ -36,36 +49,13 @@ class EnvClient:
             "params": params or {},
             **kwargs,
         }
-
-        # 3. ⭐ 核心修复：添加 Host Header 欺骗
-        # 即使物理连接是去 29.209.113.158，但在 HTTP 协议层告诉服务端我们访问的是 localhost
-        headers = {
-            "Content-Type": "application/json",
-            "User-Agent": "AgentEvolver-Client/1.0",
-            "Host": "localhost:8080"  # 👈 强制覆盖 Host 字段
-        }
-
         try:
-            # 4. 发送请求
-            response = requests.post(
-                url, 
-                json=data, 
-                headers=headers, # 必须传入这个 headers
-                timeout=self.timeout
-            )
-            
-            if response.status_code != 200:
-                logger.error(f"Server error {response.status_code} for {url}")
-                logger.error(f"Response body: {response.text}")
-            
-            response.raise_for_status()
-            return response.json()
-            
-        except requests.exceptions.HTTPError as e:
-            logger.error(f"HTTP Error: {str(e)} | URL: {url}")
-            raise
+            # ⭐ 发送 POST 请求
+            response = requests.post(url, json=data, timeout=self.timeout)
+            response.raise_for_status()  # 检查 HTTP 错误
+            return response.json()       # ⭐ 返回解析后的 JSON
         except requests.exceptions.RequestException as e:
-            logger.error(f"Request failed: {str(e)} | URL: {url}")
+            logger.error(f"Request failed: {str(e)}, data: {data}")
             raise
 
     def get_env_profile(
