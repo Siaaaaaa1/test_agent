@@ -7,9 +7,12 @@ env_url="http://${LOCAL_IP}:8080"
 PROJECT_DIR="$(pwd)"
 CONFIG_PATH="$PROJECT_DIR/config"
 
-# [新增] 防止代理拦截本地请求 (非常重要，防止 403 或 503 错误)
-export no_proxy="localhost,127.0.0.1,::1,.woa.com,$no_proxy"
-export NO_PROXY="localhost,127.0.0.1,::1,.woa.com,$NO_PROXY"
+# 获取本机 IP (Linux通用)
+HOST_IP=$(hostname -I | awk '{print $1}')
+
+# 将 HOST_IP 也加入 no_proxy，否则 Ray 内部通信会被代理拦截导致报错
+export no_proxy="localhost,127.0.0.1,::1,.woa.com,$HOST_IP,$no_proxy"
+export NO_PROXY="localhost,127.0.0.1,::1,.woa.com,$HOST_IP,$NO_PROXY"
 
 # ---- 2. 启动环境服务 (AppWorld) ----
 echo "Starting AppWorld Environment Service on $env_url (Localhost)..."

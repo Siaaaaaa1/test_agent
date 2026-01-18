@@ -226,25 +226,13 @@ class ParallelEnvManager(object):
                            thread_index: int, tmux: dict, stop:list, **kwargs) -> Trajectory:
         """
         在单个线程中处理单个任务的 Rollout 逻辑，处理重试和异常。
-
-        Args:
-            task (Task): 要处理的具体任务对象。
-            traj_exp_config (TrajExpConfig): 该轨迹的经验配置（如是否添加经验、训练模式等）。
-            data_id (str): 数据的唯一标识符（通常对应任务索引）。
-            rollout_id (str): Rollout 的 ID（如果对同一个任务进行多次采样，用此区分）。
-            mode (Literal["sample", "validate"]): 操作模式，'sample' 用于训练采样，'validate' 用于验证。
-            thread_index (int): 线程索引，用于在 tmux 和 stop 列表中定位状态。
-            tmux (dict): 共享的状态字典，用于记录进度。
-            stop (list): 停止标志列表，用于外部控制线程停止。
-            **kwargs: 其他关键字参数。
-
-        Returns:
-            Trajectory: 任务执行生成的轨迹对象。
         """
+        # [DEBUG LOG] 确认线程开始运行
+        logger.info(f"[DEBUG-WORKER] Thread-{thread_index} STARTED for Task DataID: {data_id}, RolloutID: {rollout_id}")
+        
         max_retry = 4
         for retry in range(max_retry):
             try:
-
                 # 准备采样参数
                 sampling_params = dict(
                     n=1,
@@ -260,10 +248,14 @@ class ParallelEnvManager(object):
 
                 # 获取 LLM 对话函数
                 llm_chat_fn = self.get_llm_chat_fn(sampling_params)
-                # 获取奖励计算器
-                reward_caculator=grader_manager.get_calculator(task.evaluator, task=task)
                 
-                # 初始化 AgentFlow，负责管理 Agent 与环境的交互流
+                # [DEBUG LOG] 确认依赖组件获取成功
+                # logger.info(f"[DEBUG-WORKER] Thread-{thread_index} got LLM function.")
+
+                # 获取奖励计算器
+                reward_caculator = grader_manager.get_calculator(task.evaluator, task=task)
+                
+                # 初始化 AgentFlow
                 agent_flow: BaseAgentFlow = AgentFlow(
                     reward_calculator=reward_caculator,
                     llm_chat_fn=llm_chat_fn,
@@ -272,14 +264,29 @@ class ParallelEnvManager(object):
                     **kwargs
                 )
 
-                # 初始化 EnvWorker，负责具体的环境操作
+                # 初始化 EnvWorker
                 env_worker = EnvWorker(task=task, thread_index=thread_index, config=self.config, tokenizer=self.tokenizer)
                 
+                # [DEBUG LOG] 关键点：进入 execute 之前
+                logger.info(f"[DEBUG-WORKER] Thread-{thread_index} ENTERING env_worker.execute...")
+                
                 # 执行任务并生成轨迹
-                trajectory: Trajectory = env_worker.execute(data_id=data_id, rollout_id=rollout_id, traj_exp_config=traj_exp_config, agent_flow=agent_flow, tmux=tmux, stop=stop) # ⭐ 执行任务生成轨迹
+                trajectory: Trajectory = env_worker.execute(
+                    data_id=data_id, 
+                    rollout_id=rollout_id, 
+                    traj_exp_config=traj_exp_config, 
+                    agent_flow=agent_flow, 
+                    tmux=tmux, 
+                    stop=stop
+                ) 
+                
+                # [DEBUG LOG] 关键点：execute 返回之后 (如果卡住，这行不会打印)
+                logger.info(f"[DEBUG-WORKER] Thread-{thread_index} FINISHED env_worker.execute successfully.")
+                
                 return trajectory
 
             except Exception as e:
+                logger.error(f"[DEBUG-WORKER] Thread-{thread_index} FAILED at attempt {retry}. Error: {e}")
                 if retry < max_retry - 1:
                     logger.bind(exception=True).exception(f"rollout_env_worker error: {e.args}, retrying {retry + 1}/{max_retry}")
                     time.sleep(2 ** retry)
@@ -290,21 +297,12 @@ class ParallelEnvManager(object):
     def rollout(self, tasks: List[Task], task_exp_configs: List[TaskExpConfig], mode: Literal["sample", "validate"], epoch: str) -> List[Trajectory]:
         """
         并行执行任务列表。使用线程池管理并发，并具备自动重试机制。
-
-        Args:
-            tasks (List[Task]): 要处理的任务列表。
-            task_exp_configs (List[TaskExpConfig]): 每个任务对应的经验配置列表。
-            mode (Literal["sample", "validate"]): 模式，'sample' 或 'validate'。
-            epoch (str): 当前 Epoch 标识符，用于日志和进度条显示。
-
-        Returns:
-            List[Trajectory]: 成功完成的任务生成的轨迹对象列表，已按 ID 排序。
         """
         traj_cmt_array = []
         # 确定每个任务的采样次数
         rollout_n = self.rollout_config.val_kwargs.n if mode == "validate" else self.rollout_n
         
-        # 存储 Future 对象到参数的映射，用于错误处理和重试
+        # 存储 Future 对象到参数的映射
         future_to_params: Dict[Future, Tuple[Task, TrajExpConfig, str, str, str, int, dict, list[bool]]] = {}
 
         # 初始化共享状态 tmux 和停止标志 stop
@@ -313,6 +311,8 @@ class ParallelEnvManager(object):
             'token': [0 for _ in range(len(tasks) * rollout_n)],
         }
         stop = [False for _ in range(len(tasks) * rollout_n)]
+
+        logger.info(f"[DEBUG-MAIN] Starting thread pool with {self.max_parallel} workers for {len(tasks) * rollout_n} total tasks.")
 
         with ThreadPoolExecutor(max_workers=self.max_parallel) as executor:
             # 2. 提交所有任务到线程池
@@ -329,21 +329,35 @@ class ParallelEnvManager(object):
                     params = (task, traj_exp_config, str(data_id), str(rollout_id), mode, thread_index, tmux,stop)
                     future = executor.submit(self.rollout_env_worker, *params)
                     future_to_params[future] = params
+            
+            logger.info("[DEBUG-MAIN] All tasks submitted to executor.")
 
             total_rollouts = len(future_to_params)
             pbar = tqdm(total=total_rollouts, desc=f"Epoch {epoch}: Collecting rollouts")
 
             # 3. 等待所有任务完成
             while future_to_params:
+                # [DEBUG LOG] 打印当前等待的数量，防止不知道是否在空转
+                # logger.debug(f"[DEBUG-MAIN] Waiting for {len(future_to_params)} pending futures...")
+                
                 # 轮询完成的 Future
+                # 注意：如果所有任务都卡住，as_completed 可能会阻塞在这里，或者因为没有 completed 而不进入循环
+                # 建议这里监控 executor 的状态
                 for future in as_completed(future_to_params):
                     # 获取对应的参数并从字典中移除
                     params = future_to_params.pop(future)
+                    task_id_info = f"{params[2]}-{params[3]}" # data_id - rollout_id
+                    
                     self.step_status_printer(tmux) # 打印进度状态
 
                     # 4. 获取结果并处理错误
                     try:
+                        # [DEBUG LOG] 尝试获取结果，这里如果卡住说明任务本身没结束且也没报错
+                        logger.info(f"[DEBUG-MAIN] Retrieving result for Task {task_id_info}...")
+                        
                         result = future.result()  # ⭐ 获取完成任务的结果
+                        
+                        logger.info(f"[DEBUG-MAIN] Task {task_id_info} COMPLETED.")
 
                         # 如果结果元数据中包含错误信息，尝试恢复
                         if 'error' in result.metadata:
@@ -355,6 +369,8 @@ class ParallelEnvManager(object):
                             thread_index=params[5]
                             for k in tmux: tmux[k][thread_index] = 0
                             stop[thread_index]=False
+                            
+                            logger.info(f"[DEBUG-MAIN] Resubmitting Task {task_id_info}")
                             new_future = executor.submit(self.rollout_env_worker, *params) # type: ignore
                             future_to_params[new_future] = params
                             continue
@@ -370,14 +386,17 @@ class ParallelEnvManager(object):
                         thread_index=params[5]
                         for k in tmux: tmux[k][thread_index] = 0
                         stop[thread_index]=False
+                        
+                        logger.info(f"[DEBUG-MAIN] Resubmitting Task {task_id_info} due to exception.")
                         new_future = executor.submit(self.rollout_env_worker, *params) # type: ignore
                         future_to_params[new_future] = params
             pbar.close()
 
         # 计算并更新当前批次的成功率
-        task_success_rate = np.mean([cmt.reward.success_rate for cmt in traj_cmt_array])
-        for cmt in traj_cmt_array:
-            cmt.current_batch_success_rate = np.mean(task_success_rate)
+        if traj_cmt_array: # 增加判空防止报错
+            task_success_rate = np.mean([cmt.reward.success_rate for cmt in traj_cmt_array])
+            for cmt in traj_cmt_array:
+                cmt.current_batch_success_rate = np.mean(task_success_rate)
 
         # 对结果按 ID 排序，保证顺序一致性
         traj_cmt_array = sorted(traj_cmt_array, key=lambda x: (int(x.data_id), int(x.rollout_id)))
