@@ -1,4 +1,5 @@
 import re
+import time  # [Log Add] 引入 time 库
 from typing import Any, cast, Set, List
 # 导入项目内部的模块
 # EnvClient: 用于与环境交互的客户端
@@ -13,6 +14,10 @@ from agentevolver.schema.trajectory import Trajectory
 
 # 导入上一段代码中定义的管理器实例，用于注册本计算器
 from . import grader_manager
+
+# [Log Add] 辅助打印函数
+def log_reward(msg):
+    print(f"[{time.strftime('%H:%M:%S')}] [RewardCalc] {msg}", flush=True)
 
 # =============================================================================
 # 裁判模型的提示词 (System Prompt)
@@ -193,6 +198,7 @@ class APIProcessRewardCalculator(RewardCalculator):
             reward = len(newly_covered_apis) * self.reward_per_api
             # 4. 更新已访问集合，防止未来重复奖励
             self.visited_apis.update(newly_covered_apis)
+            # log_reward(f"Found new APIs: {newly_covered_apis}, Reward: {reward}") # 可选 Log
             
         return reward
 
@@ -227,8 +233,12 @@ class APIProcessRewardCalculator(RewardCalculator):
         对外接口：计算最终奖励 (Outcome Reward)。
         通常在 Episode 结束时调用。
         """
+        log_reward(f"Calculating final reward for Task ID: {instance_id}") # [Log Add]
+        
         # 调用内部方法获取分数和理由
         x, reason = cast(tuple[float, str], self._calculate_reward(trajectory, env, eject_llm_output=True))
+        
+        log_reward(f"Final Reward for {instance_id}: {x}") # [Log Add]
         return {
             "score": x,
             "reason": reason
@@ -238,11 +248,32 @@ class APIProcessRewardCalculator(RewardCalculator):
         """
         内部逻辑：负责调用 LLM API 并解析结果。
         """
+        start_t = time.time()
+        log_reward("Starting LLM Judge request...") # [Log Add]
+        
         response = ""
+        messages = self.pack_message(trajectory)
+        
+        # [Log Add] 记录正在发送多大的包，如果包太大 LLM 可能会处理很久
+        log_reward(f"Message packed. Content length ~{len(str(messages))} chars.") 
+
         # 使用流式 API 调用 LLM，并拼接完整的响应字符串
         # max_retries=64 表示网络不稳定时会疯狂重试，保证获取结果
-        for chunk in self._client.chat_stream_with_retry(messages=self.pack_message(trajectory), max_retries=64):
-            response += chunk
+        try:
+            stream = self._client.chat_stream_with_retry(messages=messages, max_retries=64)
+            first_chunk = True
+            
+            for chunk in stream:
+                if first_chunk:
+                    log_reward(f"Received first chunk from LLM Judge. (Waited: {time.time() - start_t:.2f}s)") # [Log Add]
+                    first_chunk = False
+                response += chunk
+                
+        except Exception as e:
+            log_reward(f"[ERROR] LLM Judge request failed: {e}")
+            
+        total_time = time.time() - start_t
+        log_reward(f"LLM Judge request completed. Total Cost: {total_time:.2f}s") # [Log Add]
             
         score = 0.0
         if response:
@@ -255,10 +286,10 @@ class APIProcessRewardCalculator(RewardCalculator):
                 score = max(0.0, min(100.0, score_val)) / 100.0
             else:
                 # 如果 LLM 没按格式输出，打印错误并给 0 分
-                print(f"Could not parse score from response: {response}")
+                log_reward(f"[WARNING] Could not parse score from response: {response[-200:]}...") # [Log Add] 只打印最后一部分防止刷屏
                 score = 0.0
         else:
-            print("No response from evaluation API")
+            log_reward("[ERROR] No response from evaluation API")
             score = 0.0
         
         # 根据参数决定是只返回分数，还是返回 (分数, 完整回复)

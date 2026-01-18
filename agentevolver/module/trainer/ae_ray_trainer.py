@@ -867,6 +867,14 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
         Returns:
             None
         """
+        import time  # [Log Add] 引入 time 库
+
+        # [Log Add] 辅助打印函数
+        def val_log(msg):
+            print(f"[{time.strftime('%H:%M:%S')}] [Validate] {msg}", flush=True)
+
+        val_log(f"Starting validation at step {self.global_steps}...")
+
         data_source_lst = []
         reward_extra_infos_dict: dict[str, list] = defaultdict(list)
 
@@ -881,6 +889,9 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
         # ===================================================================
 
         for i, test_data in enumerate(self.val_dataloader):
+            batch_start_time = time.time()
+            val_log(f"Processing Validation Batch {i}...")
+
             test_batch = DataProto.from_single_dict(test_data)
 
             # 重复测试批次
@@ -888,6 +899,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
 
             # 我们只在基于规则的 RM 上进行验证
             if self.config.reward_model.enable and test_batch[0].non_tensor_batch["reward_model"]["style"] == "model":
+                val_log("Skipping validation (reward model style is 'model')")
                 return {}
 
             batch_keys_to_pop = ["input_ids", "attention_mask", "position_ids"]
@@ -912,7 +924,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                 "do_sample": self.config.actor_rollout_ref.rollout.val_kwargs.do_sample,
                 "validate": True,
             }
-            print(f"test_gen_batch meta info: {test_gen_batch.meta_info}")
+            # print(f"test_gen_batch meta info: {test_gen_batch.meta_info}") # Use val_log instead
 
             # 填充以被 dp_size 整除
             # test_gen_batch_padded, pad_size = pad_dataproto_to_divisor(test_gen_batch, self.actor_rollout_wg.world_size)
@@ -929,11 +941,19 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                             open_query=test_gen_batch.non_tensor_batch["extras"][i]['open_query'],
                             # evaluator=gen_batch.non_tensor_batch['extras'][i]['evaluator'], # avoid potential bugs
                           ) for i in range(len(test_gen_batch))]
+                
                 task_exp_configs = self.exp_manager.get_complete_exp_configs(tasks, mode="validate")
+                
+                val_log(f"Batch {i}: Starting Rollout ({len(tasks)} tasks)...") # [Log Add]
                 print("=" * 10 + "start validate rollout" + "=" * 10)
+                
                 # 执行验证 Rollout
+                # >>> 容易卡住的地方 <<<
                 trajectories = self.env_manager.rollout(tasks, task_exp_configs, mode="validate", epoch=f"test.1.{i}")  # ⭐ 执行 Rollout 生成轨迹
+                
                 print("=" * 10 + "end validate rollout" + "=" * 10)
+                val_log(f"Batch {i}: Rollout Finished. Count: {len(trajectories)}") # [Log Add]
+
                 test_output_gen_batch = self.env_manager.to_dataproto(trajectories)
                 # test_output_gen_batch_padded = self.explorer_manager.rollout(test_gen_batch_padded)
                 # test_output_gen_batch_padded = self.async_rollout_manager.generate_sequences(test_gen_batch_padded)
@@ -941,7 +961,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
 
             # 去除填充
             # test_output_gen_batch = unpad_dataproto(test_output_gen_batch_padded, pad_size=pad_size)
-            print("validation generation end")
+            # print("validation generation end") # Use val_log instead
 
             # 存储原始输入
             input_ids = test_output_gen_batch.batch["prompts"]
@@ -962,6 +982,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
             # test_batch = test_batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.val_kwargs.n, interleave=True)
             # test_batch = test_batch.union(test_output_gen_batch)
 
+            val_log(f"Batch {i}: Computing Rewards...") # [Log Add]
             # 使用奖励函数进行评估
             result = self.val_reward_fn(test_batch, return_dict=True)  # ⭐ 使用奖励函数评估测试批次
             reward_tensor = result["reward_tensor"]
@@ -1016,6 +1037,8 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
             # ===================================================================
 
             data_source_lst.append(test_batch.non_tensor_batch.get("data_source", ["unknown"] * reward_tensor.shape[0]))
+            
+            val_log(f"Batch {i} Finished. Cost: {time.time() - batch_start_time:.2f}s") # [Log Add]
 
         self._maybe_log_val_generations(inputs=sample_inputs, outputs=sample_outputs, scores=sample_scores)
 
@@ -1025,12 +1048,15 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
             
             # ================= [新增代码 3/3] 保存全量合并的 Validation 轨迹文件 =================
             if validation_merged_records:
+                val_log("Saving merged validation traces...")
                 save_path = os.path.join(val_data_dir, f"{self.global_steps}.jsonl")
                 try:
+                    os.makedirs(val_data_dir, exist_ok=True) # Ensure dir exists
                     with open(save_path, "w", encoding='utf-8') as f:
                         for record in validation_merged_records:
                             f.write(json.dumps(record, ensure_ascii=False) + "\n")
-                    logger.info(f"Saved merged validation traces to {save_path}")
+                    logger.info(f"Saved merged validation traces to {save_path}") # Using Ray logger here might be fine if defined
+                    val_log(f"Saved to {save_path}")
                 except Exception as e:
                     print(f"Failed to save validation traces: {e}")
             # ==============================================================================
@@ -1041,6 +1067,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
         data_sources = np.concatenate(data_source_lst, axis=0)
 
         # 处理并汇总验证指标
+        val_log("Computing validation metrics...")
         data_src2var2metric2val = process_validation_metrics(data_sources, sample_inputs, reward_extra_infos_dict)  # ⭐ 处理验证指标
         metric_dict = {}
         for data_source, var2metric2val in data_src2var2metric2val.items():
@@ -1055,6 +1082,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                     pfx = f"{metric_sec}/{data_source}/{var_name}/{metric_name}"
                     metric_dict[pfx] = metric_val
 
+        val_log("Validation Complete.")
         return metric_dict
     
     def initialize_exp_pool(self):
@@ -1128,9 +1156,11 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
         from agentevolver.utils.tracking import Tracking
         import threading
         import uuid
-        
-        # [修改 1] 移除了从模块导入 _hindsight_manager 的代码
-        # 因为我们现在使用 self.hindsight_manager
+        import time  # [Log Add] 引入 time 库
+
+        # [Log Add] 辅助打印函数
+        def main_log(msg):
+            print(f"[{time.strftime('%H:%M:%S')}] [MainLoop] {msg}", flush=True)
 
         logger = Tracking(
             project_name=self.config.trainer.project_name,
@@ -1140,6 +1170,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
         )
 
         self.global_steps = 0
+        main_log("Starting training fit process...")
 
         # 在做任何事情之前加载检查点
         self._load_checkpoint()
@@ -1149,13 +1180,14 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
 
         # 初始化经验池
         if self.config.exp_manager.get("init_exp_before_training", False):
+            main_log("Initializing experience pool...")
             self.initialize_exp_pool()
             if self.config.exp_manager.get("init_exp_only", False):
                 return
 
         # 在训练前执行验证
-        # 目前，我们只支持使用 reward_function 进行验证
         if self.val_reward_fn is not None and self.config.trainer.get("val_before_train", True):
+            main_log("Performing pre-train validation...")
             val_metrics = self._validate()
             assert val_metrics, f"{val_metrics=}"
             pprint(f"Initial validation metrics: {val_metrics}")
@@ -1172,26 +1204,21 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
         
         # 训练 Epoch 循环
         for epoch in range(self.config.trainer.total_epochs):
+            main_log(f"=== Starting Epoch {epoch} ===")
             
             # ================= [NEW] 动态数据注入逻辑 =================
             if hasattr(self.train_task_manager, 'load_new_hindsight_tasks'):
                 new_count = self.train_task_manager.load_new_hindsight_tasks()
-                
                 if new_count > 0:
-                    print(f"🔄 Detected {new_count} new tasks. Refreshing DataLoader...")
-                    
-                    # 重新创建 DataLoader
-                    self._create_dataloader_from_manager(
-                        collate_fn=self._collate_fn, 
-                        shuffle_trainset=True 
-                    )
-                    
-                    # 更新进度条
+                    main_log(f"🔄 Detected {new_count} new tasks. Refreshing DataLoader...")
+                    self._create_dataloader_from_manager(collate_fn=self._collate_fn, shuffle_trainset=True)
                     progress_bar.total = self.total_training_steps
                     progress_bar.refresh()
             # ========================================================
 
             for i, batch_dict in enumerate(self.train_dataloader):
+                step_start_time = time.time()
+                main_log(f"Step {self.global_steps} (Epoch {epoch}.{i}): Started.")
 
                 # Need Delete: hindsight data after each batch to save memory
                 if self.hindsight_manager is not None:
@@ -1204,6 +1231,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                 # 弹出那些用于生成的键
                 batch_keys_to_pop = ["input_ids", "attention_mask", "position_ids"]
                 non_tensor_batch_keys_to_pop = ["raw_prompt_ids"]
+                # ... (省略中间的 pop 逻辑，保持原样) ...
                 if "multi_modal_data" in batch.non_tensor_batch:
                     non_tensor_batch_keys_to_pop.append("multi_modal_data")
                 if "raw_prompt" in batch.non_tensor_batch:
@@ -1227,11 +1255,11 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                     with _timer("gen", timing_raw):
                         trajectories: List[Trajectory] = []
                         if not self.async_rollout_mode:
+                            main_log(f"Step {self.global_steps}: Generating sequences (Sync)...")
                             gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
                         else:
                             self.async_rollout_manager.wake_up()
-
-                            # 构造 Task 列表
+                            # 构造 Task 列表 (省略代码保持原样)
                             tasks = [Task(
                                         task_id=gen_batch.non_tensor_batch["extras"][i]["task_id"],
                                         query=gen_batch.non_tensor_batch["extras"][i]['new_query'],
@@ -1241,14 +1269,18 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                                         ground_truth=gen_batch.non_tensor_batch['extras'][i]['ground_truth']
                                     ) for i in range(len(gen_batch))
                                     ]
-                            # 获取经验配置
+                            
                             task_exp_configs = self.exp_manager.get_complete_exp_configs(tasks, mode="sample")
-                            assert len(task_exp_configs)==len(tasks), "{len(task_exp_configs)=}, {len(gen_batch)=}"
-
+                            
+                            main_log(f"Step {self.global_steps}: Generating Rollouts (Async)...") # [Log Add]
                             print("=" * 10 + "start fit rollout" + "=" * 10)
+                            
+                            # >>> 这里的 rollout 是最容易卡住的地方 <<<
                             trajectories = self.env_manager.rollout(tasks, task_exp_configs, mode="sample", epoch=f"train.{epoch}.{i}")
+                            
                             assert len(trajectories)>0, "{len(trajectories)=}?"
                             print("=" * 10 + "end fit rollout" + "=" * 10)
+                            main_log(f"Step {self.global_steps}: Rollout Finished. Count: {len(trajectories)}") # [Log Add]
                             
                             gen_batch_output = self.env_manager.to_dataproto(trajectories)
                             
@@ -1271,6 +1303,8 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
 
                     # 如果使用 RE-Max，需要生成 Baseline
                     if self.config.algorithm.adv_estimator == AdvantageEstimator.REMAX:
+                        main_log(f"Step {self.global_steps}: Generating REMAX baseline...")
+                        # ... (REMAX logic) ...
                         with _timer("gen_max", timing_raw):
                             gen_baseline_batch = deepcopy(gen_batch)
                             gen_baseline_batch.meta_info["do_sample"] = False
@@ -1287,10 +1321,8 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                             del gen_baseline_batch, gen_baseline_output
 
                     batch.non_tensor_batch["uid"] = np.array([str(uuid.uuid4()) for _ in range(len(batch.batch))], dtype=object)
-
                     batch.non_tensor_batch['original_extras']=batch_extras
                     batch = union_gen_batch_via_task_id(tasks, batch, gen_batch_output)
-
                     batch.batch["response_mask"] = compute_response_mask(batch)
 
                     # 更新经验池
@@ -1304,6 +1336,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                     batch.meta_info["global_token_num"] = torch.sum(batch.batch["attention_mask"], dim=-1).tolist()
 
                     with _timer("reward", timing_raw):
+                        main_log(f"Step {self.global_steps}: Computing Rewards...") # [Log Add]
                         # 计算奖励模型分数
                         if self.use_rm:
                             reward_tensor = self.rm_wg.compute_rm_score(batch)
@@ -1316,6 +1349,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
 
                     # 重新计算 old_log_probs
                     with _timer("old_log_prob", timing_raw):
+                        main_log(f"Step {self.global_steps}: Computing Old Log Probs...") # [Log Add]
                         old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
                         entropys = old_log_prob.batch["entropys"]
                         response_masks = batch.batch["response_mask"]
@@ -1325,7 +1359,8 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                         metrics.update(old_log_prob_metrics)
                         old_log_prob.batch.pop("entropys")
                         batch = batch.union(old_log_prob)
-
+                        
+                        # ... (metrics calculation) ...
                         if "rollout_log_probs" in batch.batch.keys():
                             rollout_old_log_probs = batch.batch["rollout_log_probs"]
                             actor_old_log_probs = batch.batch["old_log_probs"]
@@ -1351,6 +1386,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
 
                     if self.use_reference_policy:
                         with _timer("ref", timing_raw):
+                            main_log(f"Step {self.global_steps}: Computing Ref Policy...") # [Log Add]
                             if not self.ref_in_actor:
                                 ref_log_prob = self.ref_policy_wg.compute_ref_log_prob(batch)
                             else:
@@ -1359,16 +1395,17 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
 
                     if self.use_critic:
                         with _timer("values", timing_raw):
+                            main_log(f"Step {self.global_steps}: Computing Critic Values...") # [Log Add]
                             values = self.critic_wg.compute_values(batch)
                             batch = batch.union(values)
 
                     with _timer("adv", timing_raw):
+                        main_log(f"Step {self.global_steps}: Computing Advantages...") # [Log Add]
                         reward_extra_infos_dict: dict[str, list]
                         if self.config.reward_model.launch_reward_fn_async:
                             reward_tensor, reward_extra_infos_dict = ray.get(future_reward)
                         batch.batch["token_level_scores"] = reward_tensor
 
-                        # print(f"{list(reward_extra_infos_dict.keys())=}")
                         if reward_extra_infos_dict:
                             batch.non_tensor_batch.update({k: np.array(v) for k, v in reward_extra_infos_dict.items()})
 
@@ -1395,40 +1432,30 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                             config=self.config.algorithm,
                         )
 
+                        # ... (Hindsight logic & ADCA GRPO) ...
                         # ==================== [NEW] Hindsight 反向归纳逻辑 ====================
-                        # [修改 2] 使用 self.hindsight_manager
                         attribution_cfg = self._get_attribution_config()
                         
-                        # 检查开关，并确保 self.hindsight_manager 已被正确注入
                         if getattr(attribution_cfg, "enable_hindsight", False) and getattr(self, "hindsight_manager", None) is not None:
                             try:
-                                # 1. 提取 Prompt 和 Response
+                                main_log(f"Step {self.global_steps}: Processing Hindsight...") # [Log Add]
                                 prompts = batch.batch['prompts'].tolist()
                                 responses = batch.batch['responses'].tolist()
                                 
-                                # 2. 尝试获取 Task ID
-                                # 优先从 extras 获取，因为 rollout 会更新它
                                 if "extras" in batch.non_tensor_batch:
                                     task_ids = [e.get("task_id", "unknown") for e in batch.non_tensor_batch["extras"]]
                                 else:
                                     task_ids = batch.non_tensor_batch.get('data_id', ["unknown"] * len(prompts))
 
-                                # 3. 计算分数 (Sample Scores)
-                                # 假设我们没有 ADCA flags，我们使用总奖励是否 > 0 作为简单的成功/失败判断
-                                # 对于 GRPO，token_level_rewards 通常只在最后一步非零
                                 sample_scores = []
                                 token_rewards = batch.batch['token_level_rewards']
                                 if hasattr(token_rewards, 'cpu'):
                                     token_rewards = token_rewards.cpu()
                                 
                                 for _idx in range(len(prompts)):
-                                    # 聚合当前样本的奖励
                                     score = token_rewards[_idx].sum().item()
-                                    # 转换为 1.0 (Success) 或 0.0 (Fail)
                                     sample_scores.append(1.0 if score > 0 else 0.0)
 
-                                # 4. 启动反向归纳线程
-                                # [修改 3] 调用 self.hindsight_manager.process_failed_batch
                                 threading.Thread(
                                     target=self.hindsight_manager.process_failed_batch,
                                     args=(prompts, responses, sample_scores, task_ids),
@@ -1437,7 +1464,6 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                                 
                             except Exception as e:
                                 print(f"[Warning] Hindsight logic encountered an error: {e}")
-                        # =======================================================================
 
                         # ==================== 开始 ADCA GRPO (如果开启) ====================
                         if getattr(attribution_cfg, 'enable', False):
@@ -1451,7 +1477,6 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                                 llm_client=self.llm_client,
                             )
                             metrics.update(adca_metrics)
-                        # ==================== 结束 ADCA GRPO ====================
                         
                         if os.environ.get("DEBUG_ARG","").find("synth_decay")!=-1:
                             if epoch==0 and i==0:
@@ -1467,6 +1492,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                     # 更新 Critic
                     if self.use_critic:
                         with _timer("update_critic", timing_raw):
+                            main_log(f"Step {self.global_steps}: Updating Critic Model...") # [Log Add]
                             critic_output = self.critic_wg.update_critic(batch)
                         critic_output_metrics = reduce_metrics(critic_output.meta_info["metrics"])
                         metrics.update(critic_output_metrics)
@@ -1475,6 +1501,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                     if self.config.trainer.critic_warmup <= self.global_steps:
                         # 更新 Actor
                         with _timer("update_actor", timing_raw):
+                            main_log(f"Step {self.global_steps}: Updating Actor Model...") # [Log Add]
                             batch.meta_info["multi_turn"] = self.config.actor_rollout_ref.rollout.multi_turn.enable
                             actor_output = self.actor_rollout_wg.update_actor(batch)
                         actor_output_metrics = reduce_metrics(actor_output.meta_info["metrics"])
@@ -1482,6 +1509,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                     
                     # 收集总结任务结果
                     if summary_task is not None:
+                        main_log(f"Step {self.global_steps}: Collecting Summary Task...")
                         time_cost = self.exp_manager.collect_summary_result(summary_task)
                         metrics.update({"exp_manager/summary": time_cost})
 
@@ -1489,6 +1517,8 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                     # 如果启用，记录 Rollout 生成结果
                     rollout_data_dir = self.config.trainer.get("rollout_data_dir", None)
                     if rollout_data_dir:
+                        main_log(f"Step {self.global_steps}: Saving Rollout Data...")
+                        # ... (Saving logic) ...
                         with _timer("dump_rollout_generations", timing_raw):
                             os.makedirs(rollout_data_dir, exist_ok=True)
                             
@@ -1500,26 +1530,18 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                             inputs_text = self.tokenizer.batch_decode(batch.batch["prompts"], skip_special_tokens=True)
                             outputs_text = self.tokenizer.batch_decode(batch.batch["responses"], skip_special_tokens=True)
                             
-                            # self._dump_generations( ... )  <-- 移除旧调用
-
                             # 2. 构建全量合并记录 (Merged Record)
                             merged_records = []
                             for idx, (traj, task, score) in enumerate(zip(trajectories, tasks, scores_list)):
                                 record = {
                                     "step": self.global_steps,
                                     "sample_index": idx,
-                                    
-                                    # --- 基础字段 ---
                                     "input": inputs_text[idx],
                                     "output": outputs_text[idx],
                                     "score": score,
-                                    
-                                    # --- 任务元数据 ---
                                     "task_id": task.task_id,
                                     "ground_truth": getattr(task, 'ground_truth', "N/A"),
                                     "query": task.query,
-                                    
-                                    # --- 关键：保存交互历史 ---
                                     "interaction_trace": [
                                         {
                                             "order": i,
@@ -1530,11 +1552,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                                         }
                                         for i, s in enumerate(traj.steps)
                                     ],
-                                    
-                                    # --- 错误诊断信息 ---
                                     "error_info": traj.metadata.get("error", None) if hasattr(traj, "metadata") else None,
-                                    
-                                    # --- 额外奖励信息 ---
                                     **{k: v[idx] for k, v in reward_extra_infos_dict.items() if len(v) > idx}
                                 }
                                 merged_records.append(record)
@@ -1560,6 +1578,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
 
                     # 验证
                     if self.val_reward_fn is not None and self.config.trainer.test_freq > 0 and (is_last_step or self.global_steps % self.config.trainer.test_freq == 0):
+                        main_log(f"Step {self.global_steps}: Running Evaluation...")
                         with _timer("testing", timing_raw):
                             val_metrics: dict = self._validate()
                             if is_last_step:
@@ -1568,6 +1587,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
 
                     if self.config.trainer.save_freq > 0 and (is_last_step or self.global_steps % self.config.trainer.save_freq == 0):
                         with _timer("save_checkpoint", timing_raw):
+                            main_log(f"Step {self.global_steps}: Saving Checkpoint...")
                             self._save_checkpoint()
 
                 # 训练指标
@@ -1587,6 +1607,9 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
 
                 # 记录日志
                 logger.log(data=metrics, step=self.global_steps)
+                
+                step_cost = time.time() - step_start_time
+                main_log(f"Step {self.global_steps} Finished. Cost: {step_cost:.2f}s") # [Log Add]
 
                 progress_bar.update(1)
                 self.global_steps += 1
