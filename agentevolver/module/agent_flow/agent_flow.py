@@ -88,7 +88,11 @@ class AgentFlow(BaseAgentFlow):
     def execute(self, context_manager, init_messages: List[dict], env: EnvClient, instance_id: str, tmux, stop, thread_index, task_id, traj_exp_config, data_id="", rollout_id="", query="", ground_truth="", **kwargs) -> Linear_CMT:
         """
         核心执行逻辑：管理 AI Agent 与环境的交互，生成轨迹、处理经验并计算奖励。
+        [DEBUG MODE] 已添加详细流程日志
         """
+        # [DEBUG LOG] Start
+        logger.info(f"[DEBUG-FLOW] Thread-{thread_index} Task-{task_id} Rollout-{rollout_id}: Starting execute. Max steps: {self.max_steps}")
+
         self.cmt = context_manager
         add_nothink = self.config.actor_rollout_ref.rollout.use_qwen3 
 
@@ -124,8 +128,12 @@ class AgentFlow(BaseAgentFlow):
 
         # ---------------- 交互循环 (ReAct Loop) ----------------
         for act_step in range(self.max_steps):
+            # [DEBUG LOG] Step start
+            # logger.info(f"[DEBUG-FLOW] Thread-{thread_index} Step {act_step}: Starting...")
+
             tmux['step'][thread_index] = act_step
             if (stop is not None) and stop[thread_index]: 
+                logger.info(f"[DEBUG-FLOW] Thread-{thread_index} Step {act_step}: Stopped externally.")
                 self.cmt.discarded = True
                 break
 
@@ -138,10 +146,20 @@ class AgentFlow(BaseAgentFlow):
             is_safe: bool = self.cmt.check_context_token_num_safe(step_input_message_arr)  
             if not is_safe:
                 logger.warning(f"Token overflow at step {act_step}.")
+                # [DEBUG LOG] Token Overflow
+                logger.warning(f"[DEBUG-FLOW] Thread-{thread_index} Step {act_step}: Token Overflow triggered! Breaking loop.")
                 self.cmt.is_terminated = False 
                 break
 
+            # [DEBUG LOG] Before LLM
+            logger.info(f"[DEBUG-FLOW] Thread-{thread_index} Step {act_step}: Requesting LLM...")
+            llm_st = time.time()
+            
+            # --- LLM Call ---
             llm_output = self.llm_chat_fn(step_input_message_arr, request_id=request_id)  
+            # ----------------
+            
+            logger.info(f"[DEBUG-FLOW] Thread-{thread_index} Step {act_step}: LLM responded in {time.time()-llm_st:.2f}s. Content len: {len(llm_output.get('content', ''))}")
             
             if (stop is not None) and stop[thread_index]:  
                 self.cmt.discarded = True
@@ -157,9 +175,18 @@ class AgentFlow(BaseAgentFlow):
                 
                 # [修改] 增加计时逻辑
                 st_time = time.time()
+                # [DEBUG LOG] Before Env
+                logger.info(f"[DEBUG-FLOW] Thread-{thread_index} Step {act_step}: Calling Env step...")
+                
+                # --- Env Call ---
                 env_output = env.step(instance_id, {"content": action_content, "role": "assistant"})  
+                # ----------------
+                
+                env_dur = time.time() - st_time
+                logger.info(f"[DEBUG-FLOW] Thread-{thread_index} Step {act_step}: Env step finished in {env_dur:.2f}s.")
+                
                 # 累加环境执行时间
-                total_env_time += (time.time() - st_time)
+                total_env_time += env_dur
                 
                 assert len(env_output['state']) == 1
                 env_output["state"] = env_output["state"][0]
@@ -200,11 +227,14 @@ class AgentFlow(BaseAgentFlow):
 
             self.cmt.is_terminated = env_output["is_terminated"]
             if self.cmt.is_terminated or err_in_env:
+                logger.info(f"[DEBUG-FLOW] Thread-{thread_index} Step {act_step}: Terminated (Done={self.cmt.is_terminated}, Err={err_in_env}).")
                 break
         
         # ---------------- 循环结束 ----------------
 
         tmux['step'][thread_index] = -1
+
+        logger.info(f"[DEBUG-FLOW] Thread-{thread_index}: Exited Loop. Calculating Reward...")
 
         # 10. 计算奖励
         if self._reward_calculator is not None:
@@ -215,6 +245,8 @@ class AgentFlow(BaseAgentFlow):
         else:
             score = env.evaluate(instance_id, params={"sparse": self.sparse})  
             reason = "Outcome 1 = success, 0 = failure."
+
+        logger.info(f"[DEBUG-FLOW] Thread-{thread_index}: Reward Calculated. Score: {score}")
 
         success_rate = 1.0 if score >= 1 else 0.0
         self.cmt.reward = Reward(outcome=score, success_rate=success_rate, madness=self.cmt.compute_madness(), description=reason)  
@@ -234,4 +266,5 @@ class AgentFlow(BaseAgentFlow):
         # 11. 追加对话到同一个 JSON 文件中
         self._save_to_json(task_id, instance_id, rollout_id)
 
+        logger.info(f"[DEBUG-FLOW] Thread-{thread_index}: Execute Finished. Returning CMT.")
         return self.cmt
