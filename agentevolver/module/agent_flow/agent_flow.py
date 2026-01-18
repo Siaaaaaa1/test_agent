@@ -238,32 +238,34 @@ class AgentFlow(BaseAgentFlow):
 
         # 10. 计算奖励
         if self._reward_calculator is not None:
-            # 这里调用的是 Outcome Reward 逻辑 (LLM Judge)
-            logger.info(f"[DEBUG-FLOW] Thread-{thread_index}: Using RewardCalculator. Calling calculate_reward...") 
+            # [新增] 获取并打印 RewardCalculator 的类名
+            calc_name = self._reward_calculator.__class__.__name__
+            logger.info(f"[DEBUG-FLOW] Thread-{thread_index}: Using RewardCalculator class: '{calc_name}'. Calling calculate_reward...") 
+            
             try:
                 # [潜在卡死点 1] LLM Judge 调用
                 grader_res = self._reward_calculator.calculate_reward(self.cmt, env, instance_id)  
-                logger.info(f"[DEBUG-FLOW] Thread-{thread_index}: calculate_reward returned successfully.")
+                
+                logger.info(f"[DEBUG-FLOW] Thread-{thread_index}: calculate_reward returned successfully. Score: {grader_res.get('score')}")
                 
                 score = grader_res["score"] 
                 reason = grader_res["reason"] or "No reason provided."
             except Exception as e:
-                logger.error(f"[DEBUG-FLOW] Thread-{thread_index}: CRITICAL ERROR in calculate_reward: {e}")
+                logger.error(f"[DEBUG-FLOW] Thread-{thread_index}: CRITICAL ERROR in {calc_name}.calculate_reward: {e}", exc_info=True)
                 score = 0.0
                 reason = f"Error during reward calculation: {e}"
         else:
-            logger.info(f"[DEBUG-FLOW] Thread-{thread_index}: No RewardCalculator. Using env.evaluate...")
+            logger.info(f"[DEBUG-FLOW] Thread-{thread_index}: No RewardCalculator (None). Using env.evaluate...")
             try:
                 # [潜在卡死点 2] 环境评估调用
                 score = env.evaluate(instance_id, params={"sparse": self.sparse})  
-                logger.info(f"[DEBUG-FLOW] Thread-{thread_index}: env.evaluate returned successfully.")
+                logger.info(f"[DEBUG-FLOW] Thread-{thread_index}: env.evaluate returned successfully. Score: {score}")
             except Exception as e:
-                logger.error(f"[DEBUG-FLOW] Thread-{thread_index}: CRITICAL ERROR in env.evaluate: {e}")
+                logger.error(f"[DEBUG-FLOW] Thread-{thread_index}: CRITICAL ERROR in env.evaluate: {e}", exc_info=True)
                 score = 0.0
-            
-            reason = "Outcome 1 = success, 0 = failure."
+                reason = f"Error in env.evaluate: {e}"
 
-        logger.info(f"[DEBUG-FLOW] Thread-{thread_index}: Reward Outcome: {score}. Preparing Reward object...")
+        logger.info(f"[DEBUG-FLOW] Thread-{thread_index}: Reward Calculated. Score: {score}")
 
         success_rate = 1.0 if score >= 1 else 0.0
         self.cmt.reward = Reward(outcome=score, success_rate=success_rate, madness=self.cmt.compute_madness(), description=reason)  
