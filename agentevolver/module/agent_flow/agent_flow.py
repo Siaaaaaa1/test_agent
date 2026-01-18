@@ -239,14 +239,31 @@ class AgentFlow(BaseAgentFlow):
         # 10. 计算奖励
         if self._reward_calculator is not None:
             # 这里调用的是 Outcome Reward 逻辑 (LLM Judge)
-            grader_res = self._reward_calculator.calculate_reward(self.cmt, env, instance_id)  
-            score = grader_res["score"] 
-            reason = grader_res["reason"] or "No reason provided."
+            logger.info(f"[DEBUG-FLOW] Thread-{thread_index}: Using RewardCalculator. Calling calculate_reward...") 
+            try:
+                # [潜在卡死点 1] LLM Judge 调用
+                grader_res = self._reward_calculator.calculate_reward(self.cmt, env, instance_id)  
+                logger.info(f"[DEBUG-FLOW] Thread-{thread_index}: calculate_reward returned successfully.")
+                
+                score = grader_res["score"] 
+                reason = grader_res["reason"] or "No reason provided."
+            except Exception as e:
+                logger.error(f"[DEBUG-FLOW] Thread-{thread_index}: CRITICAL ERROR in calculate_reward: {e}")
+                score = 0.0
+                reason = f"Error during reward calculation: {e}"
         else:
-            score = env.evaluate(instance_id, params={"sparse": self.sparse})  
+            logger.info(f"[DEBUG-FLOW] Thread-{thread_index}: No RewardCalculator. Using env.evaluate...")
+            try:
+                # [潜在卡死点 2] 环境评估调用
+                score = env.evaluate(instance_id, params={"sparse": self.sparse})  
+                logger.info(f"[DEBUG-FLOW] Thread-{thread_index}: env.evaluate returned successfully.")
+            except Exception as e:
+                logger.error(f"[DEBUG-FLOW] Thread-{thread_index}: CRITICAL ERROR in env.evaluate: {e}")
+                score = 0.0
+            
             reason = "Outcome 1 = success, 0 = failure."
 
-        logger.info(f"[DEBUG-FLOW] Thread-{thread_index}: Reward Calculated. Score: {score}")
+        logger.info(f"[DEBUG-FLOW] Thread-{thread_index}: Reward Outcome: {score}. Preparing Reward object...")
 
         success_rate = 1.0 if score >= 1 else 0.0
         self.cmt.reward = Reward(outcome=score, success_rate=success_rate, madness=self.cmt.compute_madness(), description=reason)  
@@ -260,11 +277,26 @@ class AgentFlow(BaseAgentFlow):
         self.cmt.remove_last_context()
 
         # 生成日志
-        with log_generate_lock:
-            self.cmt.generate_log(task_id=task_id)  
+        logger.info(f"[DEBUG-FLOW] Thread-{thread_index}: Waiting for log_generate_lock...")
+        
+        # [潜在卡死点 3] 线程锁死锁
+        # 建议：如果不需要生成 html/text log，可以暂时注释掉 with 块来测试
+        try:
+            with log_generate_lock:
+                logger.info(f"[DEBUG-FLOW] Thread-{thread_index}: Acquired lock. Generating log...")
+                self.cmt.generate_log(task_id=task_id)  
+                logger.info(f"[DEBUG-FLOW] Thread-{thread_index}: Log generated. Releasing lock.")
+        except Exception as e:
+            logger.error(f"[DEBUG-FLOW] Thread-{thread_index}: Error inside log_generate_lock: {e}")
 
         # 11. 追加对话到同一个 JSON 文件中
-        self._save_to_json(task_id, instance_id, rollout_id)
+        logger.info(f"[DEBUG-FLOW] Thread-{thread_index}: Calling _save_to_json...")
+        try:
+            # [潜在卡死点 4] 文件 IO 阻塞
+            self._save_to_json(task_id, instance_id, rollout_id)
+            logger.info(f"[DEBUG-FLOW] Thread-{thread_index}: _save_to_json finished.")
+        except Exception as e:
+            logger.error(f"[DEBUG-FLOW] Thread-{thread_index}: Error in _save_to_json: {e}")
 
         logger.info(f"[DEBUG-FLOW] Thread-{thread_index}: Execute Finished. Returning CMT.")
         return self.cmt
