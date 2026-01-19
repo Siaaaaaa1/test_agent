@@ -2,8 +2,9 @@ from abc import ABC, abstractmethod
 import json
 import os
 import time
-import threading  # [新增 1] 引入线程模块
-from typing import Any, Optional, Protocol, Iterator, Generator, cast
+import threading
+import random
+from typing import Any, Optional, Protocol, Iterator, Generator, cast, List, Dict
 
 from loguru import logger
 import requests
@@ -23,22 +24,34 @@ class LlmException(Exception):
 
 class DashScopeClient:
     """
-    Modified DashScopeClient to support internal Hunyuan/DeepSeek Proxy.
-    Updated for DeepSeek-R1-Online on production environment.
+    Modified DashScopeClient to support dynamic scheduling for internal Hunyuan/DeepSeek Proxy.
+    Supports load balancing and constraints (Token limit & Concurrency).
     """
 
-    # [新增 2] 类级别的信号量，所有实例共享。
-    # value=10 表示同时只允许 10 个请求在进行中（你可以根据 API 限制调整这个数字）
-    _concurrency_semaphore = threading.BoundedSemaphore(value=10)
+    # --- [修改 1] 定义模型池、并发限制和约束 ---
+    # 格式: "模型名": {"limit": 并发数, "max_input_tokens": 最大输入Token限制(None表示无限制)}
+    MODEL_CONFIGS = {
+        "HY-Qwen3-235B-A22B-Instruct-2507": {"limit": 5, "max_input_tokens": 30000},
+        "DeepSeek-R1-Online":               {"limit": 3, "max_input_tokens": None},
+        "DeepSeek-V3-Online-64K":           {"limit": 3, "max_input_tokens": None},
+    }
 
-    def __init__(self, api_key: Optional[str] = None, model_name: str = "qwen-plus", 
+    # 为每个模型初始化独立的信号量
+    _model_semaphores: Dict[str, threading.BoundedSemaphore] = {
+        name: threading.BoundedSemaphore(value=conf["limit"]) 
+        for name, conf in MODEL_CONFIGS.items()
+    }
+
+    def __init__(self, api_key: Optional[str] = None, model_name: str = "auto-balanced", 
                  temperature: float = 0.7, max_tokens: int = 2048):
         
         if load_dotenv:
             load_dotenv()
 
         self.api_key = api_key or os.getenv("DASHSCOPE_API_KEY") or os.getenv("OPENAI_API_KEY") or "dummy_key"
-        self.model_name = "DeepSeek-V3-Online-64K"
+        # 默认模式下，我们使用动态调度，因此 self.model_name 只是一个初始值
+        # 实际请求时会由 _schedule_model 覆盖
+        self.model_name = model_name 
         self.temperature = temperature
         self.max_tokens = 2048
         self.base_url = os.getenv("AZURE_PROXY_URL") or "http://ichatproxy.devops.weread.woa.com"
@@ -46,11 +59,65 @@ class DashScopeClient:
         self.headers = {
             "Content-Type": "application/json"
         }
-        
-        # logger.info(...) 可以保留，但为了减少刷屏可以去掉或保留
 
     def set_model(self, model_name: str):
         self.model_name = model_name
+
+    # --- [新增] Token 简单估算 ---
+    def _estimate_tokens(self, messages: list[dict[str, str]]) -> int:
+        """
+        简单估算 Token 数。这里使用 1 token ≈ 3 chars 的保守估计（中文环境）。
+        如果需要更精准，可根据实际 tokenizer 调整。
+        """
+        total_chars = 0
+        for msg in messages:
+            content = msg.get("content", "")
+            total_chars += len(content)
+        # 英文通常 4 chars/token，中文 1-2 chars/token。
+        # 取平均 2.5 chars/token 估算，或者简单按字符数处理。
+        # 这里为了安全起见（确保 < 3w），我们可以估算得稍微大一点
+        return int(total_chars / 2.5)
+
+    # --- [新增] 动态调度逻辑 ---
+    def _schedule_model(self, messages: list[dict[str, str]]) -> tuple[str, threading.BoundedSemaphore]:
+        """
+        根据输入消息和并发状态，选择一个最佳模型。
+        返回: (选中的模型名称, 对应的信号量)
+        """
+        input_tokens = self._estimate_tokens(messages)
+        candidates = []
+
+        # 1. 筛选符合 Token 限制的模型
+        for name, config in self.MODEL_CONFIGS.items():
+            limit = config["max_input_tokens"]
+            if limit is not None and input_tokens > limit:
+                continue # 超出限制，跳过
+            candidates.append(name)
+        
+        if not candidates:
+            # 如果没有符合条件的模型（极其罕见，除非全部模型都有严格限制且输入超长）
+            # 降级策略：默认返回 DeepSeek-V3
+            fallback = "DeepSeek-V3-Online-64K"
+            return fallback, self._model_semaphores[fallback]
+
+        # 2. 调度策略：优先使用有空闲并发位的模型 (Try-Lock Strategy)
+        # 打乱顺序，防止所有请求都倾向于列表第一个
+        random.shuffle(candidates)
+
+        # 尝试寻找一个可以直接获得锁的模型（非阻塞）
+        for name in candidates:
+            sem = self._model_semaphores[name]
+            # 注意：BoundedSemaphore 在 Python 中没有直接公开的 `locked()` 或 `value` 供判断
+            # 我们尝试非阻塞获取
+            if sem.acquire(blocking=False):
+                # 获取成功，立即释放（因为实际获取是在 _handle 方法中进行的 context manager）
+                # 这里只是为了探测谁有空闲
+                sem.release()
+                return name, sem
+
+        # 3. 如果所有模型都忙，随机选择一个符合条件的模型进行排队（阻塞）
+        selected_model = random.choice(candidates)
+        return selected_model, self._model_semaphores[selected_model]
 
     def chat(self, messages: list[dict[str, str]], sampling_params: dict[str, Any] = None, **kwargs) -> str:
         params = sampling_params.copy() if sampling_params else {}
@@ -67,8 +134,13 @@ class DashScopeClient:
         base = self.base_url.rstrip('/')
         url = f"{base}/hunyuan/deepseek/chat_completions?source=exp"
         
+        # [修改 2] 调用调度器选择模型和信号量
+        selected_model, selected_semaphore = self._schedule_model(messages)
+        
+        # logger.info(f"Scheduled to model: {selected_model}") # Debug用
+
         params = {
-            "model": self.model_name,
+            "model": selected_model, # 使用调度选出的模型
             "messages": messages,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
@@ -77,10 +149,11 @@ class DashScopeClient:
         }
         
         try:
+            # [修改 3] 将选定的信号量传递给处理函数
             if stream:
-                return self._handle_stream_response(url, params)
+                return self._handle_stream_response(url, params, selected_semaphore)
             else:
-                return self._handle_normal_response(url, params)
+                return self._handle_normal_response(url, params, selected_semaphore)
                 
         except requests.exceptions.RequestException as e:
             logger.error(f"API request failed: {e}")
@@ -92,15 +165,14 @@ class DashScopeClient:
             logger.error(f"Unexpected error in API call: {e}")
             return "" if not stream else (x for x in [])
 
-    def _handle_normal_response(self, url: str, params: dict) -> str:
+    def _handle_normal_response(self, url: str, params: dict, semaphore: threading.BoundedSemaphore) -> str:
         """
         Handles the non-streaming (normal) response.
         """
         no_proxy = {"http": None, "https": None}
 
-        # [新增 3] 使用 with 语句自动管理锁的获取和释放
-        # 当代码进入此块时，如果并发数已满，线程会等待，直到有空位
-        with self._concurrency_semaphore:
+        # [修改 4] 使用传入的具体模型的信号量
+        with semaphore:
             response = requests.post(
                 url, 
                 headers=self.headers, 
@@ -130,17 +202,16 @@ class DashScopeClient:
                 logger.error(f"Unexpected response format: {result}")
                 return ""
 
-    def _handle_stream_response(self, url: str, params: dict) -> Generator[str, None, None]:
+    def _handle_stream_response(self, url: str, params: dict, semaphore: threading.BoundedSemaphore) -> Generator[str, None, None]:
         """
         Handles the streaming response.
         """
         no_proxy = {"http": None, "https": None}
 
-        # [新增 4] 手动获取锁
-        self._concurrency_semaphore.acquire()
+        # [修改 5] 手动获取传入的信号量
+        semaphore.acquire()
         
         try:
-            # 只有获取到锁之后才会发起网络请求
             response = requests.post(
                 url, 
                 headers=self.headers, 
@@ -183,13 +254,11 @@ class DashScopeClient:
                         except json.JSONDecodeError:
                             continue
         finally:
-            # [新增 5] 无论正常结束还是发生异常，确保释放锁
-            # 这样对于流式请求，锁会一直被占用到生成结束，保证了真正的并发控制
-            self._concurrency_semaphore.release()
+            # [修改 6] 释放传入的信号量
+            semaphore.release()
 
     def chat_with_retry(self, messages: list[dict[str, str]], max_retries: int = 3, 
                        retry_delay: float = 1.0, **kwargs) -> str:
-        # 代码保持不变...
         for attempt in range(max_retries):
             try:
                 result = cast(str, self.chat_completion(messages, stream=False, **kwargs))
@@ -200,7 +269,6 @@ class DashScopeClient:
                 if e.typ == 'inappropriate content':
                     logger.warning(f"llm return inappropriate content, which is blocked by the remote")
                     return "[inappropriate content]"
-            # 注意：如果因为并发限制排队太久导致超时，可以在这里加重试逻辑
             except Exception as e:
                 logger.warning(f"Attempt {attempt + 1} failed: {e}")
                 
@@ -212,7 +280,6 @@ class DashScopeClient:
 
     def chat_stream_with_retry(self, messages: list[dict[str, str]], max_retries: int = 3, 
                               retry_delay: float = 10.0, **kwargs) -> Generator[str, None, None]:
-        # 代码保持不变...
         for attempt in range(max_retries):
             try:
                 stream_generator = cast(Generator[str, None, None], self.chat_completion(messages, stream=True, **kwargs))
