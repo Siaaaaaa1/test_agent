@@ -126,7 +126,7 @@ class APIProcessRewardCalculator(RewardCalculator):
     1. 结果奖励 (Outcome Reward): 轨迹结束后，使用 LLM 作为裁判打分。
     2. 过程奖励 (Process Reward): 每一步检查是否覆盖了 Ground Truth (GT) 中的 API 调用。
     """
-    def __init__(self, task: Task, model_name='DeepSeek-V3-Online-128K'):
+    def __init__(self, task: Task, model_name='DeepSeek-V3-Online-64K'):
         """
         初始化计算器。
 

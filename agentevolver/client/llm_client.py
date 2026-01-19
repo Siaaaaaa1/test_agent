@@ -38,7 +38,7 @@ class DashScopeClient:
         # ----------------------------------------------------------------------
         # Modification 1: Hardcode the working DeepSeek-R1-Online model
         # ----------------------------------------------------------------------
-        self.model_name = "DeepSeek-V3-Online-128K"
+        self.model_name = "DeepSeek-V3-Online-64K"
         
         self.temperature = temperature
         self.max_tokens = max_tokens
