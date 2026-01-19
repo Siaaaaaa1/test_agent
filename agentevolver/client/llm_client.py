@@ -134,7 +134,7 @@ class DashScopeClient:
             url, 
             headers=self.headers, 
             json=params, 
-            timeout=600, 
+            timeout=60, 
             proxies=no_proxy 
         )
         
