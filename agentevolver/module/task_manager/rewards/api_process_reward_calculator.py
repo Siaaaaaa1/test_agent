@@ -1,32 +1,20 @@
 import re
-import time  # [Log Add] 引入 time 库
+import time
 from typing import Any, cast, Set, List
-# 导入项目内部的模块
-# EnvClient: 用于与环境交互的客户端
-# DashScopeClient: 阿里模型服务的客户端（用于调用通义千问等模型）
+
+# 保持原有导入不变
 from agentevolver.client.env_client import EnvClient
 from agentevolver.client.llm_client import DashScopeClient
-# RewardCalculator: 奖励计算器的基类
-# GraderResult: 定义返回结果格式的类型
 from agentevolver.module.agent_flow.reward_calculator import GraderResult, RewardCalculator
 from agentevolver.schema.task import Task
 from agentevolver.schema.trajectory import Trajectory
-
-# 导入上一段代码中定义的管理器实例，用于注册本计算器
 from . import grader_manager
 
-# [Log Add] 辅助打印函数
+# 辅助打印函数保持不变
 def log_reward(msg):
     print(f"[{time.strftime('%H:%M:%S')}] [RewardCalc] {msg}", flush=True)
 
-# =============================================================================
-# 裁判模型的提示词 (System Prompt)
-# 这是一个非常详细的指令，用于指导 LLM 如何评估 Agent 的表现。
-# 核心逻辑：
-# 1. 0-40分：任务未完成或失败。
-# 2. 60-100分：任务成功完成。
-# 3. 禁止打分 41-59分：强制 LLM 进行二分类判断（成/败），避免模糊的中间分。
-# =============================================================================
+# System Prompt 和 steps_to_msg 函数保持不变
 USER_PROMPT="""Based on the conversation trajectory above, evaluate the task completion quality using the framework provided.
 
 Your evaluation should address the following dimensions in order:
@@ -75,50 +63,30 @@ Provide your detailed analysis first, explaining your reasoning for each evaluat
 First provide your detailed reasoning analysis, then output an integer score between 0-40 or 60-100 enclosed in <reward></reward> tags, e.g., <reward>75</reward>
 """
 
-
 def steps_to_msg(steps: list[dict[str, Any]]) -> str:
-    """
-    辅助函数：将步骤列表转换为格式化的字符串，以便 LLM 阅读。
-    格式化为类似 ReAct 的轨迹：
-    <|ACTION|> (Assistant 的输出)
-    <|OBSERVATION|> (User/Environment 的反馈)
-
-    Args:
-        steps (list[dict[str, Any]]): 包含 'role' 和 'content' 的字典列表。
-
-    Returns:
-        str: 拼接好的对话历史字符串。
-    """
     trajectory_text = ""
-    # 稍微放宽断言，防止某些特殊情况下第一条不是 assistant，只做检查不报错
     if steps and steps[0]['role'] != 'assistant':
         pass 
         
     for i, msg in enumerate(steps):
         role = msg.get("role", "unknown")
         if role == 'assistant':
-            # 模型的输出被标记为 Action
             block = f""">>> STEP {i//2} <<<
 <|ACTION|>
 {msg['content']}
 <|END|>
 """
         elif role == "user":
-            # 环境的返回被标记为 Observation
             block = f"""<|OBSERVATION|>
 {msg['content']}
 <|END|>
 """
         else:
-            # 忽略 system prompt 或其他未知角色
             continue
         trajectory_text += block.strip() + "\n\n"
     return trajectory_text
 
 
-# 使用装饰器将此类注册到 grader_manager 中
-# 注册名为 "api_process_llm_judge"
-# 以后可以通过 grader_manager.get_calculator("api_process_llm_judge") 获取实例
 @grader_manager.reg("api_process_llm_judge")
 class APIProcessRewardCalculator(RewardCalculator):
     """
@@ -127,118 +95,56 @@ class APIProcessRewardCalculator(RewardCalculator):
     2. 过程奖励 (Process Reward): 每一步检查是否覆盖了 Ground Truth (GT) 中的 API 调用。
     """
     def __init__(self, task: Task, model_name='DeepSeek-V3-Online-64K'):
-        """
-        初始化计算器。
-
-        Args:
-            task (Task): 包含任务描述和 Ground Truth 代码的任务对象。
-            model_name (str): 用于当裁判的大模型名称。
-        """
         super().__init__(task)
-        # --- 初始化 LLM 裁判客户端 ---
+        # 初始化 LLM 裁判客户端
         self._client = DashScopeClient(model_name=model_name)
         
-        # --- 初始化过程奖励逻辑 ---
-        # 1. 从任务的标准答案(GT)中提取出所有正确的 API 调用集合
-        #    task.ground_truth 是一段正确的 Python 代码
+        # 初始化过程奖励逻辑
         self.gt_apis: Set[str] = self._extract_apis(task.ground_truth)
-        
-        # 2. 初始化一个集合，记录 Agent 已经调用并获得过奖励的 API
-        #    防止同一个正确操作被重复刷分
         self.visited_apis: Set[str] = set()
-        
-        # 配置: 每覆盖一个新的正确 API，奖励 0.1 分
         self.reward_per_api = 0.1 
 
     # ---------------- 过程奖励逻辑 (Process Reward Logic) ----------------
-    
     def _extract_apis(self, code_str: str) -> Set[str]:
-        """
-        工具方法：使用正则表达式从代码字符串中提取 API 调用。
-        目标格式: apis.service.function (例如: apis.calendar.add_event)
-        """
         if not code_str:
             return set()
-        # 正则含义：匹配 "apis." 开头，后面跟着两个由点号分隔的单词
         return set(re.findall(r"(apis\.\w+\.\w+)", code_str))
 
     def calculate_step_reward(self, step_code: str) -> float:
-        """
-        计算单步的过程奖励。
-        
-        调用时机：Agent 生成代码并执行后。
-        
-        逻辑：
-        1. 提取当前步骤代码中的 API。
-        2. 判断这些 API 是否在标准答案 (GT) 中。
-        3. 过滤掉之前已经奖励过的 API。
-        4. 剩下的就是“新覆盖的正确 API”，给予奖励并更新 visited 记录。
-        
-        Args:
-            step_code (str): 当前步骤 Agent 生成的代码。
-            
-        Returns:
-            float: 本步骤获得的增量奖励值。
-        """
         if not step_code or not self.gt_apis:
             return 0.0
 
-        # 1. 提取当前步骤使用的 API
         step_apis = self._extract_apis(step_code)
-        
-        # 2. 交集运算：找出属于标准答案的 API
         matched_apis = step_apis.intersection(self.gt_apis)
-        
-        # 3. 差集运算：找出其中尚未奖励过的 (Newly Covered)
         newly_covered_apis = matched_apis - self.visited_apis
         
         reward = 0.0
         if newly_covered_apis:
-            # 计算奖励：新发现数量 * 单个奖励值
             reward = len(newly_covered_apis) * self.reward_per_api
-            # 4. 更新已访问集合，防止未来重复奖励
             self.visited_apis.update(newly_covered_apis)
-            # log_reward(f"Found new APIs: {newly_covered_apis}, Reward: {reward}") # 可选 Log
             
         return reward
 
     # ---------------- 结果奖励逻辑 (Outcome Reward Logic - LLM) ----------------
 
     def pack_message(self, trajectory: Trajectory):
-        """
-        将完整的轨迹打包成 LLM 的输入消息格式。
-        """
         messages=[]
-        
-        # 简单的防御性检查：尝试从步骤中获取具体的 Query 内容
-        # 假设 trajectory.steps[1] 是 User 提出的具体问题
         query = "Unknown Query"
         if len(trajectory.steps) >= 2:
             query = trajectory.steps[1].get('content', '')
         
-        # 拼接 Prompt
         trajectory_text = f"Query: {query}\n"
         trajectory_text += "The following is the dialogue trace of the task execution:\n\n"
-        # 转换历史对话为字符串 (跳过前两个 setup 步骤)
         trajectory_text += steps_to_msg(trajectory.steps[2:])
         
-        # 第一条 User 消息：提供轨迹上下文
         messages.append({"role": "user", "content": trajectory_text})
-        # 第二条 User 消息：提供评分标准 (Prompt Engineering)
         messages.append({"role": "user", "content": USER_PROMPT})
         return messages
     
     def calculate_reward(self, trajectory: Trajectory, env: EnvClient, instance_id: str) -> GraderResult:
-        """
-        对外接口：计算最终奖励 (Outcome Reward)。
-        通常在 Episode 结束时调用。
-        """
-        log_reward(f"Calculating final reward for Task ID: {instance_id}") # [Log Add]
-        
-        # 调用内部方法获取分数和理由
+        log_reward(f"Calculating final reward for Task ID: {instance_id}")
         x, reason = cast(tuple[float, str], self._calculate_reward(trajectory, env, eject_llm_output=True))
-        
-        log_reward(f"Final Reward for {instance_id}: {x}") # [Log Add]
+        log_reward(f"Final Reward for {instance_id}: {x}")
         return {
             "score": x,
             "reason": reason
@@ -247,72 +153,59 @@ class APIProcessRewardCalculator(RewardCalculator):
     def _calculate_reward(self, trajectory: Trajectory, env: EnvClient, *, eject_llm_output: bool = False):
         """
         内部逻辑：负责调用 LLM API 并解析结果。
+        [Updated] 已从流式 chat_stream_with_retry 更改为同步 chat_with_retry
         """
         start_t = time.time()
-        log_reward("Starting LLM Judge request...") # [Log Add]
+        log_reward("Starting LLM Judge request...")
         
         response = ""
         messages = self.pack_message(trajectory)
         
-        # [Log Add] 记录正在发送多大的包，如果包太大 LLM 可能会处理很久
         log_reward(f"Message packed. Content length ~{len(str(messages))} chars.") 
 
-        # 使用流式 API 调用 LLM，并拼接完整的响应字符串
         try:
-            # [Log Add] 打印即将发送的消息结构，检查是否为空
             log_reward(f"Debug - Message Count: {len(messages)}")
             if messages:
                 log_reward(f"Debug - Last Message Content Preview: {messages[-1]['content'][:100]}...")
 
-            stream = self._client.chat_stream_with_retry(messages=messages, max_retries=3)
-            first_chunk = True
+            # ================= [CHANGE START] =================
+            # 使用同步的 chat_with_retry 方法，直接获取完整字符串
+            # 移除了原有的 loop 和 chunk 处理逻辑
+            response = self._client.chat_with_retry(
+                messages=messages, 
+                max_retries=3
+            )
             
-            for chunk in stream:
-                # ================= [Debug Start] =================
-                # 打印 chunk 的类型和原始表示（repr）
-                # !r 等同于 python 的 repr()，能显示出隐藏字符如 \n
-                log_reward(f"[DEBUG] Chunk Type: {type(chunk)} | Content: {chunk!r}")
-                
-                # 如果 chunk 是对象，尝试打印它的属性字典（可选）
-                if hasattr(chunk, '__dict__'):
-                     log_reward(f"[DEBUG] Chunk Dict: {chunk.__dict__}")
-                # ================= [Debug End] =================
+            log_reward("="*20 + " LLM RESPONSE START " + "="*20)
+            print(response)  # 或者使用 log_reward(f"\n{response}")
+            log_reward("="*20 + " LLM RESPONSE END " + "="*20)
 
-                if first_chunk:
-                    log_reward(f"Received first chunk... (Time: {time.time() - start_t:.2f}s)")
-                    first_chunk = False
-                
-                # ... 原有的处理逻辑 ...
-                if hasattr(chunk, 'content'): 
-                    response += chunk.content
-                else:
-                    response += str(chunk)
+            # 简单的 Debug 打印
+            log_reward(f"[DEBUG] Response received. Length: {len(response)}")
+            if hasattr(response, '__dict__'):
+                # 防止意外返回对象而非字符串的情况
+                 log_reward(f"[DEBUG] Response Dict: {response.__dict__}")
+            # ================= [CHANGE END] =================
                     
         except Exception as e:
-            # [Critical] 打印完整的堆栈信息，而不仅仅是 e
             log_reward(f"[ERROR] LLM Judge request failed with Exception: {e}")
             
         total_time = time.time() - start_t
-        log_reward(f"LLM Judge request completed. Total Cost: {total_time:.2f}s") # [Log Add]
+        log_reward(f"LLM Judge request completed. Total Cost: {total_time:.2f}s")
             
         score = 0.0
         if response:
-            # 使用正则从 LLM 的回复中提取 <reward>75</reward> 标签中的数字
             reward_match = re.search(r'<reward>([\d\.]+)</reward>', response.strip())
             if reward_match:
                 score_val = float(reward_match.group(1))
-                # 归一化分数：将 0-100 的整数转换为 0.0-1.0 的浮点数
-                # max/min 确保分数不越界
                 score = max(0.0, min(100.0, score_val)) / 100.0
             else:
-                # 如果 LLM 没按格式输出，打印错误并给 0 分
-                log_reward(f"[WARNING] Could not parse score from response: {response[-200:]}...") # [Log Add] 只打印最后一部分防止刷屏
+                log_reward(f"[WARNING] Could not parse score from response: {response[-200:]}...")
                 score = 0.0
         else:
             log_reward("[ERROR] No response from evaluation API")
             score = 0.0
         
-        # 根据参数决定是只返回分数，还是返回 (分数, 完整回复)
         if not eject_llm_output:
             return score
         else:

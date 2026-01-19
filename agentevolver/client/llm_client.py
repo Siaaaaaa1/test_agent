@@ -41,7 +41,7 @@ class DashScopeClient:
         self.model_name = "DeepSeek-V3-Online-64K"
         
         self.temperature = temperature
-        self.max_tokens = max_tokens
+        self.max_tokens = 2048
         
         # ----------------------------------------------------------------------
         # Modification 2: Update Base URL to the production environment (no -test, no weread2)
