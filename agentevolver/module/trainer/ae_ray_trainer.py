@@ -1563,8 +1563,6 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                                 for record in merged_records:
                                     f.write(json.dumps(record, ensure_ascii=False) + "\n")
                             
-                            logger.info(f"Saved merged generations and traces to {save_path}")
-
                             # 保存原始轨迹 (备份)
                             filename = os.path.join(rollout_data_dir, f"traj_{self.global_steps}.jsonl")
                             with open(filename, "w") as f:

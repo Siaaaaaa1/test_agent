@@ -28,7 +28,7 @@ class DashScopeClient:
     """
     
     def __init__(self, api_key: Optional[str] = None, model_name: str = "qwen-plus", 
-                 temperature: float = 0.7, max_tokens: int = 4096):
+                 temperature: float = 0.7, max_tokens: int = 120000):
         
         if load_dotenv:
             load_dotenv()
@@ -38,7 +38,7 @@ class DashScopeClient:
         # ----------------------------------------------------------------------
         # Modification 1: Hardcode the working DeepSeek-R1-Online model
         # ----------------------------------------------------------------------
-        self.model_name = "DeepSeek-R1-Online"
+        self.model_name = "DeepSeek-V3-Online-128K"
         
         self.temperature = temperature
         self.max_tokens = max_tokens

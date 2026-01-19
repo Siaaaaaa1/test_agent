@@ -126,7 +126,7 @@ class APIProcessRewardCalculator(RewardCalculator):
     1. 结果奖励 (Outcome Reward): 轨迹结束后，使用 LLM 作为裁判打分。
     2. 过程奖励 (Process Reward): 每一步检查是否覆盖了 Ground Truth (GT) 中的 API 调用。
     """
-    def __init__(self, task: Task, model_name='qwen3-235b-a22b-instruct-2507'):
+    def __init__(self, task: Task, model_name='DeepSeek-V3-Online-128K'):
         """
         初始化计算器。
 
@@ -258,19 +258,39 @@ class APIProcessRewardCalculator(RewardCalculator):
         log_reward(f"Message packed. Content length ~{len(str(messages))} chars.") 
 
         # 使用流式 API 调用 LLM，并拼接完整的响应字符串
-        # max_retries=64 表示网络不稳定时会疯狂重试，保证获取结果
         try:
-            stream = self._client.chat_stream_with_retry(messages=messages, max_retries=64)
+            # [Log Add] 打印即将发送的消息结构，检查是否为空
+            log_reward(f"Debug - Message Count: {len(messages)}")
+            if messages:
+                log_reward(f"Debug - Last Message Content Preview: {messages[-1]['content'][:100]}...")
+
+            stream = self._client.chat_stream_with_retry(messages=messages, max_retries=3)
             first_chunk = True
             
             for chunk in stream:
-                if first_chunk:
-                    log_reward(f"Received first chunk from LLM Judge. (Waited: {time.time() - start_t:.2f}s)") # [Log Add]
-                    first_chunk = False
-                response += chunk
+                # ================= [Debug Start] =================
+                # 打印 chunk 的类型和原始表示（repr）
+                # !r 等同于 python 的 repr()，能显示出隐藏字符如 \n
+                log_reward(f"[DEBUG] Chunk Type: {type(chunk)} | Content: {chunk!r}")
                 
+                # 如果 chunk 是对象，尝试打印它的属性字典（可选）
+                if hasattr(chunk, '__dict__'):
+                     log_reward(f"[DEBUG] Chunk Dict: {chunk.__dict__}")
+                # ================= [Debug End] =================
+
+                if first_chunk:
+                    log_reward(f"Received first chunk... (Time: {time.time() - start_t:.2f}s)")
+                    first_chunk = False
+                
+                # ... 原有的处理逻辑 ...
+                if hasattr(chunk, 'content'): 
+                    response += chunk.content
+                else:
+                    response += str(chunk)
+                    
         except Exception as e:
-            log_reward(f"[ERROR] LLM Judge request failed: {e}")
+            # [Critical] 打印完整的堆栈信息，而不仅仅是 e
+            log_reward(f"[ERROR] LLM Judge request failed with Exception: {e}")
             
         total_time = time.time() - start_t
         log_reward(f"LLM Judge request completed. Total Cost: {total_time:.2f}s") # [Log Add]
