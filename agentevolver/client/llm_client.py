@@ -28,7 +28,7 @@ class DashScopeClient:
     """
     
     def __init__(self, api_key: Optional[str] = None, model_name: str = "qwen-plus", 
-                 temperature: float = 0.7, max_tokens: int = 120000):
+                 temperature: float = 0.7, max_tokens: int = 2048):
         
         if load_dotenv:
             load_dotenv()
@@ -134,7 +134,7 @@ class DashScopeClient:
             url, 
             headers=self.headers, 
             json=params, 
-            timeout=60, 
+            timeout=300, 
             proxies=no_proxy 
         )
         
