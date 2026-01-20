@@ -6,6 +6,12 @@ LOCAL_IP="127.0.0.1"
 env_url="http://${LOCAL_IP}:8080"
 PROJECT_DIR="$(pwd)"
 CONFIG_PATH="$PROJECT_DIR/config"
+export VLLM_USE_V1=1
+export VLLM_ATTENTION_BACKEND=FLASHINFER
+export WORLD_SIZE=8
+
+# export CUDA_LAUNCH_BLOCKING=1
+# export HYDRA_FULL_ERROR=1
 
 # 获取本机 IP (Linux通用)
 HOST_IP=$(hostname -I | awk '{print $1}')
@@ -56,7 +62,6 @@ log_file="log_${current_time}.log"
 
 # Ray / CUDA 配置
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
-export RAY_NUM_CPUS=64
 
 echo "Starting Training with IP: $LOCAL_IP"
 
