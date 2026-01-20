@@ -64,6 +64,12 @@ log_file="log_${current_time}.log"
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 
 echo "Starting Training with IP: $LOCAL_IP"
+echo "Log file: $log_file (Color codes and Ray PIDs stripped)"
+
+# 关闭命令回显 (如果之前开启过)，防止日志过大
+set +x
+# 确保管道中的 Python 报错能被捕获
+set -o pipefail
 
 python3 -m agentevolver.main_ppo \
     --config-path="$CONFIG_PATH" \
@@ -148,4 +154,4 @@ python3 -m agentevolver.main_ppo \
     task_manager.llm_client="azure-gpt-5" \
     task_manager.grader.synthetic_grader=api_process_llm_judge \
     ray_init.num_cpus=64 \
-    2>&1 | tee "$log_file"
+    2>&1 | tee >(sed -u -E 's/\x1b\[[0-9;]*m//g; s/\((WorkerDict|TaskRunner) pid=[0-9]*\)//g' > "$log_file")
