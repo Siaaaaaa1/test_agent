@@ -17,10 +17,18 @@ from typing import List
 
 from msgspec import field
 from packaging import version as vs
-from vllm.lora.models import LoRAModel
-from vllm.lora.request import LoRARequest
-from vllm.lora.utils import get_adapter_absolute_path
-from vllm.lora.worker_manager import LRUCacheWorkerLoRAManager
+try:
+    from vllm.lora.models import LoRAModel
+    from vllm.lora.request import LoRARequest
+    from vllm.lora.utils import get_adapter_absolute_path
+    from vllm.lora.worker_manager import LRUCacheWorkerLoRAManager
+except ImportError:
+    # 如果导入失败，定义 Dummy 类/对象，防止后续类继承或类型注解报错
+    class LoRAModel: pass
+    class LoRARequest: pass
+    get_adapter_absolute_path = None
+    LRUCacheWorkerLoRAManager = None
+# ==================== 修改结束 ====================
 
 from verl.third_party.vllm import get_version
 
