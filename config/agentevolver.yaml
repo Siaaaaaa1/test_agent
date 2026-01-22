@@ -4,7 +4,8 @@ algorithm:
   use_kl_in_reward: false
 
 ray_init:
-  num_cpus: 32
+  num_cpus: null
+  address: auto
 
 data:
   train_batch_size: 32         

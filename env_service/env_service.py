@@ -140,7 +140,8 @@ class EnvService:
         )
 
         if not ray.is_initialized():
-            ray.init(address='local', num_cpus=32)
+            # ORIGIN: ray.init(address='local', num_cpus=32)
+            ray.init(address='auto', namespace='appworld', ignore_reinit_error=True)
         self.env_actors = {}
         self.remote_env = {}
         self.last_access_time = {}

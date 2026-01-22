@@ -148,7 +148,7 @@ class vLLMRollout(BaseRollout):
 
         self.inference_engine = LLM(
             model=model_path,
-            enable_sleep_mode=True,
+            enable_sleep_mode=False,  # [MODIFIED] Set to False to disable sleep mode
             tensor_parallel_size=tensor_parallel_size,
             distributed_executor_backend="external_launcher",
             dtype=config.dtype,
@@ -170,7 +170,8 @@ class vLLMRollout(BaseRollout):
         )
 
         # Offload vllm model to reduce peak memory usage
-        self.inference_engine.sleep(level=1)
+        # [MODIFIED] Commented out to prevent initial sleep
+        # self.inference_engine.sleep(level=1)
 
         kwargs = dict(
             n=1,
@@ -390,6 +391,7 @@ class vLLMAsyncRollout:
 
     def sleep(self, *args, **kwargs):
         """Offload model weights and discard kv cache."""
+        # return # [MODIFIED] Force return to disable sleep
         if self.is_sleep:
             return
         self.sharding_manager.__exit__(None, None, None)
@@ -397,6 +399,7 @@ class vLLMAsyncRollout:
 
     def wake_up(self, *args, **kwargs):
         """Load model weights and build kv cache."""
+        # return # [MODIFIED] Force return since sleep is disabled
         if not self.is_sleep:
             return
         self.sharding_manager.__enter__()  # pylint: disable=C2801

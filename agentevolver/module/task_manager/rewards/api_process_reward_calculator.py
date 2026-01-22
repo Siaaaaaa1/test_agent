@@ -137,9 +137,10 @@ class APIProcessRewardCalculator(RewardCalculator):
         trajectory_text += "The following is the dialogue trace of the task execution:\n\n"
         trajectory_text += steps_to_msg(trajectory.steps[2:])
         
-        messages.append({"role": "user", "content": trajectory_text})
-        messages.append({"role": "user", "content": USER_PROMPT})
-        return messages
+        return [
+            {"role": "system", "content": USER_PROMPT},
+            {"role": "user", "content": f"Please evaluate this trajectory:\n\n{trajectory_text}"}
+        ]
     
     def calculate_reward(self, trajectory: Trajectory, env: EnvClient, instance_id: str) -> GraderResult:
         log_reward(f"Calculating final reward for Task ID: {instance_id}")
@@ -173,7 +174,7 @@ class APIProcessRewardCalculator(RewardCalculator):
             # 移除了原有的 loop 和 chunk 处理逻辑
             response = self._client.chat_with_retry(
                 messages=messages, 
-                max_retries=3
+                max_retries=10
             )
             
             log_reward("="*20 + " LLM RESPONSE START " + "="*20)

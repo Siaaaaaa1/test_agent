@@ -1,15 +1,11 @@
 #!/bin/bash
 
 # ---- 1. 环境准备与 Localhost 设置 ----
-# 强制指定 IP 为本地回环地址
+# [修改] 强制指定 IP 为本地回环地址
 LOCAL_IP="127.0.0.1"
 env_url="http://${LOCAL_IP}:8080"
 PROJECT_DIR="$(pwd)"
 CONFIG_PATH="$PROJECT_DIR/config"
-
-export VLLM_ATTENTION_BACKEND=FLASH_ATTN
-# export CUDA_LAUNCH_BLOCKING=1
-export VLLM_USE_V1=1
 
 # 获取本机 IP (Linux通用)
 HOST_IP=$(hostname -I | awk '{print $1}')
@@ -60,9 +56,9 @@ log_file="log_${current_time}.log"
 
 # Ray / CUDA 配置
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export RAY_NUM_CPUS=64
 
 echo "Starting Training with IP: $LOCAL_IP"
-echo "Log file: $log_file"
 
 python3 -m agentevolver.main_ppo \
     --config-path="$CONFIG_PATH" \
@@ -75,24 +71,23 @@ python3 -m agentevolver.main_ppo \
     algorithm.adv_estimator=grpo \
     algorithm.use_kl_in_reward=False \
     \
-    data.train_batch_size=8 \
+    data.train_batch_size=32 \
     data.truncation='error' \
     data.return_raw_chat=True \
     data.filter_overlong_prompts=True \
     data.train_files=null \
     data.val_files=null \
-    data.max_prompt_length=20480 \
-    data.max_response_length=2048 \
+    data.max_prompt_length=4000 \
+    data.max_response_length=21580 \
     data.val_batch_size=32 \
     \
     actor_rollout_ref.model.path=./models/Qwen2.5-7B-Instruct \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
-    actor_rollout_ref.model.dtype=bfloat16 \
     \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
-    actor_rollout_ref.actor.ppo_mini_batch_size=8 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=32 \
     actor_rollout_ref.actor.use_kl_loss=False \
     actor_rollout_ref.actor.off_cliprange_high=0.6 \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
@@ -104,13 +99,13 @@ python3 -m agentevolver.main_ppo \
     actor_rollout_ref.rollout.n=8 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.temperature=0.8 \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.8 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
     actor_rollout_ref.rollout.max_model_len=32768 \
-    actor_rollout_ref.rollout.prompt_length=20480 \
-    actor_rollout_ref.rollout.response_length=2048 \
+    actor_rollout_ref.rollout.prompt_length=4000 \
+    actor_rollout_ref.rollout.response_length=21580 \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=32768 \
-    actor_rollout_ref.rollout.max_num_batched_tokens=81920 \
+    actor_rollout_ref.rollout.max_num_batched_tokens=32768 \
     \
     actor_rollout_ref.ref.fsdp_config.param_offload=False \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=1 \
@@ -147,5 +142,5 @@ python3 -m agentevolver.main_ppo \
     task_manager.exploration_strategy_args.task_labels_path="./environments/appworld/data/datasets/train.jsonl" \
     task_manager.llm_client="azure-gpt-5" \
     task_manager.grader.synthetic_grader=api_process_llm_judge \
-    ray_init.num_cpus=64 \
+    ray_init.num_cpus=32 \
     2>&1 | tee "$log_file"

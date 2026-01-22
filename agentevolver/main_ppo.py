@@ -141,20 +141,41 @@ def run_ppo(config) -> None:
     """
     # 1. 初始化 Ray 集群
     if not ray.is_initialized():
-        # 本地 Ray 集群初始化，设置运行时环境变量（如 vLLM 配置、WandB 配置等）
-        ray.init(
+        
+        # ---- 新增：优先从 config 读取 address，如果没有则默认为 'auto' ----
+        ray_address = getattr(config.ray_init, "address", "auto")
+        ray_num_cpus = getattr(config.ray_init, "num_cpus", None)
+
+        print(f"Connecting to Ray Cluster at: {ray_address}")
+        if ray_num_cpus is not None:
+            ray.init(
+            address='local',  # <--- 关键修改：不要留空，使用配置值
             runtime_env={"env_vars": {
                 "TOKENIZERS_PARALLELISM": "true", 
                 "NCCL_DEBUG": "WARN", 
                 "VLLM_LOGGING_LEVEL": "WARN",
-                "VLLM_ALLOW_RUNTIME_LORA_UPDATING": "true", # 允许 vLLM 运行时更新 LoRA
+                "VLLM_ALLOW_RUNTIME_LORA_UPDATING": "true",
                 "VLLM_USE_V1": "1", 
-                "WANDB_API_KEY": "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", # 示例 Key
+                "WANDB_API_KEY": os.getenv("WANDB_API_KEY", "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"), 
             }},
-            include_dashboard=False,  # <--- 添加这一行，彻底关闭 Dashboard
-            ignore_reinit_error=True, # <--- 建议加上这个，防止反复 init 报错
-            num_cpus=config.ray_init.num_cpus,
+            include_dashboard=False,
+            ignore_reinit_error=True,
+            num_cpus=ray_num_cpus,
         )
+        else:
+            ray.init(
+                address=ray_address,  # <--- 关键修改：不要留空，使用配置值
+                runtime_env={"env_vars": {
+                    "TOKENIZERS_PARALLELISM": "true", 
+                    "NCCL_DEBUG": "WARN", 
+                    "VLLM_LOGGING_LEVEL": "WARN",
+                    "VLLM_ALLOW_RUNTIME_LORA_UPDATING": "true",
+                    "VLLM_USE_V1": "1", 
+                    "WANDB_API_KEY": os.getenv("WANDB_API_KEY", "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"), 
+                }},
+                include_dashboard=False,
+                ignore_reinit_error=True,
+            )
         # "WANDB_BASE_URL": "https://api.wandb.ai"
 
     # 2. 配置检查
@@ -167,7 +188,6 @@ def run_ppo(config) -> None:
     # 使用 Ray Actor 模式运行主任务，避免在 Head 节点上运行重型任务
     runner = TaskRunner.remote()
     ray.get(runner.run.remote(config))
-
 
 # 定义 TaskRunner Actor，指定只需要 1 个 CPU
 @ray.remote(num_cpus=1)  # please make sure main_task is not scheduled on head

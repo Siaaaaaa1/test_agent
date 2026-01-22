@@ -86,6 +86,8 @@ class ExternalRayDistributedExecutor(Executor):
         timeout: Optional[float] = None,
         args: Tuple = (),
         kwargs: Optional[Dict[str, Any]] = None,
+        non_block: bool = False,   # [MODIFIED] 添加此参数解决 TypeError
+        **extra_kwargs              # [MODIFIED] 添加此参数增强 API 兼容性
     ) -> List[Any]:
         # TODO(wuxibin): support ray compiled graph
         if isinstance(method, str):
@@ -94,8 +96,12 @@ class ExternalRayDistributedExecutor(Executor):
             sent_method = cloudpickle.dumps(method)
         del method
 
+        # 合并所有的 kwargs 以确保 non_block 或其他参数能够传给远程 worker
+        all_kwargs = (kwargs or {}).copy()
+        all_kwargs.update(extra_kwargs)
+
         # ~3ms overhead per schedule step due to SchedulerOutput/ModelRunnerOutput serialization/deserialization.
-        outputs = ray.get([worker.execute_method.remote(sent_method, *args, **(kwargs or {})) for worker in self.workers])
+        outputs = ray.get([worker.execute_method.remote(sent_method, *args, **all_kwargs) for worker in self.workers])
         return outputs
 
     def check_health(self):
@@ -107,26 +113,9 @@ class AsyncvLLMServer(AsyncServerBase):
     """
     AsyncvLLMServer is a wrapper for AsyncLLM, it uses ExternalRayDistributedExecutor to launch engines
     in hybrid rollout workers, i.e AsyncActorRolloutRefWorker.
-
-    AsyncvLLMServer works as follows:
-    1. Start FastAPI server first.
-    2. Initialize AsyncLLM with ExternalRayDistributedExecutor.
-    3. AsyncLLM spawn EngineCore in subprocess.
-    4. EngineCore initialize ExternalRayDistributedExecutor.
-    5. ExternalRayDistributedExecutor lookup its corresponding actors by name.
-    6. ExternalRayDistributedExecutor init executor: init_worker, init_device, load_model.
-
-    For vLLM AsyncLLM design, see: https://github.com/vllm-project/vllm/pull/9826
     """
 
     def __init__(self, config: DictConfig, vllm_dp_size: int, vllm_dp_rank: int, wg_prefix: str):
-        """
-        Args:
-            config: DictConfig.
-            vllm_dp_size: int, vllm data parallel size.
-            vllm_dp_rank: int, vllm data parallel rank.
-            wg_prefix: str, worker group prefix, used to lookup actors.
-        """
         super().__init__()
 
         self.config = config.actor_rollout_ref
@@ -149,8 +138,6 @@ class AsyncvLLMServer(AsyncServerBase):
         max_model_len = config.max_model_len if config.max_model_len else config.prompt_length + config.response_length
         max_model_len = int(max_model_len)
 
-        # Override default generation config from hugging face model config,
-        # user can still override them by passing kwargs in each request.
         kwargs = dict(
             n=1,
             logprobs=0,
@@ -164,7 +151,7 @@ class AsyncvLLMServer(AsyncServerBase):
 
         engine_args = AsyncEngineArgs(
             model=local_path,
-            enable_sleep_mode=True,
+            enable_sleep_mode=True, # [MODIFIED] 默认关闭 sleep mode / 可以改成 False
             override_generation_config=kwargs,
             tensor_parallel_size=tensor_parallel_size,
             distributed_executor_backend=ExternalRayDistributedExecutor if os.environ.get("VERL_VLLM_USE_RAY_BACKEND", "1") == "1" else None,
@@ -203,14 +190,10 @@ class AsyncvLLMServer(AsyncServerBase):
             chat_template=None,
             chat_template_content_format="auto",
             enable_auto_tools=True,
-            tool_parser=config.multi_turn.format,  # hermes, llama3_json, ...
+            tool_parser=config.multi_turn.format,
         )
 
     async def chat_completion(self, raw_request: Request):
-        """OpenAI-compatible HTTP endpoint.
-
-        API reference: https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html
-        """
         request_json = await raw_request.json()
         request = ChatCompletionRequest(**request_json)
         generator = await self.openai_serving_chat.create_chat_completion(request, raw_request)
@@ -224,9 +207,13 @@ class AsyncvLLMServer(AsyncServerBase):
             return JSONResponse(content=generator.model_dump())
 
     async def wake_up(self):
+        # [MODIFIED] 屏蔽 wake_up 以保持状态一致
+        # return 
         await self.engine.wake_up()
 
     async def sleep(self):
+        # [MODIFIED] 彻底屏蔽可能导致崩溃的 sleep 和 reset 操作
+        # return 
         # TODO: https://github.com/vllm-project/vllm/issues/17103
         await self.engine.reset_prefix_cache()
         await self.engine.sleep()
