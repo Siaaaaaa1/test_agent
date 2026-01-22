@@ -58,7 +58,7 @@ pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https
 echo
 echo "⚡ Installing Flash Attention (Wheel for Torch 2.5)..."
 # 使用适配 Torch 2.5 和 Python 3.11 的 Wheel 包
-pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.0.post2/flash_attn-2.7.0.post2+cu121torch2.5cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
+pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.5cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
 
 # ---- Step 8. Install Core LLM Inference Libraries ----
 echo
