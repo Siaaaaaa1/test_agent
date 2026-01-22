@@ -64,7 +64,8 @@ pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.
 echo
 echo "🧠 Installing vLLM 0.8.5 and FlashInfer..."
 # 安装 vLLM 0.8.5 (适配 PyTorch 2.5)
-pip install vllm==0.8.5
+# pip install vllm==0.8.5
+pip install https://github.com/vllm-project/vllm/releases/download/v0.8.5/vllm-0.8.5+cu121-cp38-abi3-manylinux1_x86_64.whl
 pip install flashinfer-python==0.3.1
 
 # ---- Step 9. Install General Dependencies ----
