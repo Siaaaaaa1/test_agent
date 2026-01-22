@@ -27,7 +27,7 @@ if [ -f "./env_service/launch_script/appworld_multi.sh" ]; then
     APPWORLD_PID=$!
     
     # 简单的健康检查等待 (等待 10 秒让服务启动)
-    echo "Waiting 10s for AppWorld to initialize..."
+    echo "Waiting 50s for AppWorld to initialize..."
     sleep 50
 else
     echo "Error: appworld_multi.sh not found!"

@@ -9,14 +9,14 @@ export VLLM_ATTENTION_BACKEND=TORCH_SDPA
 export VLLM_USE_V1=1
 
 # 获取本机 IP (Master IP)，用于让副节点访问环境
-HOST_IP="29.209.104.6"
+HOST_IP="29.209.112.175"
 env_url="http://${HOST_IP}:8080"
 
 # 确保代理设置透传
 # export no_proxy="localhost,127.0.0.1,::1,.woa.com,$HOST_IP,29.0.0.0/8,$no_proxy"
 # export NO_PROXY="localhost,127.0.0.1,::1,.woa.com,$HOST_IP,29.0.0.0/8,$NO_PROXY"
-export no_proxy="localhost,127.0.0.1,::1,29.209.104.6,29.0.0.0/8,10.0.0.0/8,.woa.com"
-export NO_PROXY="localhost,127.0.0.1,::1,29.209.104.6,29.0.0.0/8,10.0.0.0/8,.woa.com"
+export no_proxy="localhost,127.0.0.1,::1,29.209.112.175,29.0.0.0/8,10.0.0.0/8,.woa.com"
+export NO_PROXY="localhost,127.0.0.1,::1,29.209.112.175,29.0.0.0/8,10.0.0.0/8,.woa.com"
 PROJECT_ROOT="$(pwd)"
 # ---- 2. 启动训练 (AgentEvolver) ----
 CONDA_BASE=$(conda info --base 2>/dev/null || echo "$HOME/anaconda3")
