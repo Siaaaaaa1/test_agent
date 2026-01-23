@@ -142,39 +142,49 @@ def run_ppo(config) -> None:
     # 1. 初始化 Ray 集群
     if not ray.is_initialized():
         
-        # ---- 新增：优先从 config 读取 address，如果没有则默认为 'auto' ----
+        # 优先从 config 读取 address (Bash 脚本传入了 "auto")
         ray_address = getattr(config.ray_init, "address", "auto")
+        
+        # 注意：连接到现有的 'auto' 集群时，通常不需要指定 num_cpus，
+        # 除非你想限制当前 Driver 进程的资源使用。
         ray_num_cpus = getattr(config.ray_init, "num_cpus", None)
 
-        print(f"Connecting to Ray Cluster at: {ray_address}")
-        if ray_num_cpus is not None:
-            ray.init(
-            address='local',  # <--- 关键修改：不要留空，使用配置值
-            runtime_env={"env_vars": {
+        print(f"🔌 [DEBUG] Connecting to Ray Cluster at: {ray_address}")
+        
+        # 统一的 runtime_env 配置
+        runtime_env_config = {
+            "env_vars": {
                 "TOKENIZERS_PARALLELISM": "true", 
                 "NCCL_DEBUG": "WARN", 
                 "VLLM_LOGGING_LEVEL": "WARN",
                 "VLLM_ALLOW_RUNTIME_LORA_UPDATING": "true",
                 "VLLM_USE_V1": "1", 
-                "WANDB_API_KEY": os.getenv("WANDB_API_KEY", "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"), 
-            }},
-            include_dashboard=False,
-            ignore_reinit_error=True,
-            num_cpus=ray_num_cpus,
-        )
-        else:
+                # 确保 WANDB key 存在
+                "WANDB_API_KEY": os.getenv("WANDB_API_KEY", "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"),
+            }
+        }
+
+        try:
+            # 🔥 [关键修改] 统一逻辑：始终使用 config 中的地址 (即 'auto')
+            # 只有当连接失败时，才考虑由 Ray 自动处理或回退
             ray.init(
-                address=ray_address,  # <--- 关键修改：不要留空，使用配置值
-                runtime_env={"env_vars": {
-                    "TOKENIZERS_PARALLELISM": "true", 
-                    "NCCL_DEBUG": "WARN", 
-                    "VLLM_LOGGING_LEVEL": "WARN",
-                    "VLLM_ALLOW_RUNTIME_LORA_UPDATING": "true",
-                    "VLLM_USE_V1": "1", 
-                    "WANDB_API_KEY": os.getenv("WANDB_API_KEY", "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"), 
-                }},
+                address=ray_address, 
+                runtime_env=runtime_env_config,
                 include_dashboard=False,
                 ignore_reinit_error=True,
+                # 如果是连接到 auto集群，num_cpus 通常被忽略或用于限制 driver，保留它无大碍，但 address 必须对
+                num_cpus=ray_num_cpus 
+            )
+            print("✅ [DEBUG] Ray initialized successfully!")
+            
+        except Exception as e:
+            print(f"⚠️ [DEBUG] Failed to init Ray with address={ray_address}: {e}")
+            print("🔄 [DEBUG] Fallback: Trying to init generic local Ray...")
+            # 只有显式连接失败了，才尝试无参数启动（本地模式）
+            ray.init(
+                num_cpus=ray_num_cpus,
+                runtime_env=runtime_env_config,
+                ignore_reinit_error=True
             )
         # "WANDB_BASE_URL": "https://api.wandb.ai"
 

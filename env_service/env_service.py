@@ -62,15 +62,8 @@ if PROJECT_ROOT not in sys.path:
 def import_and_register_env(env_name, env_file=None):
     """
     Import and register an environment class.
-
-    Args:
-        env_name (str): Name of the environment.
-        env_file (str, optional): Detailed environment module name.
-            Defaults to f"{env_name}_env".
-
-    Returns:
-        The registered environment class or None on failure.
     """
+    print(f"🏁 [DEBUG] Start importing {env_name}...", flush=True)
     try:
         if env_file is None:
             env_file = f"{env_name}_env"
@@ -81,28 +74,34 @@ def import_and_register_env(env_name, env_file=None):
             env_name,
             f"{env_file}.py",
         )
+        
+        print(f"📂 [DEBUG] Target module path: {env_module_path}", flush=True)
 
         if not os.path.exists(env_module_path):
             raise FileNotFoundError(
                 f"Environment file not found: {env_module_path}",
             )
 
+        print(f"⏳ [DEBUG] Loading spec...", flush=True)
         spec = importlib.util.spec_from_file_location(
             f"{env_name}_env",
             env_module_path,
         )
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module
+        
+        print(f"⏳ [DEBUG] Executing module (Large I/O might happen here)...", flush=True)
         spec.loader.exec_module(module)
+        print(f"✅ [DEBUG] Module executed successfully!", flush=True)
 
         envir_class = getattr(module, f"{env_name.capitalize()}Env")
 
         Registry.register(env_name)(envir_class)
 
-        print(f"Successfully imported and registered {envir_class.__name__}")
+        print(f"✅ Successfully imported and registered {envir_class.__name__}", flush=True)
         return envir_class
     except Exception as e:
-        print(f"Error importing environment {env_name}: {e}")
+        print(f"❌ Error importing environment {env_name}: {e}", flush=True)
         import traceback
 
         traceback.print_exc()
@@ -134,14 +133,24 @@ class EnvService:
         """
         class init
         """
+        print("🔧 [DEBUG] EnvService initializing...", flush=True)
         python_path = os.environ.get("PYTHONPATH", "")
         python_path = (
             f"{python_path}:{BASE_DIR}:{SERVER_DIR}:{ROOT_DIR}:{PROJECT_ROOT}"
         )
 
         if not ray.is_initialized():
-            # ORIGIN: ray.init(address='local', num_cpus=32)
-            ray.init(address='auto', namespace='appworld', ignore_reinit_error=True)
+            print("🔌 [DEBUG] Connecting to Ray Cluster (auto)...", flush=True)
+            try:
+                # [核心修复] 优先连接现有集群，如果失败则回退，防止死锁
+                ray.init(address='auto', ignore_reinit_error=True)
+                print("✅ [DEBUG] Ray connected to cluster successfully!", flush=True)
+            except Exception as e:
+                print(f"⚠️ [DEBUG] Ray auto-connect failed: {e}. Fallback to local.", flush=True)
+                ray.init(num_cpus=32)
+        else:
+            print("ℹ️ [DEBUG] Ray was already initialized.", flush=True)
+
         self.env_actors = {}
         self.remote_env = {}
         self.last_access_time = {}
@@ -175,17 +184,66 @@ class EnvService:
     def get_remote_env_cls(self, env_type: str):
         """
         Get the remote environment class for the specified environment type.
-
-        Args:
-            env_type (str): The type of environment.
-
-        Returns:
-            The remote environment class.
+        Compatible with both Distributed Cluster and Local Single-Machine modes.
         """
         if env_type in self.remote_env:
             return self.remote_env[env_type]
 
-        @ray.remote
+        # ======================================================================
+        # 1. 动态计算绝对路径 (兼容任何机器的路径结构)
+        # ======================================================================
+        # current_dir: .../test_agent/env_service
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        # project_root: .../test_agent
+        project_root = os.path.dirname(current_dir)
+        # env_source_dir: .../test_agent/env_service/environments/appworld
+        env_source_dir = os.path.join(current_dir, "environments", env_type)
+
+        # ======================================================================
+        # 2. 智能 Conda 环境检测 (兼容单机调试)
+        # ======================================================================
+        target_conda = None
+        if env_type == "appworld":
+            # 尝试检测是否存在名为 'appworld' 的 conda 环境
+            import subprocess
+            try:
+                # 执行 conda env list 看环境是否存在
+                result = subprocess.run(
+                    ["conda", "env", "list"], 
+                    stdout=subprocess.PIPE, 
+                    stderr=subprocess.PIPE, 
+                    text=True
+                )
+                # 如果 appworld 在列表中，且我们不在单机调试模式(可选)，则使用它
+                # 这里简单逻辑：只要有这个环境，就优先使用，以解决依赖冲突
+                if "appworld" in result.stdout:
+                    target_conda = "appworld"
+                else:
+                    # 单机模式常见情况：没有独立环境，所有包混装
+                    print(f"[Info] Conda env 'appworld' not found. Running {env_type} in current environment.")
+            except Exception:
+                # 机器上可能没装 conda，或者 path 没设对，默认用当前环境
+                pass
+
+        # ======================================================================
+        # 3. 构造 runtime_env (核心配置)
+        # ======================================================================
+        runtime_env = {
+            "env_vars": {
+                # [关键修复] 显式告诉 AppWorld 数据目录在哪里
+                "APPWORLD_ROOT": env_source_dir,
+                
+                # 注入 PYTHONPATH，确保无论在哪里都能 import appworld
+                "PYTHONPATH": f"{project_root}:{env_source_dir}:" + os.environ.get("PYTHONPATH", "")
+            }
+        }
+        
+        # 只有探测到环境存在时，才添加 conda 切换指令
+        if target_conda:
+            runtime_env["conda"] = target_conda
+
+        # 4. 应用配置
+        @ray.remote(runtime_env=runtime_env)
         class RemoteEnv:
             """
             Remote environment class.
@@ -193,6 +251,14 @@ class EnvService:
 
             def __init__(self, task_id, instance_id, params):
                 """Detailed init"""
+                import sys
+                
+                # 双重保险：在 Worker 进程内部手动注入路径
+                # 这样即使 runtime_env 偶尔失效，代码也能跑
+                if project_root not in sys.path:
+                    sys.path.insert(0, project_root)
+                if env_source_dir not in sys.path:
+                    sys.path.insert(0, env_source_dir)
 
                 server_dir = os.path.abspath(
                     os.path.join(os.path.dirname(__file__), "..", ".."),
@@ -212,26 +278,29 @@ class EnvService:
                     self.env = envir_class(task_id, instance_id, params)
                 except ImportError as e:
                     print(f"Error importing {env_type}_env: {e}")
+                    # 打印调试信息，方便排查
+                    print(f"DEBUG INFO:")
+                    print(f"  - Env Type: {env_type}")
+                    print(f"  - Target Conda: {target_conda}")
+                    print(f"  - APPWORLD_ROOT: {os.environ.get('APPWORLD_ROOT')}")
+                    print(f"  - sys.path: {sys.path}")
+                    import traceback
+                    traceback.print_exc()
                     raise
 
             def get_init_state(self, params):
-                """remote init state"""
                 return self.env.get_init_state(params)
 
             def step(self, action, params):
-                """remote step"""
                 return self.env.step(action, params)
 
             def evaluate(self, messages, params):
-                """remote eval"""
                 return self.env.evaluate(messages, params)
 
             def get_info(self, messages, params):
-                """remote get info"""
                 return self.env.get_info(messages, params)
 
             def close(self):
-                """remote close"""
                 return self.env.close()
 
         self.remote_env[env_type] = RemoteEnv

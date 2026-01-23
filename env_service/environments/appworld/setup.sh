@@ -34,6 +34,7 @@ conda install -n appworld -y libcst
 
 echo "📋 安装 Python 依赖..."
 conda run -n appworld pip install -r "$SCRIPT_DIR/requirements.txt"
+pip install "click<8.1.0"
 
 # 5. 初始化 appworld
 echo "📁 初始化 appworld..."
