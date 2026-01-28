@@ -213,8 +213,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                     logger.info(f"[Explore] Model {model_name} SUCCEEDED (Steps: {len(trajectory.steps)}). Returning result.")
                     return [trajectory]
                 else:
-                    fail_reason = "Max Steps Reached" if len(trajectory.steps) >= max_steps else "Task Logic Failed"
-                    logger.warning(f"[Explore] Model {model_name} FAILED ({fail_reason}). Success check returned False. Retrying with next model...")
+                    logger.warning(f"[Explore] Model {model_name} FAILED. Success check returned False. Retrying with next model...")
                     
                     # 资源清理
                     try:
