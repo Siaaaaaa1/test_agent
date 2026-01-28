@@ -162,18 +162,23 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
 
             # TODO: 将对话的参数需要加入LLM 
             # # 3. 构造 LLM 聊天函数 (注入当前模型参数)
-            # sampling_params = {
-            #     "temperature": self.config.get("exploration_llm_temperature", 0.5),
-            #     "top_p": self.config.get("exploration_llm_top_p", 0.9),
-            #     "top_k": self.config.get("exploration_llm_top_k", 50),
-            #     "model": model_name, # MixClient 根据此字段路由
-            # }
-            
-            # 使用 explore_client
-            llm_chat_fn = self._get_llm_chat_fn(
-                self.explore_client
-                # sampling_params=sampling_params
-            )
+            if model_name in ["HY-Qwen3-235B-A22B-Instruct-2507", "DeepSeek-V3-Online"]:
+                sampling_params = {
+                    "temperature": self.config.get("exploration_llm_temperature", 0.5),
+                    "top_p": self.config.get("exploration_llm_top_p", 0.9),
+                    "top_k": self.config.get("exploration_llm_top_k", 50),
+                    "model": model_name, # MixClient 根据此字段路由
+                }
+                # 使用 explore_client
+                llm_chat_fn = self._get_llm_chat_fn(
+                    self.explore_client,
+                    sampling_params=sampling_params
+                )
+            else:
+                # 使用 explore_client
+                llm_chat_fn = self._get_llm_chat_fn(
+                    self.explore_client
+                )
 
             # 4. 初始化 Agent 工作流
             agent_flow = ModifiedAgentFlow(
