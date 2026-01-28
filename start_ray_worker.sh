@@ -12,6 +12,7 @@ export TP_SOCKET_IFNAME=bond1
 HOST_IP=$(hostname -I | awk '{print $1}')
 export no_proxy="localhost,127.0.0.1,::1,0.0.0.0,29.209.112.175,$HOST_IP,29.0.0.0/8,10.0.0.0/8,172.16.0.0/12,.woa.com"
 export NO_PROXY=$no_proxy
+export GEN_OUTPUT_DIR="/mnt/cephfs/haowengao/test_agent/GEN_NEW_DATA"
 
 export RAY_worker_register_timeout_seconds=600
 export RAY_maximum_startup_concurrency=16

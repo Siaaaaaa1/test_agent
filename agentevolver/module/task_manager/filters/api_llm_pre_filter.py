@@ -233,8 +233,8 @@ Is this a valid and usable query? Please think first, then reply with the result
                 # 采样参数：temperature 设低一点，让判断更确定
                 response = self._llm_client.chat(
                     messages=messages, 
-                    sampling_params={"temperature": 0.1, "max_tokens": 1024}
                 )
+                # sampling_params={"temperature": 0.1, "max_completion_tokens": 1024}
                 
                 # 兼容不同 Client 返回格式 (dict 或 str 或 object)
                 if isinstance(response, dict):

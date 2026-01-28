@@ -20,6 +20,7 @@ export HTTPS_PROXY=$https_proxy
 export NCCL_SOCKET_IFNAME=bond1
 export GLOO_SOCKET_IFNAME=bond1
 export TP_SOCKET_IFNAME=bond1
+export GEN_OUTPUT_DIR="/mnt/cephfs/haowengao/test_agent/GEN_NEW_DATA"
 
 MASTER_IP="29.209.112.175"
 HOST_IP=$(hostname -I | awk '{print $1}')

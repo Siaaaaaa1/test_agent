@@ -62,6 +62,11 @@ class Linear_CMT(Trajectory, ContextManagerBase):
         # self.task_train_exp_mode: str = ""
         self.current_batch_success_rate:float = -1.0
         self.llm_output_mistakes = {}
+        
+        # [新增] 用于存储每一步的详细过程奖励
+        self.step_api_rewards: List[float] = []
+        self.step_repetition_rewards: List[float] = []
+        
         # self.experiences = []
 
         # 确保配置合理：Prompt + Response 的最大长度不应超过模型的支持长度
@@ -156,6 +161,10 @@ class Linear_CMT(Trajectory, ContextManagerBase):
         if len(self.full_context) > 0:  # ⭐ 检查上下文是否非空
             if self.full_context[-1].author != "llm":  # ⭐ 确保最后一条消息不是来自 LLM
                 self.full_context.pop(-1)  # ⭐ 移除最后一条消息
+                # [新增] 移除对应的步骤奖励，保持长度一致（如果有的话）
+                if len(self.step_api_rewards) > 0 and len(self.step_api_rewards) == (len(self.full_context) // 2) + 1:
+                     self.step_api_rewards.pop(-1)
+                     self.step_repetition_rewards.pop(-1)
 
     def remove_last_non_llm_msg(self, ext_msg_list:List[ExtendedMessage]):
         """
@@ -172,7 +181,16 @@ class Linear_CMT(Trajectory, ContextManagerBase):
                 ext_msg_list.pop(-1)  # ⭐ 如果最后一条不是 LLM 消息则移除
         return ext_msg_list
 
-
+    @property
+    def is_successful(self) -> bool:
+        """
+        判断当前轨迹是否成功。
+        基于内置的 reward 对象中的 success_rate 进行判断。
+        """
+        # 逻辑：如果 reward 存在，且 success_rate 大于 0（通常 1.0 为成功），则返回 True
+        if self.reward is not None and hasattr(self.reward, 'success_rate'):
+            return self.reward.success_rate > 0
+        return False
 
     @property
     def steps(self):
@@ -349,7 +367,7 @@ class Linear_CMT(Trajectory, ContextManagerBase):
         return Linear_CMT.save_llm_output(self, llm_output, input_msg_ref, auto_register_full_context=False)  # ⭐ 调用保存方法但不注册
 
 
-    def save_env_output(self, env_output:dict, input_msg_ref:List[dict]=None, add_nothink=False):
+    def save_env_output(self, env_output:dict, input_msg_ref:List[dict]=None, add_nothink=False, api_reward:float=0.0, repetition_penalty:float=0.0):
         """
         保存并处理环境输出到上下文中。
 
@@ -357,6 +375,8 @@ class Linear_CMT(Trajectory, ContextManagerBase):
             env_output (dict): 环境输出，包含 'content'。
             input_msg_ref (List[dict], optional): 用于 Token 计算的参考消息。
             add_nothink (bool, optional): 是否在内容后追加 '/no_think'。
+            api_reward (float, optional): [新增] 当前步骤的 API 命中奖励。
+            repetition_penalty (float, optional): [新增] 当前步骤的复读惩罚。
 
         Note:
             - 如果超出 max_env_output_length，会对环境输出进行剪裁。
@@ -380,6 +400,10 @@ class Linear_CMT(Trajectory, ContextManagerBase):
             tokenizer=self.tokenizer,
         )  # ⭐ 创建环境输出的 ExtendedMessage
         self.full_context += [ext_msg]  # ⭐ 添加到完整上下文
+        
+        # [新增] 存储每一步的过程奖励
+        self.step_api_rewards.append(api_reward)
+        self.step_repetition_rewards.append(repetition_penalty)
         return
 
     def to_role_content(self, ext_msg_array: List[ExtendedMessage]) -> List[dict]:
@@ -443,6 +467,11 @@ class Linear_CMT(Trajectory, ContextManagerBase):
         # 调用分词逻辑
         cmt_tokenized = self.tokenize_steps(ext_steps=ext_steps)
         
+        # [新增] 在创建 Sample 之前，将收集到的详细步骤奖励更新到 reward 对象中
+        if self.reward:
+            self.reward.step_api_rewards = self.step_api_rewards
+            self.reward.step_repetition_rewards = self.step_repetition_rewards
+
         # 创建 Sample 对象
         sample = Sample(
             data_id=self.data_id,

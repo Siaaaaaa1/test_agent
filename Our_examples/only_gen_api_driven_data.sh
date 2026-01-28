@@ -1,66 +1,103 @@
 #!/bin/bash
 
-# ---- 1. 环境准备 ----
-PROJECT_DIR="$(pwd)"
-CONFIG_PATH="$PROJECT_DIR/config"
+# ============================================================
+# AgentEvolver 数据生成专用脚本 (参数全量补齐版)
+# ============================================================
 
-export VLLM_ATTENTION_BACKEND=FLASH_ATTN
-# export CUDA_LAUNCH_BLOCKING=1
-export VLLM_USE_V1=1
-
-# 获取本机 IP (Master IP)，用于让副节点访问环境
-HOST_IP="29.209.112.175"
-env_url="http://${HOST_IP}:8080"
-
-# 确保代理设置透传
-# export no_proxy="localhost,127.0.0.1,::1,.woa.com,$HOST_IP,29.0.0.0/8,$no_proxy"
-# export NO_PROXY="localhost,127.0.0.1,::1,.woa.com,$HOST_IP,29.0.0.0/8,$NO_PROXY"
-export no_proxy="localhost,127.0.0.1,::1,29.209.112.175,29.0.0.0/8,10.0.0.0/8,.woa.com"
-export NO_PROXY="localhost,127.0.0.1,::1,29.209.112.175,29.0.0.0/8,10.0.0.0/8,.woa.com"
+# ---- 1. 基础环境配置 ----
 PROJECT_ROOT="$(pwd)"
-# ---- 2. 启动训练 (AgentEvolver) ----
+CONFIG_PATH="$PROJECT_ROOT/config"
+# 数据生成输出路径
+export GEN_OUTPUT_DIR="/mnt/cephfs/haowengao/test_agent/GEN_NEW_DATA"
+mkdir -p "$GEN_OUTPUT_DIR"
+
+# ---- 2. 强力清理环境 (Clean Machine) ----
+echo "🧹 Nuking previous processes..."
+ps -ef | grep -E "ray|vllm|agentevolver|env_service" | grep -v grep | awk '{print $2}' | xargs -r kill -9
+fuser -k -9 8080/tcp >/dev/null 2>&1
+fuser -k -9 6379/tcp >/dev/null 2>&1
+rm -rf /tmp/ray/* 2>/dev/null
+sleep 2
+
+# ---- 3. 网络配置 ----
+HOST_IP=$(hostname -I | awk '{print $1}')
+export http_proxy=http://hk-mmhttpproxy.woa.com:11113
+export https_proxy=http://hk-mmhttpproxy.woa.com:11113
+export no_proxy="localhost,127.0.0.1,::1,0.0.0.0,29.209.112.175,$HOST_IP,.woa.com"
+
+export PYTHONUNBUFFERED=1
+export VLLM_ENFORCE_EAGER=True
+
+# ---- 4. 启动 Local Ray Head ----
+echo "🚀 Starting Local Ray Head..."
+ray start --head --port=6379 --dashboard-host=0.0.0.0 --disable-usage-stats --block & 
+RAY_PID=$!
+
+echo "⏳ Waiting for Ray..."
+sleep 5
+for i in {1..30}; do
+    if ray status > /dev/null 2>&1; then echo "✅ Ray is ready!"; break; fi
+    sleep 1
+done
+
+# ---- 5. 启动 AppWorld 服务 ----
+echo "🌍 Launching AppWorld Service..."
+LAUNCHER_SCRIPT="./env_service/launch_script/appworld_single.sh"
+chmod +x "$LAUNCHER_SCRIPT"
+$LAUNCHER_SCRIPT 2>&1 | tee server.log &
+SERVER_PID=$!
+
+trap "echo '🛑 Shutting down...'; kill $SERVER_PID; kill $RAY_PID; ray stop --force" EXIT
+
+# 健康检查
+echo "⏳ Waiting for AppWorld Service..."
+MAX_RETRIES=300
+COUNT=0
+while ! curl -s --noproxy "*" "http://localhost:8080/healthz" > /dev/null; do
+    sleep 1
+    COUNT=$((COUNT+1))
+    if [ $COUNT -ge $MAX_RETRIES ]; then echo "❌ Timeout"; exit 1; fi
+done
+echo "✅ Service is UP!"
+
+# ---- 6. 启动生成任务 (参数已完全补齐) ----
 CONDA_BASE=$(conda info --base 2>/dev/null || echo "$HOME/anaconda3")
 source "$CONDA_BASE/etc/profile.d/conda.sh"
-conda activate agentevolver
+conda activate AgentEvolver121
 
 current_time=$(date "+%Y%m%d_%H%M%S")
-log_file="log_multi_${current_time}.log"
+log_file="log_gen_fullparam_${current_time}.log"
+unset CUDA_VISIBLE_DEVICES
 
-# 重要：移除 CUDA_VISIBLE_DEVICES 限制，让 Ray 看到所有卡
-# export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 
+echo "🚀 Starting Data Generation with FULL Parameters..."
 
-echo "Starting Distributed Training on Cluster..."
-echo "Master IP (Env URL): $env_url"
-echo "Log file: $log_file"
+# 核心逻辑：
+# 1. 保留 generate_task_only=true (生成模式)
+# 2. 将 trainer.nnodes 强制设为 1 (单机)
+# 3. 移植所有 actor_rollout_ref 及其它高级参数
 
 python3 -m agentevolver.main_ppo \
     --config-path="$CONFIG_PATH" \
     --config-name='script_config' \
-    \
     ray_init.address="auto" \
-    \
-    env_service.env_url=$env_url \
+    env_service.env_url="http://localhost:8080" \
     env_service.env_type=appworld \
-    seed=1 \
+    seed=2 \
     debug_log=True \
-    \
     algorithm.adv_estimator=grpo \
     algorithm.use_kl_in_reward=False \
-    \
     data.train_batch_size=32 \
     data.truncation='error' \
     data.return_raw_chat=True \
     data.filter_overlong_prompts=True \
     data.train_files=null \
     data.val_files=null \
-    data.max_prompt_length=20480 \
-    data.max_response_length=2048 \
+    data.max_prompt_length=28672 \
+    data.max_response_length=4096 \
     data.val_batch_size=32 \
-    \
-    actor_rollout_ref.model.path="${PROJECT_ROOT}/models/Qwen2.5-7B-Instruct" \
+    actor_rollout_ref.model.path="$PROJECT_ROOT/models/Qwen2.5-7B-Instruct" \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
-    \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.actor.ppo_mini_batch_size=8 \
@@ -69,7 +106,6 @@ python3 -m agentevolver.main_ppo \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
     actor_rollout_ref.actor.ppo_max_token_len_per_gpu=32768 \
-    \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.mode=async \
     actor_rollout_ref.rollout.n=8 \
@@ -77,43 +113,38 @@ python3 -m agentevolver.main_ppo \
     actor_rollout_ref.rollout.temperature=0.8 \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.8 \
     actor_rollout_ref.rollout.max_model_len=32768 \
-    actor_rollout_ref.rollout.prompt_length=20480 \
-    actor_rollout_ref.rollout.response_length=2048 \
+    actor_rollout_ref.rollout.prompt_length=28672 \
+    actor_rollout_ref.rollout.response_length=4096 \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=32768 \
     actor_rollout_ref.rollout.max_num_batched_tokens=81920 \
-    \
+    actor_rollout_ref.rollout.enable_gt_process_reward=true \
     actor_rollout_ref.ref.fsdp_config.param_offload=False \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=32768 \
-    \
     critic.ppo_max_token_len_per_gpu=32768 \
     critic.forward_max_token_len_per_gpu=32768 \
-    \
     trainer.n_gpus_per_node=8 \
     trainer.nnodes=1 \
     trainer.critic_warmup=0 \
     trainer.logger="['console','wandb']" \
-    trainer.project_name="AgentEvolver" \
-    trainer.experiment_name="appworld_distributed" \
-    trainer.save_freq=2 \
+    trainer.project_name="AgentEvolver_Gen" \
+    trainer.experiment_name="clean_machine_gen_full" \
+    trainer.save_freq=10 \
     trainer.test_freq=5 \
     trainer.total_epochs=40 \
     trainer.val_before_train=false \
-    trainer.validation_data_dir="${PROJECT_ROOT}/experiments/tech_synthetic/appworld_optimized/validation_log" \
-    trainer.rollout_data_dir="${PROJECT_ROOT}/experiments/tech_synthetic/appworld_optimized/rollout_log" \
-    \
     attribution_driven_credit_assignment.enable=false \
     attribution_driven_credit_assignment.enable_hindsight=false \
-    \
     task_manager.n=32 \
     task_manager.mixture.synthetic_data_ratio=2.0 \
+    task_manager.generate_task_only=true \
     task_manager.mixture.use_original_tasks=False \
     task_manager.train_data_path=${PROJECT_ROOT}/tasks_explored/tasks_explored.train.json \
     task_manager.val_data_path=${PROJECT_ROOT}/tasks_explored/tasks_explored.val.json \
-    task_manager.exploration_strategy_args.a=1 \
-    task_manager.exploration_strategy_args.b=4 \
     task_manager.strategy=api_driven \
+    task_manager.exploration_strategy_args.a=3 \
+    task_manager.exploration_strategy_args.b=8 \
     task_manager.exploration_strategy_args.active_apps="['amazon','gmail','spotify','venmo','simple_note','todoist','splitwise','phone','file_system']" \
     task_manager.exploration_strategy_args.task_labels_path="${PROJECT_ROOT}/environments/appworld/data/datasets/train.jsonl" \
     task_manager.llm_client="azure-gpt-5" \

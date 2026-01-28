@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 import json
 import os
 import time
+import threading  # [修改 1/4] 引入 threading 模块
 from typing import Any, Optional, Protocol, Iterator, Generator, cast
 
 from loguru import logger
@@ -25,6 +26,7 @@ class DashScopeClient:
     """
     Modified DashScopeClient to support internal Azure GPT-5 Mini Proxy.
     Updated for emoji_agent_research context.
+    With Rate Limiting (40 RPM).
     """
     
     def __init__(self, api_key: Optional[str] = None, model_name: str = "azure-gpt-5-mini", 
@@ -35,10 +37,20 @@ class DashScopeClient:
 
         self.api_key = api_key or os.getenv("DASHSCOPE_API_KEY") or os.getenv("OPENAI_API_KEY") or "dummy_key"
         
+        # [修改 2/4] 初始化并发控制信号量，限制为5个并发
+        self._semaphore = threading.BoundedSemaphore(5)
+
+        # ----------------------------------------------------------------------
+        # [修改 - 新增速率限制 1/3] 初始化速率限制相关的锁和存储
+        # ----------------------------------------------------------------------
+        self._rate_limit_lock = threading.Lock()
+        self._request_timestamps = [] # 用于存储请求发生的时间戳
+        self._max_rpm = 40            # 限制每分钟40次请求
+
         # ----------------------------------------------------------------------
         # Modification 1: Set default model to azure-gpt-5-mini
         # ----------------------------------------------------------------------
-        self.model_name = "azure-gpt-5-mini"
+        self.model_name = "azure-gpt-5"
         
         self.temperature = temperature
         self.max_tokens = max_tokens
@@ -54,6 +66,40 @@ class DashScopeClient:
         
         logger.info(f"Initialized DashScopeClient (Proxy) with model: {self.model_name}, base_url: {self.base_url}")
     
+    # ----------------------------------------------------------------------
+    # [修改 - 新增速率限制 2/3] 实现速率限制检查逻辑
+    # ----------------------------------------------------------------------
+    def _wait_for_rate_limit(self):
+        """
+        Blocks until a request token is available ensuring max 40 requests per 60 seconds.
+        Uses a sliding window approach.
+        """
+        window_duration = 60.0  # 60 seconds
+        
+        while True:
+            with self._rate_limit_lock:
+                now = time.time()
+                
+                # 1. 移除滑窗外（超过60秒前）的时间戳
+                # 保留所有 (now - t < 60) 的记录
+                self._request_timestamps = [t for t in self._request_timestamps if now - t < window_duration]
+                
+                # 2. 检查当前窗口内的请求数
+                if len(self._request_timestamps) < self._max_rpm:
+                    # 如果未达到限制，记录当前时间并允许通过
+                    self._request_timestamps.append(now)
+                    return
+                
+                # 3. 如果达到限制，计算需要等待的时间
+                # 必须等待列表中最早的一个请求过期
+                oldest_timestamp = self._request_timestamps[0]
+                wait_time = window_duration - (now - oldest_timestamp)
+                
+            # 在锁外等待，避免阻塞其他线程的检查（虽然逻辑上都会被卡住，但更安全）
+            if wait_time > 0:
+                # 稍微多睡一点点(0.01s)，确保下次检查时刚好过期
+                time.sleep(wait_time + 0.01)
+
     def set_model(self, model_name: str):
         """
         Sets the model name for the DashScopeClient instance.
@@ -129,13 +175,18 @@ class DashScopeClient:
             "https": None
         }
 
-        response = requests.post(
-            url, 
-            headers=self.headers, 
-            json=params, 
-            timeout=300, 
-            proxies=no_proxy 
-        )
+        # [修改 3/4] 使用信号量控制普通请求的并发
+        with self._semaphore:
+            # [修改 - 新增速率限制 3/3] 在实际发送请求前，检查速率限制
+            self._wait_for_rate_limit()
+            
+            response = requests.post(
+                url, 
+                headers=self.headers, 
+                json=params, 
+                timeout=300, 
+                proxies=no_proxy 
+            )
         
         if not response.ok:
             try:
@@ -169,48 +220,53 @@ class DashScopeClient:
             "https": None
         }
 
-        response = requests.post(
-            url, 
-            headers=self.headers, 
-            json=params, 
-            stream=True, 
-            timeout=600,
-            proxies=no_proxy
-        )
-        
-        if not response.ok:
-            try:
-                error_json = response.json().get('error', {})
-                message = error_json.get('message', '') if isinstance(error_json, dict) else str(error_json)
-                if "inappropriate content" in message:
-                    raise LlmException("inappropriate content")
-                if "limit" in message:
-                    raise LlmException("hit limit")
-            except LlmException as e:
-                raise
-            except:
-                logger.error(f"API request failed: {response.status_code} {response.text}")
-                response.raise_for_status()
-        
-        for line in response.iter_lines():
-            if line:
-                line = line.decode('utf-8')
-                if line.startswith('data: '):
-                    data = line[6:]
-                    if data == '[DONE]':
-                        break
-                    
-                    try:
-                        chunk = json.loads(data)
-                        if "choices" in chunk and len(chunk["choices"]) > 0:
-                            choice = chunk["choices"][0]
-                            # Handle standard streaming delta
-                            if "delta" in choice and "content" in choice["delta"]:
-                                content = choice["delta"]["content"]
-                                if content:
-                                    yield content
-                    except json.JSONDecodeError:
-                        continue
+        # [修改 4/4] 使用信号量控制流式请求的并发
+        with self._semaphore:
+            # [修改 - 新增速率限制 3/3] 在实际发送请求前，检查速率限制
+            self._wait_for_rate_limit()
+
+            response = requests.post(
+                url, 
+                headers=self.headers, 
+                json=params, 
+                stream=True, 
+                timeout=600,
+                proxies=no_proxy
+            )
+            
+            if not response.ok:
+                try:
+                    error_json = response.json().get('error', {})
+                    message = error_json.get('message', '') if isinstance(error_json, dict) else str(error_json)
+                    if "inappropriate content" in message:
+                        raise LlmException("inappropriate content")
+                    if "limit" in message:
+                        raise LlmException("hit limit")
+                except LlmException as e:
+                    raise
+                except:
+                    logger.error(f"API request failed: {response.status_code} {response.text}")
+                    response.raise_for_status()
+            
+            for line in response.iter_lines():
+                if line:
+                    line = line.decode('utf-8')
+                    if line.startswith('data: '):
+                        data = line[6:]
+                        if data == '[DONE]':
+                            break
+                        
+                        try:
+                            chunk = json.loads(data)
+                            if "choices" in chunk and len(chunk["choices"]) > 0:
+                                choice = chunk["choices"][0]
+                                # Handle standard streaming delta
+                                if "delta" in choice and "content" in choice["delta"]:
+                                    content = choice["delta"]["content"]
+                                    if content:
+                                        yield content
+                        except json.JSONDecodeError:
+                            continue
 
     def chat_with_retry(self, messages: list[dict[str, str]], max_retries: int = 3, 
                        retry_delay: float = 1.0, **kwargs) -> str:

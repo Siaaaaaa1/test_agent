@@ -14,6 +14,7 @@ unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY
 export http_proxy=http://hk-mmhttpproxy.woa.com:11113
 export https_proxy=http://hk-mmhttpproxy.woa.com:11113
 export no_proxy="localhost,127.0.0.1,::1,0.0.0.0,$MASTER_IP,29.0.0.0/8,10.0.0.0/8,172.16.0.0/12,.woa.com"
+export GEN_OUTPUT_DIR="/mnt/cephfs/haowengao/test_agent/GEN_NEW_DATA"
 
 # 3. 激活训练 Conda
 CONDA_BASE=$(conda info --base 2>/dev/null || echo "$HOME/anaconda3")
@@ -43,8 +44,8 @@ python3 -m agentevolver.main_ppo \
     data.filter_overlong_prompts=True \
     data.train_files=null \
     data.val_files=null \
-    data.max_prompt_length=4096 \
-    data.max_response_length=20480 \
+    data.max_prompt_length=28672 \
+    data.max_response_length=4096 \
     data.val_batch_size=32 \
     actor_rollout_ref.model.path="$PROJECT_ROOT/models/Qwen2.5-7B-Instruct" \
     actor_rollout_ref.model.use_remove_padding=True \
@@ -64,8 +65,8 @@ python3 -m agentevolver.main_ppo \
     actor_rollout_ref.rollout.temperature=0.8 \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.8 \
     actor_rollout_ref.rollout.max_model_len=32768 \
-    actor_rollout_ref.rollout.prompt_length=4096 \
-    actor_rollout_ref.rollout.response_length=20480 \
+    actor_rollout_ref.rollout.prompt_length=28672 \
+    actor_rollout_ref.rollout.response_length=4096 \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=32768 \
     actor_rollout_ref.rollout.max_num_batched_tokens=81920 \
@@ -93,12 +94,14 @@ python3 -m agentevolver.main_ppo \
     task_manager.mixture.use_original_tasks=False \
     task_manager.train_data_path=${PROJECT_ROOT}/tasks_explored/tasks_explored.train.json \
     task_manager.val_data_path=${PROJECT_ROOT}/tasks_explored/tasks_explored.val.json \
-    task_manager.exploration_strategy_args.a=1 \
-    task_manager.exploration_strategy_args.b=4 \
+    task_manager.exploration_strategy_args.a=2 \
+    task_manager.exploration_strategy_args.b=8 \
     task_manager.strategy=api_driven \
     task_manager.exploration_strategy_args.active_apps="['amazon','gmail','spotify','venmo','simple_note','todoist','splitwise','phone','file_system']" \
     task_manager.exploration_strategy_args.task_labels_path="${PROJECT_ROOT}/environments/appworld/data/datasets/train.jsonl" \
     task_manager.llm_client="azure-gpt-5" \
     task_manager.grader.synthetic_grader=api_process_llm_judge \
     task_manager.env_profile=${PROJECT_ROOT}/cookbook/env_profiles/appworld.json \
+    actor_rollout_ref.rollout.enable_gt_process_reward=true \
+    task_manager.generate_task_only=true \
     2>&1 | tee "$log_file"

@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 from loguru import logger
 from omegaconf import DictConfig
-
+import traceback
 # 基础模块
 from agentevolver.module.task_manager.base import LlmClient
 from agentevolver.module.task_manager.strategies import TaskExploreStrategy
@@ -36,7 +36,7 @@ from agentevolver.module.task_manager.strategies.api_driven.prompts.prompt_summa
     get_task_summarize_prompt,
     parse_tasks_from_response,
 )
-
+from agentevolver.client.llm_client_mix import Mix_DashScopeClient
 UNIVERSAL_INFO_PROVIDERS = {"notes", "gmail", "simple_messages", "calendar", "contacts"}
 
 class ApiDrivenExploreStrategy(TaskExploreStrategy):
@@ -52,18 +52,33 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         
         self._env_profile = kwargs.get("env_profile")
 
-        # 复用传入的客户端，仅当未传入时才新建
+        # ================= [Init 修改] =================
+        # 1. 常规客户端 (self.llm_client): 用于 generate 和 summarize
+        # 保持兼容性：如果外部传入了 client，直接使用
         if llm_client:
             self.llm_client = llm_client
         else:
-            logger.warning("[ApiDriven] No LlmClient passed, creating a new one.")
+            logger.warning("[ApiDriven] No LlmClient passed, creating a standard LlmClient.")
             self.llm_client = LlmClient(config)
             
-        # [Fix: AttributeError] 使用下划线变量名避免与父类同名属性冲突
         self._summarize_client = kwargs.get("llm_client_summarize", self.llm_client)
 
+        # 2. 探索专用客户端 (self.explore_client): 仅用于 explore 阶段
+        # 强制尝试初始化 Mix_DashScopeClient 以支持动态路由和隔离限流
+        logger.info("[ApiDriven] Initializing Mix_DashScopeClient specifically for 'explore' phase.")
+        try:
+            # 假设 Mix_DashScopeClient 已正确 import
+            self.explore_client = Mix_DashScopeClient(
+                model_name="qwen235", # 默认占位，实际会被 sampling_params 覆盖
+                temperature=config.get("exploration_llm_temperature", 0.7)
+            )
+        except Exception as e:
+            logger.error(f"[ApiDriven] Failed to init Mix_DashScopeClient: {e}. Fallback to standard client.")
+            self.explore_client = self.llm_client
+        # ================= [Init 结束] =================
+
         self._max_llm_retries = kwargs.get("max_llm_retries", 3)
-        self._lock = threading.Lock() # 用于保护记忆文件的并发写入
+        self._lock = threading.Lock() 
         
         # --- 路径与文件配置 ---
         self.api_knowledge_path = kwargs.get(
@@ -81,7 +96,6 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         
         self.active_apps = set(kwargs.get("active_apps", ['amazon','gmail','spotify','venmo','simple_note','todoist','splitwise','phone','file_system']))
         
-        # 加载数据
         self.api_knowledge = self._load_json(self.api_knowledge_path)
         if not self.api_knowledge:
             logger.warning(f"API Knowledge not found at {self.api_knowledge_path}.")
@@ -89,12 +103,10 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         self.sandbox_ids_pool = self._load_sandbox_task_ids(self.task_labels_path)
         self.sandbox_id_iterator = itertools.cycle(self.sandbox_ids_pool)
         
-        # 加载记忆
         self.intra_memory_data = self._load_json(self.intra_memory_path)
         self.explored_intra_apps = set(self.intra_memory_data.get("explored_apps", []))
         self.cross_memory_data = self._load_json(self.cross_memory_path)
         
-        # 获取环境配置名称
         self.env_profile_name = self.config.get("env_service", {}).get("env_type", "appworld")
 
         logger.info(f"[ApiDriven] Initialized. Strategy ready.")
@@ -104,8 +116,15 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
     def explore(self, task: Task, data_id: str, rollout_id: str) -> List[Trajectory]:
         """
         [ApiDriven] 执行探索任务的核心入口。
+        
+        修改点：
+        1. 使用 self.explore_client (Mix_DashScopeClient)。
+        2. 轮询策略：qwen235 -> dsv3 -> azure-gpt-5-mini -> azure-gpt-5。
+        3. 成功判定：使用 trajectory.success (即 reward > 0) 作为成功标准。
+           - 如果 Success: 立即返回。
+           - 如果 Fail (Logic Error 或 Timeout): 尝试下一个模型。
         """
-        # 1. 动态获取沙箱 ID (物理环境映射)
+        # 1. 动态获取沙箱 ID
         real_sandbox_id = self.get_next_sandbox_id()
         if real_sandbox_id:
             if task.metadata is None:
@@ -119,63 +138,98 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             "real_sandbox_id": real_sandbox_id
         })
 
-        # 2. 初始化环境工作者 (EnvWorker)
-        thread_idx = 0
-        if task.metadata and 'thread_index' in task.metadata:
-            thread_idx = task.metadata['thread_index']
+        # 定义模型尝试队列 (根据 Mix_DashScopeClient 的路由逻辑)
+        candidate_models = ["HY-Qwen3-235B-A22B-Instruct-2507", "DeepSeek-V3-Online", "azure-gpt-5-mini", "azure-gpt-5"]
         
-        env_worker = EnvWorker(
-            task=task,
-            config=self.config, 
-            thread_index=thread_idx,
-            tokenizer=self.tokenizer
-        )
+        last_trajectory = None
+        max_steps = self.config.get("max_explore_step", 25) 
 
-        # 3. 构造 LLM 聊天函数
-        sampling_params = {
-            "temperature": self.config.get("exploration_llm_temperature", 0.5),
-            "top_p": self.config.get("exploration_llm_top_p", 0.9),
-            "top_k": self.config.get("exploration_llm_top_k", 50),
-        }
-        
-        llm_chat_fn = self._get_llm_chat_fn(
-            self.llm_client, 
-            sampling_params=sampling_params
-        )
+        # 开始模型轮询
+        for model_name in candidate_models:
+            logger.info(f"[Explore] Task {data_id}: Trying model '{model_name}'...")
 
-        # 4. 初始化 Agent 工作流 (ModifiedAgentFlow)
-        agent_flow = ModifiedAgentFlow(
-            llm_chat_fn=llm_chat_fn,
-            tokenizer=self.tokenizer,
-            config=self.config,
-            enable_context_generator=False
-        )
-        
-        # 动态设置最大步数
-        agent_flow.max_steps = self.config.get("max_explore_step", 25) 
-        agent_flow.max_model_len = self.config.get("max_model_len", 102400)
+            # 2. 初始化环境工作者 (每次重置以防污染)
+            thread_idx = 0
+            if task.metadata and 'thread_index' in task.metadata:
+                thread_idx = task.metadata['thread_index']
+            
+            env_worker = EnvWorker(
+                task=task,
+                config=self.config, 
+                thread_index=thread_idx,
+                tokenizer=self.tokenizer
+            )
 
-        # 5. 执行 Agent，获取轨迹
-        try:
-            # 获取 System Prompt (通常不带参数，通用指令)
-            system_prompt = get_agent_interaction_system_prompt(self._env_profile)
+            # 3. 构造 LLM 聊天函数 (注入当前模型参数)
+            sampling_params = {
+                "temperature": self.config.get("exploration_llm_temperature", 0.5),
+                "top_p": self.config.get("exploration_llm_top_p", 0.9),
+                "top_k": self.config.get("exploration_llm_top_k", 50),
+                "model": model_name, # MixClient 根据此字段路由
+            }
+            
+            # 使用 explore_client
+            llm_chat_fn = self._get_llm_chat_fn(
+                self.explore_client, 
+                sampling_params=sampling_params
+            )
 
-            trajectory = env_worker.execute(
-                data_id=data_id, 
-                rollout_id=rollout_id,
-                traj_exp_config=TrajExpConfig(add_exp=False), # API 探索通常不直接添加到经验池
-                agent_flow=agent_flow,
-                tmux={'step': [0], 'token': [0]}, # 共享计数器
-                stop=[False],
-                system_prompt=system_prompt,
+            # 4. 初始化 Agent 工作流
+            agent_flow = ModifiedAgentFlow(
+                llm_chat_fn=llm_chat_fn,
+                tokenizer=self.tokenizer,
+                config=self.config,
+                enable_context_generator=False
             )
             
-            return [trajectory]
+            agent_flow.max_steps = max_steps
+            agent_flow.max_model_len = self.config.get("max_model_len", 102400)
 
-        except Exception as e:
-            logger.error(f"[ApiDriven] Explore failed on Sandbox {real_sandbox_id}: {e}")
-            return [Trajectory(steps=[])]
+            # 5. 执行 Agent
+            try:
+                system_prompt = get_agent_interaction_system_prompt(self._env_profile)
 
+                trajectory = env_worker.execute(
+                    data_id=data_id, 
+                    rollout_id=rollout_id,
+                    traj_exp_config=TrajExpConfig(add_exp=False),
+                    agent_flow=agent_flow,
+                    tmux={'step': [0], 'token': [0]},
+                    stop=[False],
+                    system_prompt=system_prompt,
+                )
+                
+                last_trajectory = trajectory
+                
+                # [核心判定修改] 使用 Trajectory.success 属性
+                # 如果成功，立即返回；如果失败（无论是否超时），继续尝试下一个模型
+                if trajectory and trajectory.success:
+                    logger.info(f"[Explore] Model {model_name} SUCCEEDED (Steps: {len(trajectory.steps)}). Returning result.")
+                    return [trajectory]
+                else:
+                    fail_reason = "Max Steps Reached" if len(trajectory.steps) >= max_steps else "Task Logic Failed"
+                    logger.warning(f"[Explore] Model {model_name} FAILED ({fail_reason}). Success check returned False. Retrying with next model...")
+                    
+                    # 资源清理
+                    try:
+                        if hasattr(env_worker, 'env') and env_worker.env:
+                             pass 
+                    except: pass
+                    continue
+
+            except Exception as e:
+                logger.error(f"[Explore] Critical Error with model {model_name}: {e}")
+                traceback.print_exc()
+                # 异常情况也继续尝试下一个模型
+                continue
+
+        # 如果所有模型都失败，返回最后一个模型的结果（即使是 Failed 状态）
+        if last_trajectory:
+            logger.warning(f"[Explore] All models failed. Returning result from last model ({candidate_models[-1]}).")
+            return [last_trajectory]
+        
+        # 极端情况：没有任何轨迹生成
+        return []
     # ================= 总结逻辑 =================
 
     def summarize(self, task: Task, trajectory: Trajectory) -> List[TaskObjective]:
@@ -203,58 +257,6 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             return "train_001"
 
     # ================= 任务生成 (Generation) =================
-
-    # def generate_intra_task(self, app_name: str = None, target_api_name: str = None, task: Task = None) -> Optional[Task]:
-    #     """
-    #     生成单域探索任务：针对特定 App 的 API 生成 Prompt。
-    #     """
-    #     if not app_name:
-    #         unmastered_apps = list(self.active_apps - self.explored_intra_apps)
-    #         app_name = random.choice(unmastered_apps) if unmastered_apps else random.choice(list(self.active_apps))
-        
-    #     app_knowledge = self.api_knowledge.get(app_name, {})
-    #     apis = app_knowledge.get("apis", {})
-
-    #     # 随机选择 API 策略
-    #     if not target_api_name:
-    #         action_apis = [k for k, v in apis.items() if v.get("action_type") == "Executive Action"]
-    #         info_apis_list = [k for k, v in apis.items() if v.get("action_type") == "Informational Action"]
-            
-    #         roll = random.random()
-    #         if roll < 0.7 and action_apis:
-    #             target_api_name = random.choice(action_apis)
-    #         elif info_apis_list:
-    #             target_api_name = random.choice(info_apis_list)
-    #         else:
-    #             target_api_name = random.choice(list(apis.keys())) if apis else None
-
-    #     if not target_api_name:
-    #         return None
-
-    #     # 准备上下文
-    #     target_api_def = apis.get(target_api_name)
-    #     is_executive = target_api_def.get("action_type") == "Executive Action"
-    #     ref_type = "Informational Action" if is_executive else "Executive Action"
-    #     reference_apis = {k: v for k, v in apis.items() if k != target_api_name and v.get("action_type") == ref_type}
-
-    #     prompt = INTRA_DOMAIN_PURPOSE_PROMPT.format(
-    #         target_api_name=target_api_name,
-    #         app_name=app_name,
-    #         target_api_details=json.dumps(target_api_def, indent=2, ensure_ascii=False),
-    #         available_info_apis=json.dumps(reference_apis, indent=2, ensure_ascii=False)
-    #     )
-
-    #     response = self._chat_with_retry(messages=[{"role": "user", "content": prompt}])
-
-    #     if not response: return None
-
-    #     task.query = response.content.strip()
-    #     task.metadata = {
-    #             "phase": "intra", 
-    #             "target_app": app_name, 
-    #             "target_api": target_api_name
-    #         }
-    #     return task
     
     def generate_intra_task(self, api_data: Union[dict, List[dict]], task: Task = None) -> List[Task]:
         """

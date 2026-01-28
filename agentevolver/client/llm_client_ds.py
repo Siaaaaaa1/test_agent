@@ -31,9 +31,9 @@ class DashScopeClient:
     # --- [修改 1] 将 limit 全部设为 1，实现单模型串行 ---
     # 格式: "模型名": {"limit": 1, "max_input_tokens": ...}
     MODEL_CONFIGS = {
-        "HY-Qwen3-235B-A22B-Instruct-2507": {"limit": 1, "max_input_tokens": 30000},
-        "DeepSeek-R1-Online":               {"limit": 1, "max_input_tokens": None},
-        "DeepSeek-V3-Online-64K":           {"limit": 1, "max_input_tokens": None},
+        "HY-Qwen3-235B-A22B-Instruct-2507": {"limit": 40, "max_input_tokens": 32768},
+        # "DeepSeek-R1-Online":               {"limit": 1, "max_input_tokens": None},
+        "DeepSeek-V3-Online":           {"limit": 40, "max_input_tokens": 32768},
     }
 
     # --- [修改 2] 使用 threading.Lock 替代 Semaphore ---

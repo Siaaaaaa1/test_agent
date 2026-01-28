@@ -822,14 +822,17 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
+    # [核心修复] 在主流程增加日志，确保能看到卡在哪里
+    print(f"🚀 [DEBUG] Main process started. Importing env: {args.env}...", flush=True)
+
     env_class = import_and_register_env(args.env, args.env_file_name)
     if env_class is None:
-        print(f"Failed to import and register environment {args.env}")
+        print(f"❌ [DEBUG] Failed to import and register environment {args.env}", flush=True)
         sys.exit(1)
 
-    print(f"Starting server on {args.portal}:{args.port}")
+    print(f"🌍 [DEBUG] Starting FastAPI server on {args.portal}:{args.port}", flush=True)
 
     if args.debug:
         uvicorn.run(app, host=args.portal, port=args.port)
     else:
-        uvicorn.run(app, host=args.portal, port=args.port,log_level="error" )
+        uvicorn.run(app, host=args.portal, port=args.port, log_level="error")
