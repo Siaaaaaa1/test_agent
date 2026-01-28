@@ -11,12 +11,21 @@ class Reward(BaseModel):
     """
     # 任务结果评分，通常 1.0 表示成功，0.0 表示失败
     outcome: float = Field(default=0.0)
+
+    # [新增] 效率评分，衡量完成任务的步骤或成本效率
+    efficiency: float = Field(default=0.0)
     
     # 成功率 (可能用于多次尝试的统计)
     success_rate: float = Field(default=0.0)
     
     # "疯狂度" (Madness) 指标，可能用于衡量 Agent 行为的异常程度或探索性
     madness: float = Field(default=0.0)
+    
+    # [新增] 每一步的 API 利用奖励列表
+    step_api_rewards: List[float] = Field(default_factory=list)
+
+    # [新增] 每一步的复读惩罚列表
+    step_repetition_rewards: List[float] = Field(default_factory=list)
     
     # 结果描述，默认为 "Outcome 1 denotes success, and 0 denotes failure."
     description: str = Field(default="Outcome 1 denotes success, and 0 denotes failure.")

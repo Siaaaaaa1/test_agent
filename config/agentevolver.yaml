@@ -2,6 +2,9 @@
 algorithm:
   adv_estimator: grpo
   use_kl_in_reward: false
+  weight_outcome: 1.0
+  weight_api: 0.5        # 根据需要调整过程奖励的重要性
+  weight_repetition: 1.0 # 保持为正数，因为内部数值已经是负数
 
 ray_init:
   num_cpus: null
@@ -40,6 +43,7 @@ actor_rollout_ref:
     gpu_memory_utilization: 0.6
     n: 8
     log_prob_max_token_len_per_gpu: 25580
+    enable_gt_process_reward: false
     val_kwargs:
       n: 8
     
@@ -117,7 +121,7 @@ debug_log: false
 
 thread_pool:
   # max number of threads
-  max_workers: 8
+  max_workers: 10
 
 task_manager:
   # tasks will be explored once if set. use it if you want to keep the same explorations.
@@ -136,6 +140,7 @@ task_manager:
   bs: ${data.train_batch_size}
   # max number of threads for exploration
   num_explore_threads: ${thread_pool.max_workers}
+  generate_task_only: false
 
   # mixture strategy
   mixture:
@@ -157,7 +162,7 @@ task_manager:
   strategy: random
   strategy_args:
     # max number of steps for exploration
-    max_explore_step: 30
+    max_explore_step: 40
     # max number of LLM retries
     max_llm_retries: 6
     # env url
