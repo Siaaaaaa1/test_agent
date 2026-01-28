@@ -4,6 +4,7 @@ import os
 import time
 import threading
 from typing import Any, Optional, Protocol, Iterator, Generator, cast, Dict, List
+from collections import defaultdict  # Added for easier counting
 
 from loguru import logger
 import requests
@@ -30,6 +31,7 @@ class Mix_DashScopeClient:
     - Auto-routing: Selects URL based on model name (Azure vs. Hunyuan/DeepSeek).
     - Isolation: Each model has its own Concurrency Limit (20) and Rate Limit (30 RPM).
     - Dynamic: 'model' can be passed in chat/chat_completion arguments.
+    - Statistics: Tracks usage per model and reports every 1000 global calls.
     """
     
     # Azure 系模型集合，用于判断 API 路径
@@ -61,6 +63,11 @@ class Mix_DashScopeClient:
         # 状态存储：{ "model_name": { "semaphore": ..., "rate_lock": ..., "timestamps": [] } }
         self._model_states: Dict[str, Dict[str, Any]] = {}
         self._state_init_lock = threading.Lock()
+        
+        # --- 新增：统计相关变量 ---
+        self._stats_lock = threading.Lock()          # 确保统计数据的线程安全
+        self._model_call_counts = defaultdict(int)   # 记录每个模型的调用次数
+        self._total_call_count = 0                   # 记录总调用次数
         
         logger.info(f"Initialized DashScopeClient. Default model: {self.default_model_name}")
 
@@ -142,6 +149,32 @@ class Mix_DashScopeClient:
         # [核心修改] 优先从参数获取 model，否则使用默认值
         target_model = kwargs.get("model", self.default_model_name)
         
+        # --- 新增逻辑：记录调用与统计 ---
+        report_stats = False
+        stats_snapshot = None
+        current_step = 0
+
+        with self._stats_lock:
+            self._model_call_counts[target_model] += 1
+            self._total_call_count += 1
+            current_step = self._total_call_count      
+            # # 记录本次调用使用的模型
+            # logger.info(f"[Call #{current_step}] Invoking model: {target_model}")
+            # 检查是否满足汇报条件 (每 100 次)
+            if self._total_call_count % 100 == 0:
+                report_stats = True
+                # 复制一份数据用于打印，避免阻塞
+                stats_snapshot = dict(self._model_call_counts)
+
+        # 如果满足条件，打印统计信息
+        if report_stats and stats_snapshot:
+            logger.info(f"====== Model Usage Statistics [Step {current_step}] ======")
+            sorted_stats = sorted(stats_snapshot.items(), key=lambda item: item[1], reverse=True)
+            for model, count in sorted_stats:
+                logger.info(f"Model '{model}': {count} calls")
+            logger.info("========================================================")
+        # ------------------------------------
+
         # 1. 根据 model 名称动态选择 URL
         if target_model in self.AZURE_MODELS:
             url = f"{base}/api/chat_completions?source=emoji_agent_research"
