@@ -272,7 +272,7 @@ I can use it to login now with the provided email address:
 {{ main_user.email }}.
 
 Code:
- ```python
+```python
 spotify_password = [account_password["account_name"] == "spotify" for
 account_password in passwords][0]["password"]
 login_result = apis.spotify.login(username='{{ main_user.email }}',
@@ -440,7 +440,8 @@ Marked the active task complete.
 
 USER:
 **Key instructions**:
-(1) Make sure to end code blocks with ``` followed by a newline(\n).
+(1) Make sure to end code blocks with ``` followed by a newline(\n). 
+Code blocks must start with ```python on a standalone line and end with ``` on a standalone line.
 
 (2) Remember you can use the variables in your code in subsequent
 code blocks.
