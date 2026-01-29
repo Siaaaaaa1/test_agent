@@ -179,17 +179,23 @@ class Mix_DashScopeClient:
         # 1. 根据 model 名称动态选择 URL
         if target_model in self.AZURE_MODELS:
             url = f"{base}/api/chat_completions?source=emoji_agent_research"
-        else:
-            url = f"{base}/hunyuan/deepseek/chat_completions?source=exp"
-            
-        params = {
+            params = {
             "model": target_model,
             "messages": messages,
-            "temperature": self.temperature,
-            # "max_tokens": self.max_tokens, 
             "stream": stream,
             **kwargs
         }
+        else:
+            url = f"{base}/hunyuan/deepseek/chat_completions?source=exp"
+            params = {
+            "model": target_model,
+            "messages": messages,
+            "temperature": self.temperature,
+            "stream": stream,
+            **kwargs
+            }
+        
+        
 
         # 2. 获取该特定模型的状态对象
         state = self._get_model_state(target_model)
