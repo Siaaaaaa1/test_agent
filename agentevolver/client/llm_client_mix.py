@@ -4,7 +4,7 @@ import os
 import time
 import threading
 from typing import Any, Optional, Protocol, Iterator, Generator, cast, Dict, List
-from collections import defaultdict  # Added for easier counting
+from collections import defaultdict
 
 from loguru import logger
 import requests
@@ -31,7 +31,7 @@ class Mix_DashScopeClient:
     - Auto-routing: Selects URL based on model name (Azure vs. Hunyuan/DeepSeek).
     - Isolation: Each model has its own Concurrency Limit (20) and Rate Limit (30 RPM).
     - Dynamic: 'model' can be passed in chat/chat_completion arguments.
-    - Statistics: Tracks usage per model and reports every 1000 global calls.
+    - Statistics: Tracks usage per model and reports every 100 global calls.
     """
     
     # Azure 系模型集合，用于判断 API 路径
@@ -64,10 +64,10 @@ class Mix_DashScopeClient:
         self._model_states: Dict[str, Dict[str, Any]] = {}
         self._state_init_lock = threading.Lock()
         
-        # --- 新增：统计相关变量 ---
-        self._stats_lock = threading.Lock()          # 确保统计数据的线程安全
-        self._model_call_counts = defaultdict(int)   # 记录每个模型的调用次数
-        self._total_call_count = 0                   # 记录总调用次数
+        # --- 统计相关变量 ---
+        self._stats_lock = threading.Lock()          
+        self._model_call_counts = defaultdict(int)   
+        self._total_call_count = 0                   
         
         logger.info(f"Initialized DashScopeClient. Default model: {self.default_model_name}")
 
@@ -104,6 +104,7 @@ class Mix_DashScopeClient:
         window_duration = 60.0  # 60 seconds
         
         while True:
+            wait_time = 0
             with lock:
                 now = time.time()
                 # 移除滑窗外的时间戳
@@ -113,19 +114,23 @@ class Mix_DashScopeClient:
                 # 检查当前窗口内的请求数
                 if len(timestamps) < self.MAX_RPM:
                     timestamps.append(now)
-                    return
+                    return  # 成功获取限额，直接返回
                 
-                # 计算等待时间
-                oldest_timestamp = timestamps[0]
-                wait_time = window_duration - (now - oldest_timestamp)
+                # 计算等待时间 (取最早的一个时间戳计算剩余时间)
+                if timestamps:
+                    oldest_timestamp = timestamps[0]
+                    wait_time = window_duration - (now - oldest_timestamp)
+                else:
+                    # 理论上不会走到这里，除非 MAX_RPM <= 0
+                    wait_time = 1.0
             
+            # [重要] 在锁外部休眠，避免阻塞其他线程
             if wait_time > 0:
-                time.sleep(wait_time + 0.01)
+                time.sleep(wait_time + 0.05) #稍微多睡一点，避免边界误差
 
     def chat(self, messages: list[dict[str, str]], sampling_params: dict[str, Any] = None, **kwargs) -> str:
         """
         Wrapper for chat_completion. 
-        'model' can be passed in sampling_params or kwargs to override default.
         """
         params = sampling_params.copy() if sampling_params else {}
         params.update(kwargs)
@@ -146,10 +151,10 @@ class Mix_DashScopeClient:
         """
         base = self.base_url.rstrip('/')
         
-        # [核心修改] 优先从参数获取 model，否则使用默认值
+        # 优先从参数获取 model，否则使用默认值
         target_model = kwargs.get("model", self.default_model_name)
         
-        # --- 新增逻辑：记录调用与统计 ---
+        # --- 记录调用与统计 ---
         report_stats = False
         stats_snapshot = None
         current_step = 0
@@ -158,31 +163,25 @@ class Mix_DashScopeClient:
             self._model_call_counts[target_model] += 1
             self._total_call_count += 1
             current_step = self._total_call_count      
-            # # 记录本次调用使用的模型
-            # logger.info(f"[Call #{current_step}] Invoking model: {target_model}")
             # 检查是否满足汇报条件 (每 100 次)
             if self._total_call_count % 100 == 0:
                 report_stats = True
-                # 复制一份数据用于打印，避免阻塞
                 stats_snapshot = dict(self._model_call_counts)
 
-        # 如果满足条件，打印统计信息
         if report_stats and stats_snapshot:
             logger.info(f"====== Model Usage Statistics [Step {current_step}] ======")
             sorted_stats = sorted(stats_snapshot.items(), key=lambda item: item[1], reverse=True)
             for model, count in sorted_stats:
                 logger.info(f"Model '{model}': {count} calls")
             logger.info("========================================================")
-        # ------------------------------------
+        # --------------------
 
         # 1. 根据 model 名称动态选择 URL
         if target_model in self.AZURE_MODELS:
             url = f"{base}/api/chat_completions?source=emoji_agent_research"
         else:
-            # HY-Qwen3..., DeepSeek-V3-Online 等
             url = f"{base}/hunyuan/deepseek/chat_completions?source=exp"
             
-        # 准备请求参数 (确保 model 字段正确)
         params = {
             "model": target_model,
             "messages": messages,
@@ -192,30 +191,49 @@ class Mix_DashScopeClient:
             **kwargs
         }
 
-        # 2. 获取该特定模型的状态对象 (信号量 + 限流记录)
+        # 2. 获取该特定模型的状态对象
         state = self._get_model_state(target_model)
         semaphore = state["semaphore"]
 
+        # 3. 分流处理：流式与非流式
+        # [关键修改] 分离逻辑以确保流式 generator 在生命周期内持有锁
+        if stream:
+            return self._stream_with_lock(url, params, semaphore, target_model)
+        else:
+            return self._normal_with_lock(url, params, semaphore, target_model)
+
+    def _normal_with_lock(self, url, params, semaphore, model_name) -> str:
+        """
+        非流式请求处理：获取锁 -> 限流等待 -> 请求 -> 释放锁
+        """
         try:
-            # 3. 并发控制 (针对 target_model)
             with semaphore:
-                # 4. 速率限制 (针对 target_model)
-                self._wait_for_rate_limit(target_model)
-                
-                if stream:
-                    return self._handle_stream_response(url, params)
-                else:
-                    return self._handle_normal_response(url, params)
-                    
+                self._wait_for_rate_limit(model_name)
+                return self._handle_normal_response(url, params)
         except requests.exceptions.RequestException as e:
-            logger.error(f"API request failed for model {target_model}: {e}")
-            return "" if not stream else (x for x in [])
+            logger.error(f"API request failed for model {model_name}: {e}")
+            return ""
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse API response for model {target_model}: {e}")
-            return "" if not stream else (x for x in [])
+            logger.error(f"Failed to parse API response for model {model_name}: {e}")
+            return ""
         except Exception as e:
-            logger.error(f"Unexpected error in API call for model {target_model}: {e}")
-            return "" if not stream else (x for x in [])
+            logger.error(f"Unexpected error in API call for model {model_name}: {e}")
+            return ""
+
+    def _stream_with_lock(self, url, params, semaphore, model_name) -> Generator[str, None, None]:
+        """
+        流式请求处理：
+        生成器持续持有锁，直到迭代完成或异常中断。
+        """
+        try:
+            with semaphore:
+                self._wait_for_rate_limit(model_name)
+                # 使用 yield from 将底层生成器的数据透传出来
+                yield from self._handle_stream_response(url, params)
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Stream API request failed for model {model_name}: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error in stream call for model {model_name}: {e}")
 
     def _handle_normal_response(self, url: str, params: dict) -> str:
         no_proxy = {"http": None, "https": None}
@@ -320,9 +338,11 @@ class Mix_DashScopeClient:
         for attempt in range(max_retries):
             try:
                 stream_generator = cast(Generator[str, None, None], self.chat_completion(messages, stream=True, **kwargs))
+                # 尝试获取第一个 chunk，如果失败则触发异常并重试
                 first_chunk = next(stream_generator, None)
                 if first_chunk is not None:
                     yield first_chunk
+                    # 继续产出剩余部分
                     for chunk in stream_generator:
                         yield chunk
                     return

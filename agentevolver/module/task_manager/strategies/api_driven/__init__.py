@@ -5,8 +5,9 @@ import time
 import itertools
 import threading
 import copy
-from typing import List, Dict, Any, Optional, Set, Callable, Union
+from typing import List, Dict, Any, Optional, Set, Callable, Union, Tuple
 from types import SimpleNamespace
+from collections import defaultdict
 
 from loguru import logger
 from omegaconf import DictConfig
@@ -67,14 +68,20 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         # 强制尝试初始化 Mix_DashScopeClient 以支持动态路由和隔离限流
         logger.info("[ApiDriven] Initializing Mix_DashScopeClient specifically for 'explore' phase.")
         try:
-            # 假设 Mix_DashScopeClient 已正确 import
+            # 默认占位，实际调用时会通过参数覆盖
             self.explore_client = Mix_DashScopeClient(
-                model_name="qwen235", # 默认占位，实际会被 sampling_params 覆盖
+                model_name="azure-gpt-5-mini", 
                 temperature=config.get("exploration_llm_temperature", 0.7)
             )
         except Exception as e:
             logger.error(f"[ApiDriven] Failed to init Mix_DashScopeClient: {e}. Fallback to standard client.")
             self.explore_client = self.llm_client
+        
+        # 3. 统计相关初始化
+        self._stats_lock = threading.Lock()
+        self._total_finished_tasks = 0
+        # 结构: { "model_name": {"attempts": 0, "success": 0} }
+        self._model_performance = defaultdict(lambda: {"attempts": 0, "success": 0})
         # ================= [Init 结束] =================
 
         self._max_llm_retries = kwargs.get("max_llm_retries", 3)
@@ -111,6 +118,76 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
 
         logger.info(f"[ApiDriven] Initialized. Strategy ready.")
 
+    # ================= [辅助逻辑] 统计与空闲检查 (新增) =================
+    
+    def _record_model_result(self, model_name: str, is_success: bool):
+        """记录单个模型的推理结果"""
+        with self._stats_lock:
+            self._model_performance[model_name]["attempts"] += 1
+            if is_success:
+                self._model_performance[model_name]["success"] += 1
+
+    def _report_progress_if_needed(self):
+        """检查总任务数，每50条输出一次统计报表"""
+        with self._stats_lock:
+            self._total_finished_tasks += 1
+            current_count = self._total_finished_tasks
+            
+            if current_count % 50 == 0:
+                logger.info(f"\n====== Model Performance Report (Processed {current_count} Tasks) ======")
+                logger.info(f"{'Model Name':<40} | {'Calls':<6} | {'Succ':<6} | {'Fail':<6} | {'Rate':<8}")
+                logger.info("-" * 80)
+                
+                # 按调用次数降序排列
+                sorted_stats = sorted(self._model_performance.items(), key=lambda x: x[1]['attempts'], reverse=True)
+                
+                for model, stats in sorted_stats:
+                    attempts = stats["attempts"]
+                    success = stats["success"]
+                    fail = attempts - success
+                    rate = (success / attempts * 100) if attempts > 0 else 0.0
+                    logger.info(f"{model:<40} | {attempts:<6} | {success:<6} | {fail:<6} | {rate:.2f}%")
+                logger.info("========================================================================\n")
+
+    def _get_model_idle_score(self, model_name: str) -> Tuple[int, int]:
+        """
+        获取指定模型的空闲分数。
+        返回 (并发空闲数, RPM空闲数) 的元组。
+        值越大代表越空闲。
+        """
+        if not hasattr(self.explore_client, "_get_model_state"):
+            # 如果不是预期的 MixClient，返回默认值
+            return (0, 0)
+
+        try:
+            # 1. 确保状态已初始化
+            state = self.explore_client._get_model_state(model_name)
+            
+            # 2. 获取并发空闲数 (Semaphore 的内部 _value)
+            semaphore = state.get("semaphore")
+            concurrency_free = semaphore._value if semaphore else 0
+            
+            # 3. 获取 RPM 空闲数
+            rate_lock = state.get("rate_lock")
+            timestamps = state.get("timestamps")
+            rpm_free = 0
+            
+            if rate_lock and isinstance(timestamps, list):
+                # 快速检查，不长时间持有锁
+                with rate_lock:
+                    now = time.time()
+                    # 假定 MixClient 的 window 是 60s
+                    valid_timestamps = [t for t in timestamps if now - t < 60.0]
+                    # 假定 MAX_RPM 是 MixClient 的属性，默认为 30
+                    max_rpm = getattr(self.explore_client, "MAX_RPM", 30)
+                    rpm_free = max_rpm - len(valid_timestamps)
+            
+            return (concurrency_free, rpm_free)
+            
+        except Exception as e:
+            logger.warning(f"Failed to check idle score for {model_name}: {e}")
+            return (0, 0)
+
     # ================= [核心] 执行循环逻辑 =================
 
     def explore(self, task: Task, data_id: str, rollout_id: str) -> List[Trajectory]:
@@ -119,10 +196,10 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         
         修改点：
         1. 使用 self.explore_client (Mix_DashScopeClient)。
-        2. 轮询策略：qwen235 -> dsv3 -> azure-gpt-5-mini -> azure-gpt-5。
-        3. 成功判定：使用 trajectory.success (即 reward > 0) 作为成功标准。
-           - 如果 Success: 立即返回。
-           - 如果 Fail (Logic Error 或 Timeout): 尝试下一个模型。
+        2. 轮询策略：
+           Tier 1: HY-Qwen3-235B... / DeepSeek-V3-Online (根据空闲程度二选一优先)
+           Tier 2: azure-gpt-5-mini -> azure-gpt-5
+        3. 成功判定：使用 trajectory.success 作为成功标准。
         """
         # 1. 动态获取沙箱 ID
         real_sandbox_id = self.get_next_sandbox_id()
@@ -138,8 +215,29 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             "real_sandbox_id": real_sandbox_id
         })
 
-        # 定义模型尝试队列 (根据 Mix_DashScopeClient 的路由逻辑)
-        candidate_models = ["HY-Qwen3-235B-A22B-Instruct-2507", "DeepSeek-V3-Online", "azure-gpt-5-mini", "azure-gpt-5"]
+        # --- 动态构建模型尝试列表 ---
+        
+        # 第一梯队模型
+        tier1_model_a = "HY-Qwen3-235B-A22B-Instruct-2507"
+        tier1_model_b = "DeepSeek-V3-Online"
+        
+        # 检查空闲状态
+        score_a = self._get_model_idle_score(tier1_model_a)
+        score_b = self._get_model_idle_score(tier1_model_b)
+        
+        logger.debug(f"[Explore] Model Capacity - {tier1_model_a}: {score_a}, {tier1_model_b}: {score_b}")
+        
+        # 优先比较并发空闲数 (idx 0)，其次比较 RPM 空闲数 (idx 1)
+        if score_a >= score_b:
+            tier1_models = [tier1_model_a, tier1_model_b]
+        else:
+            tier1_models = [tier1_model_b, tier1_model_a]
+            
+        # 第二梯队兜底模型
+        tier2_models = ["azure-gpt-5-mini", "azure-gpt-5"]
+        
+        # 最终执行顺序
+        candidate_models = tier1_models + tier2_models
         
         last_trajectory = None
         max_steps = self.config.get("max_explore_step", 50) 
@@ -162,23 +260,18 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
 
             # TODO: 将对话的参数需要加入LLM 
             # # 3. 构造 LLM 聊天函数 (注入当前模型参数)
-            if model_name in ["HY-Qwen3-235B-A22B-Instruct-2507", "DeepSeek-V3-Online"]:
-                sampling_params = {
-                    "temperature": self.config.get("exploration_llm_temperature", 0.5),
-                    "top_p": self.config.get("exploration_llm_top_p", 0.9),
-                    "top_k": self.config.get("exploration_llm_top_k", 50),
-                    "model": model_name, # MixClient 根据此字段路由
-                }
-                # 使用 explore_client
-                llm_chat_fn = self._get_llm_chat_fn(
-                    self.explore_client,
-                    sampling_params=sampling_params
-                )
-            else:
-                # 使用 explore_client
-                llm_chat_fn = self._get_llm_chat_fn(
-                    self.explore_client
-                )
+            sampling_params = {
+                "temperature": self.config.get("exploration_llm_temperature", 0.5),
+                "top_p": self.config.get("exploration_llm_top_p", 0.9),
+                "top_k": self.config.get("exploration_llm_top_k", 50),
+                "model": model_name, # MixClient 根据此字段路由
+            }
+            
+            # 使用 explore_client 并传递参数
+            llm_chat_fn = self._get_llm_chat_fn(
+                self.explore_client,
+                sampling_params=sampling_params
+            )
 
             # 4. 初始化 Agent 工作流
             agent_flow = ModifiedAgentFlow(
@@ -207,13 +300,20 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                 
                 last_trajectory = trajectory
                 
-                # [核心判定修改] 使用 Trajectory.success 属性
-                # 如果成功，立即返回；如果失败（无论是否超时），继续尝试下一个模型
-                if trajectory and trajectory.success:
+                # [核心判定] 使用 Trajectory.success 属性
+                # 如果成功，立即返回；如果失败，继续尝试下一个模型
+                is_success = trajectory and getattr(trajectory, 'success', False)
+                
+                # [统计] 记录当前模型结果
+                self._record_model_result(model_name, is_success)
+                
+                if is_success:
                     logger.info(f"[Explore] Model {model_name} SUCCEEDED (Steps: {len(trajectory.steps)}). Returning result.")
+                    # [统计] 任务完成，检查是否汇报
+                    self._report_progress_if_needed()
                     return [trajectory]
                 else:
-                    logger.warning(f"[Explore] Model {model_name} FAILED. Success check returned False. Retrying with next model...")
+                    logger.warning(f"[Explore] Model {model_name} FAILED or Success=False. Retrying with next model...")
                     
                     # 资源清理
                     try:
@@ -225,16 +325,24 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             except Exception as e:
                 logger.error(f"[Explore] Critical Error with model {model_name}: {e}")
                 traceback.print_exc()
+                # [统计] 异常视为失败
+                self._record_model_result(model_name, False)
                 # 异常情况也继续尝试下一个模型
                 continue
 
         # 如果所有模型都失败，返回最后一个模型的结果（即使是 Failed 状态）
+        logger.warning(f"[Explore] All models failed.")
+        
+        # [统计] 任务完成（虽然全失败），检查是否汇报
+        self._report_progress_if_needed()
+
         if last_trajectory:
-            logger.warning(f"[Explore] All models failed. Returning result from last model ({candidate_models[-1]}).")
+            logger.warning(f"[Explore] Returning result from last model ({candidate_models[-1]}).")
             return [last_trajectory]
         
         # 极端情况：没有任何轨迹生成
         return []
+
     # ================= 总结逻辑 =================
 
     def summarize(self, task: Task, trajectory: Trajectory) -> List[TaskObjective]:
