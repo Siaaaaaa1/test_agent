@@ -281,8 +281,12 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                     sampling_params=sampling_params
                 )
             else:
+                sampling_params = {
+                    "model": model_name, # MixClient 根据此字段路由
+                }
                 llm_chat_fn = self._get_llm_chat_fn(
-                    self.explore_client
+                    self.explore_client,
+                    sampling_params=sampling_params
                 )
 
             # 4. 初始化 Agent 工作流
