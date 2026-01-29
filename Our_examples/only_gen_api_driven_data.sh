@@ -83,7 +83,7 @@ python3 -m agentevolver.main_ppo \
     env_service.env_url="http://localhost:8080" \
     env_service.env_type=appworld \
     seed=2 \
-    debug_log=True \
+    debug_log=False \
     algorithm.adv_estimator=grpo \
     algorithm.use_kl_in_reward=False \
     data.train_batch_size=32 \
@@ -150,4 +150,5 @@ python3 -m agentevolver.main_ppo \
     task_manager.llm_client="azure-gpt-5" \
     task_manager.grader.synthetic_grader=api_process_llm_judge \
     task_manager.env_profile=${PROJECT_ROOT}/cookbook/env_profiles/appworld.json \
+    thread_pool.max_workers=10 \
     2>&1 | tee "$log_file"
