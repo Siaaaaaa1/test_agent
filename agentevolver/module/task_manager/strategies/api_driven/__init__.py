@@ -21,7 +21,7 @@ from agentevolver.utils.utils import extract_json_from_str
 from agentevolver.utils.debug_utils import debug_log
 from agentevolver.module.task_manager.strategies.api_driven.prompts.intra_domain import parse_intra_purpose_from_response
 from agentevolver.module.task_manager.strategies.api_driven.prompts.cross_domain import parse_cross_purpose_from_response
-
+from agentevolver.module.task_manager.rewards.binary_judge_no_gt import LlmAsJudgeBinaryRewardCalculatorNoGTNoConstraint
 # 环境与执行模块
 from agentevolver.module.env_manager.env_worker import EnvWorker, TrajExpConfig
 from agentevolver.module.task_manager.agent_flow import ModifiedAgentFlow
@@ -196,10 +196,9 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         
         修改点：
         1. 使用 self.explore_client (Mix_DashScopeClient)。
-        2. 轮询策略：
-           Tier 1: HY-Qwen3-235B... / DeepSeek-V3-Online (根据空闲程度二选一优先)
-           Tier 2: azure-gpt-5-mini -> azure-gpt-5
-        3. 成功判定：使用 trajectory.success 作为成功标准。
+        2. 轮询策略：Tier 1 (Qwen/DeepSeek) -> Tier 2 (Azure)。
+        3. [新增] 注入 LLM Judge 进行评分。
+        4. [新增] 成功判定阈值改为 outcome >= 0.7。
         """
         # 1. 动态获取沙箱 ID
         real_sandbox_id = self.get_next_sandbox_id()
@@ -229,14 +228,10 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         
         # 优先比较并发空闲数 (idx 0)，其次比较 RPM 空闲数 (idx 1)
         if score_a > score_b:
-            # A 明显更空闲
             tier1_models = [tier1_model_a, tier1_model_b]
         elif score_b > score_a:
-            # B 明显更空闲
             tier1_models = [tier1_model_b, tier1_model_a]
         else:
-            # [关键] 分数相等（如刚启动时都是 20,30），随机洗牌
-            # 这样 20 个并发任务会大约 10 个去 A，10 个去 B
             tier1_models = [tier1_model_a, tier1_model_b]
             random.shuffle(tier1_models)
             
@@ -265,8 +260,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                 tokenizer=self.tokenizer
             )
 
-            # TODO: 将对话的参数需要加入LLM 
-            # # 3. 构造 LLM 聊天函数 (注入当前模型参数)
+            # 3. 构造 LLM 聊天函数 (注入当前模型参数)
             if model_name in ["DeepSeek-V3-Online","HY-Qwen3-235B-A22B-Instruct-2507"]:
                 sampling_params = {
                     "temperature": self.config.get("exploration_llm_temperature", 0.5),
@@ -275,7 +269,6 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                     "model": model_name, # MixClient 根据此字段路由
                 }
             
-                # 使用 explore_client 并传递参数
                 llm_chat_fn = self._get_llm_chat_fn(
                     self.explore_client,
                     sampling_params=sampling_params
@@ -289,12 +282,19 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                     sampling_params=sampling_params
                 )
 
+            # ================= [修改点 1: 实例化 Judge] =================
+            # 使用无 GT 且无均值约束的 Reward Calculator
+            # 这会在 AgentFlow 结束时触发 calculate_reward
+            reward_calculator = LlmAsJudgeBinaryRewardCalculatorNoGTNoConstraint(task=task)
+
             # 4. 初始化 Agent 工作流
+            # ================= [修改点 2: 传入 Judge] =================
             agent_flow = ModifiedAgentFlow(
                 llm_chat_fn=llm_chat_fn,
                 tokenizer=self.tokenizer,
                 config=self.config,
-                enable_context_generator=False
+                enable_context_generator=False,
+                reward_calculator=reward_calculator  # <--- 注入 Judge
             )
             
             agent_flow.max_steps = max_steps
@@ -316,20 +316,31 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                 
                 last_trajectory = trajectory
                 
-                # [核心判定] 使用 Trajectory.success 属性
-                # 如果成功，立即返回；如果失败，继续尝试下一个模型
-                is_success = trajectory and getattr(trajectory, 'success', False)
+                # ================= [修改点 3: 严格的成功判定] =================
+                # 检查 trajectory.reward.outcome 是否 >= 0.7
+                is_success = False
+                current_score = 0.0
                 
+                if trajectory and trajectory.reward:
+                    current_score = trajectory.reward.outcome
+                    # 阈值设定为 0.7
+                    if current_score >= 0.7:
+                        is_success = True
+                    else:
+                        logger.warning(f"[Explore] Model {model_name} score {current_score} < 0.7. Marked as Fail.")
+                else:
+                    logger.warning(f"[Explore] Model {model_name} produced no reward object.")
+
                 # [统计] 记录当前模型结果
                 self._record_model_result(model_name, is_success)
                 
                 if is_success:
-                    logger.info(f"[Explore] Model {model_name} SUCCEEDED (Steps: {len(trajectory.steps)}). Returning result.")
+                    logger.info(f"[Explore] Model {model_name} SUCCEEDED (Score: {current_score}, Steps: {len(trajectory.steps)}). Returning result.")
                     # [统计] 任务完成，检查是否汇报
                     self._report_progress_if_needed()
                     return [trajectory]
                 else:
-                    logger.warning(f"[Explore] Model {model_name} FAILED or Success=False. Retrying with next model...")
+                    logger.warning(f"[Explore] Model {model_name} FAILED or Score too low. Retrying with next model...")
                     
                     # 资源清理
                     try:

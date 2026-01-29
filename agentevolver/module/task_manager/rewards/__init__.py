@@ -126,5 +126,6 @@ __all__=[
     "AvgLlmJudge",
     "EnvGrader",
     "APIProcessRewardCalculator",
+    "LlmAsJudgeBinaryRewardCalculatorNoGT",
     "grader_manager", # 导出管理器实例，供外部使用
 ]
