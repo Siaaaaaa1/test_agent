@@ -142,7 +142,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         candidate_models = ["HY-Qwen3-235B-A22B-Instruct-2507", "DeepSeek-V3-Online", "azure-gpt-5-mini", "azure-gpt-5"]
         
         last_trajectory = None
-        max_steps = self.config.get("max_explore_step", 25) 
+        max_steps = self.config.get("max_explore_step", 50) 
 
         # 开始模型轮询
         for model_name in candidate_models:
