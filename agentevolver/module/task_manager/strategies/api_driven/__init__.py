@@ -70,7 +70,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         try:
             # 默认占位，实际调用时会通过参数覆盖
             self.explore_client = Mix_DashScopeClient(
-                model_name="azure-gpt-5-mini", 
+                model_name="HY-Qwen3-235B-A22B-Instruct-2507", 
                 temperature=config.get("exploration_llm_temperature", 0.7)
             )
         except Exception as e:
