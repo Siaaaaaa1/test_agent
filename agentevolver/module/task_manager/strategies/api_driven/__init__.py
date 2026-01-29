@@ -228,10 +228,17 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         logger.debug(f"[Explore] Model Capacity - {tier1_model_a}: {score_a}, {tier1_model_b}: {score_b}")
         
         # 优先比较并发空闲数 (idx 0)，其次比较 RPM 空闲数 (idx 1)
-        if score_a >= score_b:
+        if score_a > score_b:
+            # A 明显更空闲
             tier1_models = [tier1_model_a, tier1_model_b]
-        else:
+        elif score_b > score_a:
+            # B 明显更空闲
             tier1_models = [tier1_model_b, tier1_model_a]
+        else:
+            # [关键] 分数相等（如刚启动时都是 20,30），随机洗牌
+            # 这样 20 个并发任务会大约 10 个去 A，10 个去 B
+            tier1_models = [tier1_model_a, tier1_model_b]
+            random.shuffle(tier1_models)
             
         # 第二梯队兜底模型
         tier2_models = ["azure-gpt-5-mini", "azure-gpt-5"]
