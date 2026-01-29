@@ -140,3 +140,10 @@ synthetic_data/*
 
 site
 launcher_record
+GEN_NEW_DATA/.generate_task_api.cross.generated.json
+GEN_NEW_DATA/.generate_task_api.intra.generated.json
+GEN_NEW_DATA/all_trajectories.jsonl
+GEN_NEW_DATA/generated_tasks.cross.filtered.jsonl
+GEN_NEW_DATA/generated_tasks.cross.generated.jsonl
+GEN_NEW_DATA/generated_tasks.intra.filtered.jsonl
+GEN_NEW_DATA/generated_tasks.intra.generated.jsonl
