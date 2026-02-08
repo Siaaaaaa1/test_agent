@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================================
-# AppWorld 单机服务启动器 (被主脚本调用)
+# AppWorld 单机服务启动器 (Tencent WOA 修复版)
 # ============================================================
 
 # 1. 强制实时日志 (防止日志被吃)
@@ -11,10 +11,21 @@ export PYTHONUNBUFFERED=1
 export MASTER_ADDRESS="0.0.0.0" 
 export PORT="8080"
 
-# 获取本机 IP 用于 no_proxy
-HOST_IP=$(hostname -I | awk '{print $1}')
-export no_proxy="localhost,127.0.0.1,::1,0.0.0.0,29.209.112.175,.woa.com"
+# ---- [修复关键点：强制指定代理] ----
+# 如果不加这个，Python 去外网下载 tokenizer/config 时会无限卡死
+export http_proxy=http://hk-mmhttpproxy.woa.com:11113
+export https_proxy=http://hk-mmhttpproxy.woa.com:11113
+export all_proxy=http://hk-mmhttpproxy.woa.com:11113
+
+# 获取本机 IP 并更新 no_proxy (防止 Ray 连不上)
+HOST_IP=$(hostname -I | tr ' ' '\n' | grep '^29\.' | head -n 1)
+# 必须包含 localhost, 127.0.0.1, 本机IP, 以及 Ray 的 Head IP (29.209.112.175)
+export no_proxy="localhost,127.0.0.1,::1,0.0.0.0,$HOST_IP,.woa.com"
 export NO_PROXY=$no_proxy
+
+echo "🌍 Network Config:"
+echo "   Proxy: $http_proxy"
+echo "   No Proxy: $no_proxy"
 
 # 3. 路径计算 (自动定位项目根目录)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -25,14 +36,14 @@ APPWORLD_DIR="$ENV_SERVICE_DIR/environments/appworld"
 export APPWORLD_ROOT="$APPWORLD_DIR"
 export PYTHONPATH="$PROJECT_ROOT:$APPWORLD_DIR:$PYTHONPATH"
 
-# 4. 打印调试信息 (输出到主脚本的 server.log 中)
+# 4. 打印调试信息
 echo "========================================"
 echo "🚀 AppWorld Service Launcher"
 echo "📂 Project Root: $PROJECT_ROOT"
 echo "📂 AppWorld Root: $APPWORLD_ROOT"
 echo "========================================"
 
-# 5. 自动激活 Conda (如果是被单独调用)
+# 5. 自动激活 Conda
 if [[ "$CONDA_DEFAULT_ENV" != "appworld" ]]; then
     echo "⚡ Activating 'appworld' conda environment..."
     CONDA_BASE=$(conda info --base 2>/dev/null || echo "$HOME/anaconda3")
@@ -49,7 +60,7 @@ fi
 # 6. 切换目录并启动
 cd "$PROJECT_ROOT"
 
-# 使用 exec 替换当前 Shell 进程，确保主脚本 kill 时能杀掉 Python
+# 使用 exec 替换当前 Shell 进程
 exec python -m env_service.env_service \
     --env appworld \
     --portal "$MASTER_ADDRESS" \

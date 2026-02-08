@@ -4,6 +4,7 @@ from typing import Any, Optional, cast
 from loguru import logger
 from agentevolver.client.env_client import EnvClient
 from agentevolver.client.llm_client import DashScopeClient
+from agentevolver.client.llm_client_mix import Mix_DashScopeClient
 from agentevolver.module.agent_flow.reward_calculator import GraderResult, RewardCalculator
 from agentevolver.schema.task import Task
 from agentevolver.schema.trajectory import Trajectory
@@ -139,10 +140,10 @@ class LlmAsJudgeBinaryRewardCalculatorWithGT(RewardCalculator):
     _alpha_slow=0.95
     _update_lock = threading.Lock()
 
-    def __init__(self, task: Task, model_name='qwen3-235b-a22b-instruct-2507', use_mean_constraint=True):
+    def __init__(self, task: Task, model_name='azure-gpt-5-mini', use_mean_constraint=True):
         super().__init__(task)
-
-        self._client = DashScopeClient(model_name=model_name)
+        self._client = Mix_DashScopeClient(model_name=model_name)
+        # self._client = DashScopeClient(model_name=model_name)
         self._client.max_tokens=32768
         self._use_mean_constraint = use_mean_constraint
 
@@ -172,6 +173,9 @@ class LlmAsJudgeBinaryRewardCalculatorWithGT(RewardCalculator):
         Returns:
             list: A list of messages prepared for the language model.
         """
+        # [DEBUG] 标记开始打包消息
+        logger.info(f"[{threading.get_ident()}] Start packing message...")
+
         messages = []
 
         assert len(trajectory.steps) >= 2 and trajectory.steps[1]['role'] == 'user', "trajectory must start with system message and then user message"
@@ -179,12 +183,22 @@ class LlmAsJudgeBinaryRewardCalculatorWithGT(RewardCalculator):
 
         # the ground-truth must be provided, for now.
         assert self.task.ground_truth is not None, "ground truth must not be None for synthetic task"
+        
         if self._use_mean_constraint:
+            # [DEBUG] 标记开始获取锁，用于检测是否死锁
+            logger.debug(f"[{threading.get_ident()}] Attempting to acquire locks for mean scores...")
+            
+            # 分别获取，以便确认是哪一步卡住
+            running_mean = self.get_running_mean()
+            stable_mean = self.get_stable_mean()
+            
+            logger.debug(f"[{threading.get_ident()}] Locks acquired. Means: running={running_mean}, stable={stable_mean}")
+
             content=USER_PROMPT_WITH_MEAN_CONSTRAINT.format(
                 task=task_query,
                 trajs=steps_to_msg(trajectory.steps[2:]),
-                running_mean=self.get_running_mean(),
-                mean_score=self.get_stable_mean(),
+                running_mean=running_mean,
+                mean_score=stable_mean,
                 reference_trajs=self.task.ground_truth or "[No solution provided, please judge the task by yourself]"
             )
         else:
@@ -199,6 +213,9 @@ class LlmAsJudgeBinaryRewardCalculatorWithGT(RewardCalculator):
                 "content": content  # ⭐ Construct the content of the message
             }
         )
+        
+        # [DEBUG] 打包完成
+        logger.info(f"[{threading.get_ident()}] Message packing finished.")
         return messages
 
     def calculate_reward(self, trajectory: Trajectory, env: EnvClient, instance_id: str) -> GraderResult:
@@ -221,26 +238,59 @@ class LlmAsJudgeBinaryRewardCalculatorWithGT(RewardCalculator):
         Returns:
             float or tuple: The calculated reward score, or a tuple containing the score and the LLM's response if `eject_llm_output` is True.
         """
+        # [DEBUG] 进入函数
+        logger.info(f"[{threading.get_ident()}] Entering _calculate_reward...")
+        
+        try:
+            messages = self.pack_message(trajectory)
+        except Exception as e:
+            logger.error(f"[{threading.get_ident()}] Error in pack_message: {e}")
+            raise e
+
         response = ""
-        for chunk in self._client.chat_stream_with_retry(messages=self.pack_message(trajectory), max_retries=64):
-            response += chunk  # ⭐ Accumulate the response chunks from the LLM
+        # [DEBUG] 准备发起 LLM 请求
+        logger.info(f"[{threading.get_ident()}] Starting LLM chat stream (max_retries=64)...")
+        
+        try:
+            chunk_count = 0
+            # [DEBUG] 进入流式循环
+            for chunk in self._client.chat_stream_with_retry(messages=messages, max_retries=64):
+                response += chunk
+                chunk_count += 1
+                # 仅打印前几个 chunk 和每隔一定数量的 chunk，证明流还在动
+                if chunk_count == 1 or chunk_count % 20 == 0:
+                    logger.debug(f"[{threading.get_ident()}] Receiving chunk #{chunk_count}, current len: {len(response)}")
+            
+            # [DEBUG] 请求循环结束
+            logger.info(f"[{threading.get_ident()}] LLM chat stream finished. Total response length: {len(response)}")
+            
+        except Exception as e:
+            logger.error(f"[{threading.get_ident()}] Exception during LLM chat stream: {e}")
+            # 这里不一定 raise，看原逻辑似乎希望返回 0.0，但为了排查问题最好记录完整堆栈
+            import traceback
+            logger.error(traceback.format_exc())
+            # 如果原逻辑需要继续运行，这里可以吞掉异常，或者抛出
+            
         if response:
             import re
+            # [DEBUG] 开始正则解析
+            logger.debug(f"[{threading.get_ident()}] Parsing response for reward...")
             reward_match = re.search(r'<reward>([\d\.]+)</reward>', response.strip())
             if reward_match:
                 score = float(reward_match.group(1))
                 score = max(0.0, min(100.0, score)) / 100.0  # ⭐ Normalize the score to a range of [0, 1]
+                logger.info(f"[{threading.get_ident()}] Score parsed successfully: {score}")
             else:
-                print(f"Could not parse score from response: {response}")
+                logger.warning(f"[{threading.get_ident()}] Could not parse score from response. Response prefix: {response[:100]}...")
                 score = 0.0
         else:
-            print("No response from evaluation API")
+            logger.error(f"[{threading.get_ident()}] No response from evaluation API (response is empty)")
             score = 0.0
 
         if not eject_llm_output:
             return score
         else:
-            return score,response
+            return score, response
 
 @grader_manager.reg("llm-binary-gt-no_constraint")
 class LlmAsJudgeBinaryRewardCalculatorWithGTNoConstraint(LlmAsJudgeBinaryRewardCalculatorWithGT):

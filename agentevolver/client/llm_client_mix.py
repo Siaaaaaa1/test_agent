@@ -103,6 +103,8 @@ class Mix_DashScopeClient:
         timestamps = state["timestamps"]
         window_duration = 60.0  # 60 seconds
         
+        tid = threading.get_ident() # [LOG] 获取线程ID
+
         while True:
             wait_time = 0
             with lock:
@@ -126,6 +128,8 @@ class Mix_DashScopeClient:
             
             # [重要] 在锁外部休眠，避免阻塞其他线程
             if wait_time > 0:
+                # [LOG] 打印限流等待信息
+                logger.warning(f"[{tid}] Rate limit hit for {model_name} ({len(timestamps)}/{self.MAX_RPM}). Sleeping {wait_time:.2f}s...")
                 time.sleep(wait_time + 0.05) #稍微多睡一点，避免边界误差
 
     def chat(self, messages: list[dict[str, str]], sampling_params: dict[str, Any] = None, **kwargs) -> str:
@@ -195,8 +199,6 @@ class Mix_DashScopeClient:
             **kwargs
             }
         
-        
-
         # 2. 获取该特定模型的状态对象
         state = self._get_model_state(target_model)
         semaphore = state["semaphore"]
@@ -212,9 +214,16 @@ class Mix_DashScopeClient:
         """
         非流式请求处理：获取锁 -> 限流等待 -> 请求 -> 释放锁
         """
+        tid = threading.get_ident() # [LOG]
         try:
+            # [LOG]
+            logger.info(f"[{tid}] [Normal] Waiting for semaphore for {model_name}...")
             with semaphore:
+                # [LOG]
+                logger.info(f"[{tid}] [Normal] Acquired semaphore. Checking rate limit...")
                 self._wait_for_rate_limit(model_name)
+                # [LOG]
+                logger.info(f"[{tid}] [Normal] Rate limit passed. Sending request...")
                 return self._handle_normal_response(url, params)
         except requests.exceptions.RequestException as e:
             logger.error(f"API request failed for model {model_name}: {e}")
@@ -231,11 +240,20 @@ class Mix_DashScopeClient:
         流式请求处理：
         生成器持续持有锁，直到迭代完成或异常中断。
         """
+        tid = threading.get_ident() # [LOG]
         try:
+            # [LOG]
+            logger.info(f"[{tid}] [Stream] Waiting for semaphore for {model_name}...")
             with semaphore:
+                # [LOG]
+                logger.info(f"[{tid}] [Stream] Acquired semaphore. Checking rate limit...")
                 self._wait_for_rate_limit(model_name)
+                # [LOG]
+                logger.info(f"[{tid}] [Stream] Rate limit passed. Sending request...")
                 # 使用 yield from 将底层生成器的数据透传出来
                 yield from self._handle_stream_response(url, params)
+                # [LOG]
+                logger.info(f"[{tid}] [Stream] Finished successfully (Releasing Lock).")
         except requests.exceptions.RequestException as e:
             logger.error(f"Stream API request failed for model {model_name}: {e}")
         except Exception as e:
@@ -265,7 +283,11 @@ class Mix_DashScopeClient:
 
     def _handle_stream_response(self, url: str, params: dict) -> Generator[str, None, None]:
         no_proxy = {"http": None, "https": None}
+        tid = threading.get_ident() # [LOG]
 
+        # [LOG] 打印请求发起前
+        logger.debug(f"[{tid}] Calling requests.post(stream=True) to {url}...")
+        
         response = requests.post(
             url, 
             headers=self.headers, 
@@ -275,9 +297,13 @@ class Mix_DashScopeClient:
             proxies=no_proxy
         )
         
+        # [LOG] 打印请求发起后
+        logger.debug(f"[{tid}] Connection established. Status: {response.status_code}")
+
         if not response.ok:
             self._raise_for_error(response)
         
+        chunk_idx = 0
         for line in response.iter_lines():
             if line:
                 line = line.decode('utf-8')
@@ -293,6 +319,11 @@ class Mix_DashScopeClient:
                             if "delta" in choice and "content" in choice["delta"]:
                                 content = choice["delta"]["content"]
                                 if content:
+                                    # [LOG] 仅打印首包，避免日志爆炸
+                                    if chunk_idx == 0:
+                                        logger.debug(f"[{tid}] Received First Chunk.")
+                                    chunk_idx += 1
+                                    
                                     yield content
                     except json.JSONDecodeError:
                         continue
@@ -341,17 +372,30 @@ class Mix_DashScopeClient:
         """
         Supports passing 'model' in kwargs for streaming retry logic.
         """
+        tid = threading.get_ident() # [LOG]
+        logger.info(f"[{tid}] Entering chat_stream_with_retry...") # [LOG]
+
         for attempt in range(max_retries):
             try:
                 stream_generator = cast(Generator[str, None, None], self.chat_completion(messages, stream=True, **kwargs))
+                
+                # [LOG] 最关键的卡点检查
+                logger.debug(f"[{tid}] Attempt {attempt+1}: Waiting for generator first next()...")
+                
                 # 尝试获取第一个 chunk，如果失败则触发异常并重试
                 first_chunk = next(stream_generator, None)
+                
                 if first_chunk is not None:
+                    # [LOG]
+                    logger.debug(f"[{tid}] First chunk received. Yielding stream.")
                     yield first_chunk
                     # 继续产出剩余部分
                     for chunk in stream_generator:
                         yield chunk
                     return
+                else:
+                    logger.warning(f"[{tid}] Stream returned None (empty) on attempt {attempt+1}")
+
             except LlmException as e:
                 if e.typ == 'inappropriate content':
                     logger.warning(f"llm return inappropriate content, which is blocked by the remote")

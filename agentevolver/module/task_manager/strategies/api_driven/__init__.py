@@ -12,6 +12,7 @@ from collections import defaultdict
 from loguru import logger
 from omegaconf import DictConfig
 import traceback
+
 # 基础模块
 from agentevolver.module.task_manager.base import LlmClient
 from agentevolver.module.task_manager.strategies import TaskExploreStrategy
@@ -21,7 +22,7 @@ from agentevolver.utils.utils import extract_json_from_str
 from agentevolver.utils.debug_utils import debug_log
 from agentevolver.module.task_manager.strategies.api_driven.prompts.intra_domain import parse_intra_purpose_from_response
 from agentevolver.module.task_manager.strategies.api_driven.prompts.cross_domain import parse_cross_purpose_from_response
-from agentevolver.module.task_manager.rewards.binary_judge_no_gt import LlmAsJudgeBinaryRewardCalculatorNoGTNoConstraint
+from agentevolver.module.task_manager.rewards.integrated_reward import IntegratedRewardCalculator
 # 环境与执行模块
 from agentevolver.module.env_manager.env_worker import EnvWorker, TrajExpConfig
 from agentevolver.module.task_manager.agent_flow import ModifiedAgentFlow
@@ -38,13 +39,28 @@ from agentevolver.module.task_manager.strategies.api_driven.prompts.prompt_summa
     parse_tasks_from_response,
 )
 from agentevolver.client.llm_client_mix import Mix_DashScopeClient
+
 UNIVERSAL_INFO_PROVIDERS = {"notes", "gmail", "simple_messages", "calendar", "contacts"}
+
 
 class ApiDrivenExploreStrategy(TaskExploreStrategy):
     """
     API 驱动的探索策略类
     包含：任务生成(Intra/Cross) -> 任务执行(Explore) -> 任务总结(Summarize)
     """
+
+    # ================= [新增] 预定义的合法 APP 组合白名单 =================
+    VALID_CROSS_COMBINATIONS = [
+        ['venmo', 'splitwise'], ['venmo', 'gmail'], ['venmo', 'phone'], ['venmo', 'simple_note'],
+        ['amazon', 'venmo'], ['amazon', 'splitwise'], ['amazon', 'todoist'], ['amazon', 'simple_note'], ['amazon', 'gmail'], ['amazon', 'phone'],
+        ['spotify', 'phone'], ['spotify', 'gmail'], ['spotify', 'simple_note'],
+        ['gmail', 'todoist'], ['gmail', 'file_system'], ['gmail', 'simple_note'], ['gmail', 'phone'],
+        ['simple_note', 'spotify'], ['simple_note', 'gmail'], ['simple_note', 'phone'], ['simple_note', 'todoist'],
+        ['phone', 'gmail'], ['phone', 'simple_note'], ['phone', 'todoist'],
+        ['todoist', 'simple_note'], ['todoist', 'gmail'], ['todoist', 'phone'],
+        ['splitwise', 'venmo'], ['splitwise', 'gmail'], ['splitwise', 'phone'], ['splitwise', 'simple_note'],
+        ['file_system', 'gmail'], ['file_system', 'simple_note'], ['file_system', 'todoist']
+    ]
 
     def __init__(self, tokenizer, config: DictConfig, llm_client: Optional[LlmClient] = None, **kwargs):
         super().__init__()
@@ -84,7 +100,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         self._model_performance = defaultdict(lambda: {"attempts": 0, "success": 0})
         # ================= [Init 结束] =================
 
-        self._max_llm_retries = kwargs.get("max_llm_retries", 3)
+        self._max_llm_retries = kwargs.get("max_llm_retries", 5)
         self._lock = threading.Lock() 
         
         # --- 路径与文件配置 ---
@@ -193,12 +209,6 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
     def explore(self, task: Task, data_id: str, rollout_id: str) -> List[Trajectory]:
         """
         [ApiDriven] 执行探索任务的核心入口。
-        
-        修改点：
-        1. 使用 self.explore_client (Mix_DashScopeClient)。
-        2. 轮询策略：Tier 1 (Qwen/DeepSeek) -> Tier 2 (Azure)。
-        3. [新增] 注入 LLM Judge 进行评分。
-        4. [新增] 成功判定阈值改为 outcome >= 0.7。
         """
         # 1. 动态获取沙箱 ID
         real_sandbox_id = self.get_next_sandbox_id()
@@ -282,13 +292,10 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                     sampling_params=sampling_params
                 )
 
-            # ================= [修改点 1: 实例化 Judge] =================
-            # 使用无 GT 且无均值约束的 Reward Calculator
-            # 这会在 AgentFlow 结束时触发 calculate_reward
-            reward_calculator = LlmAsJudgeBinaryRewardCalculatorNoGTNoConstraint(task=task)
+            # ================= 实例化 Judge =================
+            reward_calculator = IntegratedRewardCalculator(task=task)
 
             # 4. 初始化 Agent 工作流
-            # ================= [修改点 2: 传入 Judge] =================
             agent_flow = ModifiedAgentFlow(
                 llm_chat_fn=llm_chat_fn,
                 tokenizer=self.tokenizer,
@@ -296,7 +303,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                 enable_context_generator=False,
                 reward_calculator=reward_calculator  # <--- 注入 Judge
             )
-            
+            agent_flow._reward_calculator = reward_calculator
             agent_flow.max_steps = max_steps
             agent_flow.max_model_len = self.config.get("max_model_len", 102400)
 
@@ -316,13 +323,19 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                 
                 last_trajectory = trajectory
                 
-                # ================= [修改点 3: 严格的成功判定] =================
+                # ================= 严格的成功判定 =================
                 # 检查 trajectory.reward.outcome 是否 >= 0.7
                 is_success = False
                 current_score = 0.0
                 
                 if trajectory and trajectory.reward:
                     current_score = trajectory.reward.outcome
+
+                    # --- [NEW] 添加 Judge 结果日志 ---
+                    judge_reason = getattr(trajectory.reward, "reason", "No detailed reasoning provided")
+                    logger.info(f"📝 [Judge Result] Task: {data_id} | Model: {model_name} | Score: {current_score}\nReasoning: {judge_reason}")
+                    # ---------------------------------
+                    
                     # 阈值设定为 0.7
                     if current_score >= 0.7:
                         is_success = True
@@ -341,7 +354,6 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                     return [trajectory]
                 else:
                     logger.warning(f"[Explore] Model {model_name} FAILED or Score too low. Retrying with next model...")
-                    
                     # 资源清理
                     try:
                         if hasattr(env_worker, 'env') and env_worker.env:
@@ -477,11 +489,45 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
 
         return generated_tasks
 
+    def generate_all_valid_cross_tasks(self, task: Task = None) -> List[Task]:
+        """
+        [New Method] 自动生成所有在 VALID_CROSS_COMBINATIONS 中的跨域任务。
+        不需要传入 API dict，自动从 self.api_knowledge 读取。
+        """
+        all_generated_tasks = []
+        logger.info(f"[Cross-Gen] Starting batch generation for {len(self.VALID_CROSS_COMBINATIONS)} valid combinations.")
+
+        for source_name, target_name in self.VALID_CROSS_COMBINATIONS:
+            # 从知识库中获取 APP 详情
+            source_data = self.api_knowledge.get(source_name)
+            target_data = self.api_knowledge.get(target_name)
+
+            if not source_data or not target_data:
+                logger.debug(f"[Cross-Gen] Skipping {source_name}->{target_name}: definition not found in knowledge base.")
+                continue
+
+            # 构造 api_dict
+            api_dict1 = {
+                "app_name": source_name,
+                "apis_name_list": list(source_data.get("apis", {}).keys())
+            }
+            api_dict2 = {
+                "app_name": target_name,
+                "apis_name_list": list(target_data.get("apis", {}).keys())
+            }
+
+            # 调用生成逻辑
+            tasks = self.generate_cross_task(api_dict1, api_dict2, task)
+            all_generated_tasks.extend(tasks)
+
+        logger.info(f"[Cross-Gen] Batch generation complete. Total tasks: {len(all_generated_tasks)}")
+        return all_generated_tasks
 
     def generate_cross_task(self, api_dict1: dict, api_dict2: dict, task: Task = None) -> List[Task]:
         """
         生成跨域探索任务：选择两个 App，合成跨应用场景。
-        返回 Task 列表 (因为 Prompt 现在一次生成多个场景)。
+        
+        [Updated] 增加了白名单检查，确保只生成符合预期的组合。
         """
         generated_tasks = []
 
@@ -493,11 +539,17 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         app1_name = api_dict1.get("app_name", "App1")
         app2_name = api_dict2.get("app_name", "App2")
         
+        # 1. [新增] 严格校验 APP 组合是否在白名单中
+        current_pair = [app1_name, app2_name]
+        if current_pair not in self.VALID_CROSS_COMBINATIONS:
+            logger.warning(f"[Cross-Gen] Skipping invalid combination: {app1_name} -> {app2_name}")
+            return []
+        
         # 安全转换 API List
         apis1_str = ",".join(api_dict1.get("apis_name_list", []))
         apis2_str = ",".join(api_dict2.get("apis_name_list", []))
 
-        # 1. Prompt 格式化 (带容错)
+        # 2. Prompt 格式化 (带容错)
         try:
             prompt = CROSS_DOMAIN_PURPOSE_PROMPT.format(
                 APP_NAME1=app1_name,
@@ -513,7 +565,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                 .replace("{APP_NAME2}", app2_name) \
                 .replace("{API_LIST2}", apis2_str)
 
-        # 2. 调用 LLM
+        # 3. 调用 LLM
         try:
             response = self._chat_with_retry(messages=[{"role": "user", "content": prompt}])
         except Exception as e:
@@ -523,7 +575,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         if not response: 
             return []
         
-        # 3. 解析结果 (返回 List[dict])
+        # 4. 解析结果 (返回 List[dict])
         try:
             parsed_scenarios = parse_cross_purpose_from_response(response.content)
         except Exception as e:
@@ -534,13 +586,13 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             logger.warning(f"[Cross-Gen] No valid scenarios parsed for {app1_name} <-> {app2_name}")
             return []
 
-        # 4. 构建 Task 列表
+        # 5. 构建 Task 列表
         for scenario in parsed_scenarios:
             new_task = copy.deepcopy(task) if task else Task()
             
             new_task.query = scenario["user_query"]
             new_task.metadata = {
-                "phase": "extra", # 注意：你之前的代码是 extra，如果是跨域通常叫 cross 或 inter
+                "phase": "extra", # 注意：跨域通常叫 cross 或 inter
                 "app1": app1_name,
                 "app2": app2_name,
                 "app1_apis": list(api_dict1.get("apis_name_list", [])),
@@ -576,7 +628,6 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                 masked_trajectory.steps[2]['content'] = '[MASKED]'
 
         # 4. 生成 Prompt
-        # env_profile_obj = self._get_env_profile_obj()
         system_prompt, user_prompt = get_task_summarize_prompt(
             [masked_trajectory], old_objectives=task.query, profile=self._env_profile
         )
@@ -618,7 +669,6 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                 masked_trajectory.steps[2]['content'] = '[MASKED]'
         
         # 4. 生成 Prompt
-        # env_profile_obj = self._get_env_profile_obj()
         system_prompt, user_prompt = get_task_summarize_prompt(
             [masked_trajectory], old_objectives=task.query, profile=self._env_profile
         )
@@ -644,17 +694,6 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         return tasks
 
     # ================= 辅助私有方法 =================
-
-    # def _get_env_profile_obj(self):
-    #     """辅助方法：根据配置字符串获取 Profile 对象，用于总结 Prompt 的生成"""
-    #     env_type = self.env_profile_name
-    #     if env_type == "appworld":
-    #         return appworld.AppWorldProfile()
-    #     elif env_type == "bfcl":
-    #         return bfcl.BfclProfile()
-    #     elif env_type == "webshop":
-    #         return webshop.WebShopProfile()
-    #     return None
 
     def _chat_with_retry(self, messages: List[Dict], **kwargs) -> Optional[Any]:
         """

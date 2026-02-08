@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================================
-# AgentEvolver 单机调试版 V5 (模块化调用版)
+# AgentEvolver 单机混合版 (调试结构 + 生成参数)
 # ============================================================
 
 # ---- 1. 强力清理 ----
@@ -13,6 +13,8 @@ fuser -k -9 6379/tcp >/dev/null 2>&1
 rm -rf /tmp/ray/* 2>/dev/null
 
 sleep 2
+export GEN_OUTPUT_DIR="/mnt/cephfs/haowengao/test_agent/GEN_NEW_DATA"
+mkdir -p "$GEN_OUTPUT_DIR"
 
 # ---- 2. 环境变量 ----
 HOST_IP=$(hostname -I | awk '{print $1}')
@@ -22,17 +24,15 @@ export https_proxy=http://hk-mmhttpproxy.woa.com:11113
 export no_proxy="localhost,127.0.0.1,::1,0.0.0.0,29.209.112.175,.woa.com"
 export NO_PROXY=$no_proxy
 
-# 关键：强制 Python 实时打印，不要缓存日志！
+# 关键：强制 Python 实时打印
 export PYTHONUNBUFFERED=1
-# 关键：强制 vLLM 稳定模式
+# 关键：强制 vLLM 稳定模式 & FlashAttention
 export VLLM_ENFORCE_EAGER=True
-export VLLM_ATTENTION_BACKEND=FLASH_ATTN
-# export NCCL_P2P_DISABLE=1
-# export OMP_NUM_THREADS=1
+export VLLM_ATTENTION_BACKEND=FLASH_ATTN 
 
 # ---- 3. 启动 Ray Head ----
 echo "🚀 Starting Local Ray Head..."
-# 限制内存使用，防止 OOM
+# [保留配置] 限制资源使用：8 GPU, 32 CPU
 ray start --head --port=6379 --num-gpus=8 --num-cpus=32 --dashboard-host=0.0.0.0 --disable-usage-stats --block & 
 RAY_PID=$!
 
@@ -48,35 +48,27 @@ for i in {1..60}; do
     echo -ne "   Ray checking... ${i}s\r"
 done
 
-# ---- 4. 启动 AppWorld 服务 (调用独立脚本) ----
+# ---- 4. 启动 AppWorld 服务 ----
 echo "🌍 Launching AppWorld Service Script..."
-
-# 定义脚本路径
 LAUNCHER_SCRIPT="./env_service/launch_script/appworld_single.sh"
-
-# 赋予执行权限
 chmod +x "$LAUNCHER_SCRIPT"
 
-# [核心修改] 调用独立脚本，并将日志同时输出到屏幕和文件
-# 使用 & 让其后台运行
+# 日志同时输出到屏幕和文件
 $LAUNCHER_SCRIPT 2>&1 | tee server.log &
-
 SERVER_PID=$!
 
-# 退出陷阱 (杀掉脚本进程 = 杀掉 exec 启动的 Python)
+# 退出陷阱
 trap "echo '🛑 Shutting down...'; kill $SERVER_PID; kill $RAY_PID; ray stop --force" EXIT
 
-# ---- 5. 健康检查 (Localhost + NoProxy) ----
+# ---- 5. 健康检查 ----
 echo "⏳ Waiting for AppWorld (Port 8080)..."
 MAX_RETRIES=300
 COUNT=0
 
-# 使用 localhost 检查
 while ! curl -s --noproxy "*" "http://localhost:8080/healthz" > /dev/null; do
     sleep 1
     COUNT=$((COUNT+1))
     
-    # 检查进程是否死了
     if ! kill -0 $SERVER_PID 2>/dev/null; then
         echo "❌ AppWorld process died! Check logs above."
         exit 1
@@ -91,18 +83,18 @@ done
 
 echo -e "\n✅ Server is UP!"
 
-# ---- 6. 启动训练 ----
+# ---- 6. 启动训练 (参数已更新) ----
 CONDA_BASE=$(conda info --base 2>/dev/null || echo "$HOME/anaconda3")
 source "$CONDA_BASE/etc/profile.d/conda.sh"
 conda activate AgentEvolver121
 
 CONFIG_PATH="$(pwd)/config"
 current_time=$(date "+%Y%m%d_%H%M%S")
-log_file="log_single_${current_time}.log"
+log_file="log_single_mixed_${current_time}.log"
 unset CUDA_VISIBLE_DEVICES
 
-echo "🚀 Starting Training..."
-# 使用 localhost 连接
+echo "🚀 Starting Training with Mixed Configuration..."
+
 python3 -m agentevolver.main_ppo \
     --config-path="$CONFIG_PATH" \
     --config-name='script_config' \
@@ -119,8 +111,8 @@ python3 -m agentevolver.main_ppo \
     data.filter_overlong_prompts=True \
     data.train_files=null \
     data.val_files=null \
-    data.max_prompt_length=4096 \
-    data.max_response_length=20480 \
+    data.max_prompt_length=28672 \
+    data.max_response_length=4096 \
     data.val_batch_size=32 \
     actor_rollout_ref.model.path="./models/Qwen2.5-7B-Instruct" \
     actor_rollout_ref.model.use_remove_padding=True \
@@ -140,8 +132,8 @@ python3 -m agentevolver.main_ppo \
     actor_rollout_ref.rollout.temperature=0.8 \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.8 \
     actor_rollout_ref.rollout.max_model_len=32768 \
-    actor_rollout_ref.rollout.prompt_length=4096 \
-    actor_rollout_ref.rollout.response_length=20480 \
+    actor_rollout_ref.rollout.prompt_length=28672 \
+    actor_rollout_ref.rollout.response_length=4096 \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=32768 \
     actor_rollout_ref.rollout.max_num_batched_tokens=81920 \
@@ -155,7 +147,7 @@ python3 -m agentevolver.main_ppo \
     trainer.critic_warmup=0 \
     trainer.logger="['console','wandb']" \
     trainer.project_name="AgentEvolver" \
-    trainer.experiment_name="appworld_single" \
+    trainer.experiment_name="appworld_single_mixed" \
     trainer.save_freq=2 \
     trainer.test_freq=5 \
     trainer.total_epochs=40 \
@@ -167,9 +159,9 @@ python3 -m agentevolver.main_ppo \
     task_manager.n=32 \
     task_manager.mixture.synthetic_data_ratio=2.0 \
     task_manager.mixture.use_original_tasks=False \
-    task_manager.train_data_path=./tasks_explored/tasks_explored.train.json \
-    task_manager.val_data_path=./tasks_explored/tasks_explored.val.json \
-    task_manager.exploration_strategy_args.a=2 \
+    task_manager.train_data_path=$GEN_OUTPUT_DIR/tasks_explored.train.json \
+    task_manager.val_data_path=$GEN_OUTPUT_DIR/tasks_explored.val.json \
+    task_manager.exploration_strategy_args.a=4 \
     task_manager.exploration_strategy_args.b=8 \
     task_manager.strategy=api_driven \
     task_manager.exploration_strategy_args.active_apps="['amazon','gmail','spotify','venmo','simple_note','todoist','splitwise','phone','file_system']" \
@@ -177,4 +169,7 @@ python3 -m agentevolver.main_ppo \
     task_manager.llm_client="azure-gpt-5" \
     task_manager.grader.synthetic_grader=api_process_llm_judge \
     task_manager.env_profile=./cookbook/env_profiles/appworld.json \
+    thread_pool.max_workers=4 \
+    actor_rollout_ref.rollout.enable_gt_process_reward=true \
+    task_manager.generate_task_only=false \
     2>&1 | tee "$log_file"

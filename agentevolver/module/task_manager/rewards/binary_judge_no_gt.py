@@ -1,5 +1,6 @@
 import re
 import threading
+import time
 from typing import Any, Optional, cast
 from loguru import logger
 from agentevolver.client.env_client import EnvClient
@@ -205,36 +206,85 @@ class LlmAsJudgeBinaryRewardCalculatorNoGT(RewardCalculator):
 
     def _calculate_reward(self, trajectory: Trajectory, env: EnvClient, *, eject_llm_output: bool = False):
         """
-        Calculate the reward for a given trajectory in a specific environment by querying an LLM.
-
-        Args:
-            trajectory (Trajectory): The trajectory for which the reward is to be calculated.
-            env (EnvClient): The environment in which the trajectory was executed.
-            eject_llm_output (bool, optional): If True, the function will return both the score and the LLM's response. Defaults to False.
-
-        Returns:
-            float or tuple: The calculated reward score, or a tuple containing the score and the LLM's response if `eject_llm_output` is True.
+        Calculate the reward with WATCHDOG to detect hangs.
         """
+        task_id = self.task.task_id if self.task and hasattr(self.task, 'task_id') else "unknown_task"
+        
+        # --- [Watchdog Setup] ---
+        # 启动一个后台线程，如果 30秒 后主逻辑还没结束，就打印严重警告
+        # 这有助于确认是否是网络死锁
+        watchdog_done_event = threading.Event()
+        
+        def watchdog_monitor(tid):
+            time.sleep(30) # 30秒超时阈值
+            if not watchdog_done_event.is_set():
+                logger.critical(f"[{tid}] 🚨 WATCHDOG ALERT: Judge LLM call has been stuck for 30s! This implies a NETWORK DEADLOCK or Client Hang.")
+                # 注意：我们很难从这里强制杀死 requests 线程，但至少我们知道了原因
+        
+        wd_thread = threading.Thread(target=watchdog_monitor, args=(task_id,), daemon=True)
+        wd_thread.start()
+        # ------------------------
+
+        logger.info(f"[{task_id}] 🟢 Start calling Judge LLM (Streaming Mode)...")
+        start_time = time.time()
+
         response = ""
-        for chunk in self._client.chat_stream_with_retry(messages=self.pack_message(trajectory), max_retries=64):
-            response += chunk
+        chunk_count = 0
+        
+        try:
+            # 尝试调用流式接口
+            # 注意：如果 DashScopeClient 底层 requests 没有设置 timeout，这里可能会永久卡死
+            stream_iterator = self._client.chat_stream_with_retry(messages=self.pack_message(trajectory), max_retries=8)
+            
+            for chunk in stream_iterator:
+                response += chunk
+                chunk_count += 1
+                
+                # [LOG] 收到第一个 Token
+                if chunk_count == 1:
+                    first_token_time = time.time()
+                    logger.info(f"[{task_id}] ⚡ First token received after {first_token_time - start_time:.2f}s")
+                
+                # [LOG] 心跳
+                if chunk_count % 50 == 0:
+                    logger.debug(f"[{task_id}] ... streaming (len: {len(response)})")
+        
+        except Exception as e:
+            logger.error(f"[{task_id}] ❌ Error during Judge LLM stream: {e}")
+        finally:
+            # 无论成功失败，通知看门狗退出
+            watchdog_done_event.set()
+
+        total_time = time.time() - start_time
+        logger.info(f"[{task_id}] 🏁 Judge generation finished in {total_time:.2f}s. Total Length: {len(response)}")
+        
+        if response:
+            logger.info(f"[{task_id}] Judge Reasoning & Output:\n{response}")
+        
+        score = 0.0
         if response:
             import re
             reward_match = re.search(r'<reward>([\d\.]+)</reward>', response.strip())
             if reward_match:
-                score = float(reward_match.group(1))
-                score = max(0.0, min(100.0, score)) / 100.0
+                raw_score = float(reward_match.group(1))
+                score = max(0.0, min(100.0, raw_score)) / 100.0
+                logger.info(f"[{task_id}] ✅ Judge Result -> Raw: {raw_score}, Normalized: {score}")
             else:
-                print(f"Could not parse score from response: {response}")
+                logger.warning(f"[{task_id}] ⚠️ Could not parse score from response. Snippet: {response[:200]}...")
+                try:
+                    fallback_matches = re.findall(r'\b(100|[1-9]?[0-9])\b', response)
+                    if fallback_matches:
+                        logger.warning(f"[{task_id}] (Fallback) Potential scores found: {fallback_matches}. Returning 0.0.")
+                except: pass
                 score = 0.0
         else:
-            print("No response from evaluation API")
+            logger.error(f"[{task_id}] ❌ No response content accumulated.")
             score = 0.0
 
         if not eject_llm_output:
             return score
         else:
-            return score,response
+            return score, response
 
 @grader_manager.reg("llm-binary-no-gt-no_constraint")
 class LlmAsJudgeBinaryRewardCalculatorNoGTNoConstraint(LlmAsJudgeBinaryRewardCalculatorNoGT):

@@ -38,6 +38,8 @@ class Task(BaseModel):
     # "env": 表示使用环境自带的评估函数（如代码执行结果、网页状态匹配）。
     # 其他值: 可能指向特定的 LLM 评分器或规则评分器。
     evaluator: str = Field(default="env")
+    
+    old_ground_truth: Optional[str] = Field(default=None, description="old ground truth")
 
 
 class TaskObjective(BaseModel):

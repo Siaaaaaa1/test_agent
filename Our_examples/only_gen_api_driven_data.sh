@@ -20,10 +20,10 @@ rm -rf /tmp/ray/* 2>/dev/null
 sleep 2
 
 # ---- 3. 网络配置 ----
-HOST_IP=$(hostname -I | awk '{print $1}')
+HOST_IP=$(hostname -I | tr ' ' '\n' | grep '^29\.' | head -n 1)
 export http_proxy=http://hk-mmhttpproxy.woa.com:11113
 export https_proxy=http://hk-mmhttpproxy.woa.com:11113
-export no_proxy="localhost,127.0.0.1,::1,0.0.0.0,29.209.112.175,$HOST_IP,.woa.com"
+export no_proxy="localhost,127.0.0.1,::1,0.0.0.0,$HOST_IP,.woa.com"
 
 export PYTHONUNBUFFERED=1
 export VLLM_ENFORCE_EAGER=True
@@ -138,7 +138,6 @@ python3 -m agentevolver.main_ppo \
     attribution_driven_credit_assignment.enable_hindsight=false \
     task_manager.n=32 \
     task_manager.mixture.synthetic_data_ratio=2.0 \
-    task_manager.generate_task_only=true \
     task_manager.mixture.use_original_tasks=False \
     task_manager.train_data_path=${PROJECT_ROOT}/tasks_explored/tasks_explored.train.json \
     task_manager.val_data_path=${PROJECT_ROOT}/tasks_explored/tasks_explored.val.json \
@@ -151,4 +150,5 @@ python3 -m agentevolver.main_ppo \
     task_manager.grader.synthetic_grader=api_process_llm_judge \
     task_manager.env_profile=${PROJECT_ROOT}/cookbook/env_profiles/appworld.json \
     thread_pool.max_workers=10 \
+    task_manager.generate_task_only=true \
     2>&1 | tee "$log_file"
