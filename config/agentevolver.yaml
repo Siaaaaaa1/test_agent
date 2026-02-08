@@ -2,9 +2,11 @@
 algorithm:
   adv_estimator: grpo
   use_kl_in_reward: false
-  weight_outcome: 1.0
-  weight_api: 0.5        # 根据需要调整过程奖励的重要性
-  weight_repetition: 1.0 # 保持为正数，因为内部数值已经是负数
+  w_outcome: 1.0
+  w_api: 0.5         # 对应代码中的 config.get("w_api")
+  norm_adv_by_std_in_grpo: true
+  # w_rep: 1.0         # 对应代码中的 config.get("w_rep")
+  # w_efficiency: 0.1 # 如果代码中取消注释了效率奖励，这里也要加上
 
 ray_init:
   num_cpus: null

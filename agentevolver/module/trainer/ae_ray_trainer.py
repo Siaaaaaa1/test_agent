@@ -1,3 +1,4 @@
+# agentevolver/module/trainer/ae_ray_trainer.py
 # Copyright 2024 Bytedance Ltd. and/or its affiliates
 # Modifications copyright 2025 Alibaba Tongyi EconML Lab. and/or its affiliates
 #
@@ -107,32 +108,32 @@ def compute_single_component_advantage(
 
     advantage_component = normalized_scores.unsqueeze(-1) * response_mask
     return advantage_component
-    
+
 def parse_reward_from_dataproto(data: DataProto, return_dict=False) -> dict | torch.Tensor:
     """
     [修改] 解析 DataProto，分离 Outcome, API, Repetition 和 Efficiency 为独立 Tensor。
+    关键变更：将 Step 级奖励（API, Repetition）填满整个 Step (Dense)，而非仅末尾 Token。
     """
     outcome_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
     api_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
     rep_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
-    eff_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32) # 新增效率Tensor
+    eff_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
     
     reward_extra_info = defaultdict(list)
     prompt_lengths = data.batch["prompts"].shape[-1]
     response_lengths = data.batch["attention_mask"][:, prompt_lengths:].sum(dim=1)
     step_ids = data.batch.get("step_ids", None)
 
-    # 1. 提取 Outcome (OutcomeScore)
-    reward_scores_obj = data.non_tensor_batch["reward_scores"] # List of dicts/Rewards
+    # 1. 提取 Outcome (OutcomeScore) - 序列末尾
+    reward_scores_obj = data.non_tensor_batch["reward_scores"] 
     outcome_list = [item["outcome"] for item in reward_scores_obj]
     outcome_tensor[torch.arange(len(data)), response_lengths - 1] = torch.tensor(outcome_list, dtype=torch.float32)
 
-    # 2. 提取 Efficiency (从 metadata 中读取)
-    # 注意：Efficiency 也是序列级奖励，放在最后一个 token
+    # 2. 提取 Efficiency (从 metadata 中读取) - 序列末尾
     eff_list = [item.get("metadata", {}).get("efficiency_score", 0.0) for item in reward_scores_obj]
     eff_tensor[torch.arange(len(data)), response_lengths - 1] = torch.tensor(eff_list, dtype=torch.float32)
 
-    # 3. 提取 API 和 Repetition (Step-wise)
+    # 3. 提取 API 和 Repetition (Step-wise Dense Filling)
     if step_ids is not None:
         batch_size, seq_len = step_ids.shape
         api_scores_batch = [item.get("step_api_rewards", []) for item in reward_scores_obj]
@@ -142,21 +143,27 @@ def parse_reward_from_dataproto(data: DataProto, return_dict=False) -> dict | to
             valid_steps = step_ids[b]
             cur_api = api_scores_batch[b]
             cur_rep = rep_scores_batch[b]
+            
+            # 遍历序列中的每一个 Token
             for t in range(seq_len):
                 if t >= response_lengths[b]: break
                 s_id = valid_steps[t].item()
+                
+                # 跳过非 Step 内容 (如 Think 标记或 System Prompt)
                 if s_id < 0: continue
-                is_last_token_of_step = (t == seq_len - 1) or \
-                                        (t + 1 < seq_len and step_ids[b, t+1].item() != s_id) or \
-                                        (t + 1 >= response_lengths[b])
-                if is_last_token_of_step:
-                    if s_id < len(cur_api): api_tensor[b, t] = cur_api[s_id]
-                    if s_id < len(cur_rep): rep_tensor[b, t] = cur_rep[s_id]
+                
+                # [修改点] 只要当前 Token 属于第 s_id 步，就赋予该步的奖励
+                # 这样 API 奖励在时间轴上是稠密的 (Dense)，覆盖整个 Action 生成过程
+                if s_id < len(cur_api): 
+                    api_tensor[b, t] = cur_api[s_id]
+                
+                if s_id < len(cur_rep): 
+                    rep_tensor[b, t] = cur_rep[s_id]
 
     data.batch["outcome_reward_tensor"] = outcome_tensor
     data.batch["api_reward_tensor"] = api_tensor
     data.batch["rep_reward_tensor"] = rep_tensor
-    data.batch["eff_reward_tensor"] = eff_tensor # 存入 batch
+    data.batch["eff_reward_tensor"] = eff_tensor 
 
     # 总奖励 (Log用)
     total_reward_tensor = outcome_tensor + api_tensor + rep_tensor + eff_tensor
@@ -224,24 +231,6 @@ def compute_grpo_outcome_advantage(
     """
     计算 GRPO (Group Relative Policy Optimization) 的优势函数 (Advantage)。
     仅针对 Outcome Reward（结果奖励）进行操作，即每个响应只有一个标量奖励。
-
-    Args:
-        token_level_rewards: `(torch.Tensor)`
-            形状为 (bs, response_length)，包含 Token 级别的奖励。
-        response_mask: `(torch.Tensor)`
-            形状为 (bs, response_length)，响应掩码。
-        index: `(np.ndarray)`
-            组索引 (Group Index)，通常对应 prompt_id 或 uid，用于标识哪些样本属于同一个组。
-        epsilon: (float)
-            防止除零的小数值。
-        norm_adv_by_std_in_grpo: (bool)
-            是否对 GRPO 优势进行缩放。
-            如果为 True，优势会除以组内标准差 (std)，如原始 GRPO 论文所述。
-            如果为 False，不进行缩放，类似于 Dr.GRPO。
-
-    Returns:
-        advantages: `(torch.Tensor)` 形状 (bs, response_length)
-        returns: `(torch.Tensor)` 形状 (bs, response_length)
     """
     # 将 Token 级别的奖励求和得到总分数 (因为是 Outcome Reward)
     scores = token_level_rewards.sum(dim=-1)
@@ -286,21 +275,17 @@ def compute_grpo_outcome_advantage(
     return scores, scores
 
 
-
 def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_repeat=1, multi_turn=False, norm_adv_by_std_in_grpo=True, config=None):
     """
     计算策略优化的优势估计 (Advantage Estimates)。
-    [修改版] 针对 GRPO 实现了多路奖励的分别归一化与加权融合。
+    [修改版] 实现“动态锚定 API 奖励 + GRPO Outcome 归一化”策略。
     """
-    # 向后兼容：如果 fit 中未计算 response_mask，则在此处计算
     if "response_mask" not in data.batch.keys():
         data.batch["response_mask"] = compute_response_mask(data)
     
-    # 准备响应组
     if adv_estimator == AdvantageEstimator.GAE:
-        # GAE 逻辑保持不变，通常只使用 total_reward_tensor
         advantages, returns = core_algos.compute_gae_advantage_return(
-            token_level_rewards=data.batch["token_level_rewards"], # 这是 parse_reward 返回的总和
+            token_level_rewards=data.batch["token_level_rewards"],
             values=data.batch["values"],
             response_mask=data.batch["response_mask"],
             gamma=gamma,
@@ -309,7 +294,7 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
         data.batch["advantages"] = advantages
         data.batch["returns"] = returns
         if config.get("use_pf_ppo", False):
-            data = core_algos.compute_pf_ppo_reweight_data(
+             data = core_algos.compute_pf_ppo_reweight_data(
                 data,
                 config.get("pf_ppo_reweight_method", "pow"),
                 config.get("pf_ppo_weight_pow", 2.0),
@@ -324,37 +309,85 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
             grpo_mask = data.batch["response_mask"]
         uid_index = data.non_tensor_batch["uid"]
         
-        # 2. 读取权重 (建议在 config.algorithm 中配置，这里给默认值)
+        # 2. 读取权重
         w_outcome = config.get("w_outcome", 1.0)
-        w_efficiency = config.get("w_efficiency", 0.1) # 效率权重
-        w_api = config.get("w_api", 0.1)
-        w_rep = config.get("w_rep", 1.0) # 复读惩罚权重 (保持原数值大小影响力)
+        w_efficiency = config.get("w_efficiency", 0.1)
+        # w_api 建议设为 1.0，因为我们在内部动态计算 Scaling
+        w_api = config.get("w_api", 1.0) 
+        w_rep = config.get("w_rep", 1.0)
 
-        # 3. 计算各部分解耦优势
+        # =================================================================
+        # 3. [关键修改] 计算各部分解耦优势 (Decoupled Advantage)
+        # =================================================================
         
-        # A. Outcome
+        # A. Outcome (基准层: 标准 GRPO 归一化)
+        # 强制 norm_adv_by_std_in_grpo=True，使 adv_out ~ N(0, 1)
         adv_out = compute_single_component_advantage(
             data.batch.get("outcome_reward_tensor", data.batch["token_level_rewards"]),
-            grpo_mask, uid_index, norm_adv_by_std_in_grpo
+            grpo_mask, uid_index, norm_by_std=True
         )
         
-        # B. Efficiency (读取上面 parse 出来的 tensor)
-        adv_eff = compute_single_component_advantage(
-            data.batch.get("eff_reward_tensor", torch.zeros_like(data.batch["responses"])),
-            grpo_mask, uid_index, norm_adv_by_std_in_grpo
-        )
+        # B. Efficiency (标准 GRPO)
+        # [注释掉 Efficiency]
+        # adv_eff = compute_single_component_advantage(
+        #     data.batch.get("eff_reward_tensor", torch.zeros_like(data.batch["responses"])),
+        #     grpo_mask, uid_index, norm_by_std=True
+        # )
+        adv_eff = 0.0
         
-        # C. API
-        adv_api = compute_single_component_advantage(
-            data.batch.get("api_reward_tensor", torch.zeros_like(data.batch["responses"])),
-            grpo_mask, uid_index, norm_adv_by_std_in_grpo
-        ) if "api_reward_tensor" in data.batch else 0.0
+        # C. API (激励层: 动态锚定 + 绝对值叠加)
+        if "api_reward_tensor" in data.batch:
+            raw_api_reward = data.batch["api_reward_tensor"] # (BS, T) From parse_reward
+            
+            # --- 动态系数计算开始 ---
+            outcome_scores = data.batch.get("outcome_reward_tensor", data.batch["token_level_rewards"]).sum(dim=-1)
+            scale_tensor = torch.zeros_like(outcome_scores)
+            
+            uid2indices = defaultdict(list)
+            for i, uid in enumerate(uid_index):
+                uid2indices[uid].append(i)
+                
+            with torch.no_grad():
+                for uid, indices in uid2indices.items():
+                    indices_tensor = torch.tensor(indices, device=outcome_scores.device)
+                    grp_raw_scores = outcome_scores[indices_tensor]
+                    
+                    if len(indices) > 1:
+                        std = torch.std(grp_raw_scores)
+                        raw_range = torch.max(grp_raw_scores) - torch.min(grp_raw_scores)
+                        
+                        # 计算归一化后的极差: Norm_Range = Raw_Range / Std
+                        if std > 0:
+                            norm_range = raw_range / std
+                        else:
+                            norm_range = torch.tensor(0.0, device=std.device)
+                    else:
+                        norm_range = torch.tensor(0.0, device=outcome_scores.device)
+
+                    # [策略]: API Bonus = 10% * Outcome极差 + 0.1 保底
+                    lambda_coef = 0.1 
+                    epsilon = 0.1
+                    final_bonus = lambda_coef * norm_range + epsilon
+                    
+                    scale_tensor[indices_tensor] = final_bonus
+            # --- 动态系数计算结束 ---
+
+            # 广播系数到 (BS, T)
+            api_scale_broadcast = scale_tensor.unsqueeze(-1)
+            
+            # [核心]: 绝对值叠加 (不减均值)
+            # adv_api = Mask * Raw_Reward * Dynamic_Scale
+            adv_api = raw_api_reward * api_scale_broadcast * grpo_mask
+            
+        else:
+            adv_api = 0.0
         
-        # D. Repetition
-        adv_rep = compute_single_component_advantage(
-            data.batch.get("rep_reward_tensor", torch.zeros_like(data.batch["responses"])),
-            grpo_mask, uid_index, norm_adv_by_std_in_grpo
-        ) if "rep_reward_tensor" in data.batch else 0.0
+        # D. Repetition (简单绝对值或 GRPO，视偏好而定，这里保持原样用 GRPO)
+        # adv_rep = compute_single_component_advantage(
+        #     data.batch.get("rep_reward_tensor", torch.zeros_like(data.batch["responses"])),
+        #     grpo_mask, uid_index, norm_by_std=True
+        # ) if "rep_reward_tensor" in data.batch else 0.0
+        adv_rep = 0.0
 
         # 4. 加权求和
         final_advantages = (w_outcome * adv_out) + (w_efficiency * adv_eff) + \
@@ -362,7 +395,7 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
 
         data.batch["advantages"] = final_advantages
         
-        # Returns 用于 Critic (直接加和原始值)
+        # Returns 用于 Critic
         total_returns = data.batch.get("outcome_reward_tensor", 0) + \
                         data.batch.get("eff_reward_tensor", 0) + \
                         data.batch.get("api_reward_tensor", 0) + \
@@ -370,7 +403,7 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
         data.batch["returns"] = total_returns
         
     else:
-        # 处理其他 Estimator (REMAX, etc.) - 保持原样，或根据需要修改
+        # ... (其他 Estimator 处理保持不变) ...
         adv_estimator_fn = core_algos.get_adv_estimator_fn(adv_estimator)
         adv_kwargs = {
             "token_level_rewards": data.batch["token_level_rewards"],
@@ -541,7 +574,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
         if self.use_reference_policy:
             resource_pool = self.resource_pool_manager.get_resource_pool(Role.RefPolicy)
             ref_policy_cls = RayClassWithInitArgs(self.role_worker_mapping[Role.RefPolicy],
-                                                  config=self.config.actor_rollout_ref, role="ref")
+                                                                        config=self.config.actor_rollout_ref, role="ref")
             self.resource_pool_to_cls[resource_pool]["ref"] = ref_policy_cls
 
         # 创建 Reward Model (如果 reward_fn 为 None)
