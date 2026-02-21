@@ -1,4 +1,3 @@
-# agentevolver/module/trainer/ae_ray_trainer.py
 # Copyright 2024 Bytedance Ltd. and/or its affiliates
 # Modifications copyright 2025 Alibaba Tongyi EconML Lab. and/or its affiliates
 #
@@ -69,103 +68,323 @@ from agentevolver.module.adv_processor.adca_grpo_pipeline import apply_adca_grpo
 
 from agentevolver.module.exp_manager.exp_manager import ExperienceManager
 
+# =============================================================================
+# [新增] Debug 日志工具函数
+# =============================================================================
+import os
+import time
+
+DEBUG_BASE_DIR = "/mnt/cephfs/haowengao/test_agent/GEN_NEW_DATA"
+try:
+    os.makedirs(DEBUG_BASE_DIR, exist_ok=True)
+except Exception as e:
+    print(f"[Warning] Failed to create debug dir {DEBUG_BASE_DIR}: {e}")
+
+# 创建唯一的日志文件名 (带时间戳)
+DEBUG_LOG_FILE = os.path.join(DEBUG_BASE_DIR, f"debug_adv_calc.log")
+
+def get_token_context_string(tokenizer, input_ids_tensor, batch_idx, token_idx, window=10):
+    """
+    提取指定 Token 前后 window 范围内的文本，并将中心 Token 高亮。
+    支持完整 input_ids 维度的绝对索引。
+    """
+    if input_ids_tensor is None or tokenizer is None:
+        return ""
+    
+    seq_len = input_ids_tensor.size(1)
+    start_idx = max(0, token_idx - window)
+    end_idx = min(seq_len, token_idx + window + 1)
+    
+    context_str = ""
+    for i in range(start_idx, end_idx):
+        token_id = input_ids_tensor[batch_idx, i].item()
+        
+        # 防御性编程：防止传入 -100 等忽略标签导致 decode 崩溃
+        if token_id < 0:
+            token_text = f"<unk_{token_id}>"
+        else:
+            token_text = tokenizer.decode([token_id]) if tokenizer else str(token_id)
+        
+        if i == token_idx:
+            context_str += f"【{token_text}】"  # 高亮目标 Token
+        else:
+            context_str += token_text
+            
+    return repr(context_str) # 使用 repr 使得 \n 等转义字符可视化
+
+def write_debug_log(msg):
+    """
+    将调试信息追加写入到指定文件中。
+    """
+    try:
+        with open(DEBUG_LOG_FILE, "a", encoding="utf-8") as f:
+            timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+            f.write(f"[{timestamp}] {msg}\n")
+    except Exception as e:
+        print(f"[LOG ERROR] Failed to write to {DEBUG_LOG_FILE}: {e}")
+        print(msg)
+
 def compute_single_component_advantage(
     token_level_rewards: torch.Tensor, 
+    response_mask: torch.Tensor, 
+    uid_index: np.ndarray, 
+    norm_by_std: bool = True, 
+    epsilon: float = 1e-8,
+    mode: str = "sparse",
+    tokenizer = None,          
+    input_ids = None,          
+    component_name: str = "Unknown" 
+):
+    # 【修改】：强制 100% 打印，不再随机抽样
+    do_debug_print = True
+    
+    if mode == "dense":
+        advantage_component = token_level_rewards * response_mask
+        
+        if do_debug_print and input_ids is not None:
+            bsz = token_level_rewards.shape[0]
+            log_lines = [] 
+            
+            # 【修改】：不再只取第一条 (min(1, bsz))，而是遍历整个 Batch 所有的轨迹
+            for i in range(bsz):
+                valid_indices = torch.nonzero(response_mask[i]).squeeze(-1)
+                for orig_token_idx in valid_indices:
+                    rew = token_level_rewards[i, orig_token_idx].item()
+                    # 只要奖励不为0，就记录下来
+                    if rew != 0.0:
+                        context_str = get_token_context_string(tokenizer, input_ids, i, orig_token_idx.item(), window=10)
+                        log_lines.append(f"    [Traj {i:2d}] Abs_Token_Idx [{orig_token_idx.item():4d}] | Reward: {rew:8.4f} | Context: {context_str}")
+            
+            # 打印该 Component 的所有非0奖励
+            if log_lines:
+                write_debug_log(f"\n>>> [Advantage Logic - Micro] {component_name} (Dense Mode) ALL Non-zero assignments in Batch:")
+                for line in log_lines:
+                    write_debug_log(line)
+            else:
+                write_debug_log(f"\n>>> [Advantage Logic - Micro] {component_name} (Dense Mode): All rewards are 0.0 for ALL trajectories in this Batch.")
+                        
+        return advantage_component
+
+    elif mode == "sparse":
+        scores = token_level_rewards.sum(dim=-1) 
+        id2score = defaultdict(list)
+        id2mean, id2std = {}, {}
+        bsz = scores.shape[0]
+        
+        for i in range(bsz):
+            id2score[uid_index[i]].append(scores[i])
+
+        for idx in id2score:
+            vals = torch.stack([x if isinstance(x, torch.Tensor) else torch.tensor(x) for x in id2score[idx]]).float()
+            if len(vals) > 1:
+                id2mean[idx] = torch.mean(vals)
+                id2std[idx] = torch.std(vals) + epsilon
+            else:
+                id2mean[idx] = vals[0]
+                id2std[idx] = torch.tensor(1.0, device=vals.device)
+
+        normalized_scores = torch.zeros_like(scores)
+        for i in range(bsz):
+            mean = id2mean[uid_index[i]].to(scores.device)
+            std = id2std[uid_index[i]].to(scores.device)
+            if norm_by_std:
+                normalized_scores[i] = (scores[i] - mean) / std
+            else:
+                normalized_scores[i] = scores[i] - mean
+
+        advantage_component = normalized_scores.unsqueeze(-1) * response_mask
+        return advantage_component
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
+
+def compute_outcome_advantage_dual_strategy(
+    token_level_rewards: torch.Tensor,
     response_mask: torch.Tensor,
     uid_index: np.ndarray,
-    norm_by_std: bool = True,
-    epsilon: float = 1e-8
+    gamma: float = 1.0,
+    strategy: str = "normalize_then_decay", 
+    epsilon: float = 1e-8,
+    norm_adv_by_std: bool = True,
+    tokenizer = None,       
+    input_ids = None,       
+    step_ids = None,        
+    step_info: str = ""     
 ):
-    """
-    [新增] 通用组件：计算单一种类奖励的 GRPO Advantage。
-    """
-    scores = token_level_rewards.sum(dim=-1) 
-    id2score = defaultdict(list)
-    id2mean = {}
-    id2std = {}
-    bsz = scores.shape[0]
+    raw_scores = token_level_rewards.sum(dim=-1) 
+    lengths = response_mask.sum(dim=-1)
+    bsz = raw_scores.shape[0]
     
+    id2data = defaultdict(list)
     for i in range(bsz):
-        id2score[uid_index[i]].append(scores[i])
+        id2data[uid_index[i]].append((raw_scores[i], lengths[i], i))
 
-    for idx in id2score:
-        vals = torch.stack([x if isinstance(x, torch.Tensor) else torch.tensor(x) for x in id2score[idx]]).float()
-        if len(vals) > 1:
-            id2mean[idx] = torch.mean(vals)
-            id2std[idx] = torch.std(vals) + epsilon
+    dense_advantages = torch.zeros_like(token_level_rewards)
+
+    do_debug_print = True 
+    printed_group = False 
+
+    if do_debug_print:
+        write_debug_log(f"\n=========================================================")
+        write_debug_log(f">>> [Advantage Logic] {step_info} | Strategy: {strategy} | Gamma: {gamma} (Step-level Decay)")
+
+    for uid, group_items in id2data.items():
+        g_scores = torch.stack([x[0] for x in group_items])
+        g_lens = torch.stack([x[1] for x in group_items])
+        g_idxs = [x[2] for x in group_items]
+        
+        if do_debug_print: 
+            write_debug_log(f"\n  [Macro Log] Group UID: {uid} (Group Size: {len(g_scores)}):")
+            write_debug_log(f"    - Raw Scores: {g_scores.tolist()}")
+            write_debug_log(f"    - Valid Token Lengths: {g_lens.tolist()}")
+
+        if strategy == "normalize_then_decay":
+            g_mean = g_scores.mean()
+            g_std = g_scores.std()
+            if g_std < epsilon:
+                g_adv = torch.zeros_like(g_scores)
+            else:
+                g_adv = (g_scores - g_mean) / (g_std + epsilon) if norm_adv_by_std else (g_scores - g_mean)
+            
+            if do_debug_print:
+                write_debug_log(f"    - Outcome Mean: {g_mean.item():.4f}, Std: {g_std.item():.4f}")
+                write_debug_log(f"    - Base Group Adv (Before Decay): {g_adv.tolist()}")
+                
+        elif strategy == "strict_consistency":
+            discounted_returns = g_scores * (gamma ** g_lens)
+            g_mean = discounted_returns.mean()
+            g_std = discounted_returns.std() + epsilon
+            g_adv = (discounted_returns - g_mean) / g_std if norm_adv_by_std else (discounted_returns - g_mean)
         else:
-            id2mean[idx] = vals[0]
-            id2std[idx] = torch.tensor(1.0, device=vals.device)
+            discounted_returns = g_scores * (gamma ** g_lens)
+            g_std = discounted_returns.std()
+            if g_std < epsilon:
+                g_adv = torch.zeros_like(g_scores)
+            else:
+                g_mean = discounted_returns.mean()
+                g_adv = (discounted_returns - g_mean) / (g_std + epsilon) if norm_adv_by_std else (discounted_returns - g_mean)
 
-    normalized_scores = torch.zeros_like(scores)
-    for i in range(bsz):
-        mean = id2mean[uid_index[i]].to(scores.device)
-        std = id2std[uid_index[i]].to(scores.device)
-        if norm_by_std:
-            normalized_scores[i] = (scores[i] - mean) / std
-        else:
-            normalized_scores[i] = scores[i] - mean
+        # === 回填到 Token (按 Step 向后衰减) ===
+        for local_i, global_idx in enumerate(g_idxs):
+            adv_scalar = g_adv[local_i]
+            current_mask = response_mask[global_idx]
+            valid_indices = torch.nonzero(current_mask).squeeze(-1)
+            
+            if valid_indices.numel() == 0:
+                continue
+                
+            num_valid = valid_indices.numel()
+            
+            # [核心机制修改]：获取 Step IDs，计算按步数的距离
+            if step_ids is not None:
+                # 【终极防崩网】：强制限制 valid_indices 最大值，防止任何维度的 off-by-one 越界
+                safe_valid_indices = torch.clamp(valid_indices, max=step_ids.size(1) - 1)
+                traj_step_ids = step_ids[global_idx, safe_valid_indices]
+                
+                max_step = traj_step_ids.max()
+                dist_to_end = max_step - traj_step_ids
+                dist_to_end = torch.clamp(dist_to_end, min=0).float()
+            else:
+                dist_to_end = torch.zeros(num_valid, device=raw_scores.device)
+                
+            token_advs = adv_scalar * (gamma ** dist_to_end)
+            dense_advantages[global_idx, valid_indices] = token_advs
 
-    advantage_component = normalized_scores.unsqueeze(-1) * response_mask
-    return advantage_component
+            # [Micro Log]
+            if do_debug_print and input_ids is not None:
+                write_debug_log(f"\n  [Micro Log] Trajectory Index {global_idx} Token-level Decay Assignment:")
+                write_debug_log(f"    Base Advantage (Scalar): {adv_scalar.item():.4f}")
+                
+                for step_idx, orig_token_idx in enumerate(valid_indices):
+                    if num_valid > 20 and (5 <= step_idx < num_valid - 5):
+                        if step_idx == 6:
+                            write_debug_log("      ... (middle tokens skipped in log) ...")
+                        continue
+                    
+                    context_str = get_token_context_string(tokenizer, input_ids, global_idx, orig_token_idx.item(), window=10)
+                    cur_dist = dist_to_end[step_idx].item()
+                    adv_val = token_advs[step_idx].item()
+                    cur_step_id = traj_step_ids[step_idx].item() if step_ids is not None else 0
+                    
+                    write_debug_log(f"      Step_ID: {cur_step_id:3d} | Step_Dist: {int(cur_dist):3d} | Adv: {adv_val:8.4f} | Context: {context_str}")
+
+    return dense_advantages
+
 
 def parse_reward_from_dataproto(data: DataProto, return_dict=False) -> dict | torch.Tensor:
     """
-    [修改] 解析 DataProto，分离 Outcome, API, Repetition 和 Efficiency 为独立 Tensor。
-    关键变更：将 Step 级奖励（API, Repetition）填满整个 Step (Dense)，而非仅末尾 Token。
+    [安全版] 解析 DataProto，分离各项奖励。增加了越界防护。
     """
-    outcome_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
-    api_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
-    rep_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
-    eff_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
+    device = data.batch["input_ids"].device
+    full_seq_shape_tensor = data.batch["input_ids"]
+    
+    outcome_tensor = torch.zeros_like(full_seq_shape_tensor, dtype=torch.float32, device=device)
+    api_tensor = torch.zeros_like(full_seq_shape_tensor, dtype=torch.float32, device=device)
+    rep_tensor = torch.zeros_like(full_seq_shape_tensor, dtype=torch.float32, device=device)
+    eff_tensor = torch.zeros_like(full_seq_shape_tensor, dtype=torch.float32, device=device)
     
     reward_extra_info = defaultdict(list)
     prompt_lengths = data.batch["prompts"].shape[-1]
-    response_lengths = data.batch["attention_mask"][:, prompt_lengths:].sum(dim=1)
+    
+    response_mask = data.batch["attention_mask"][:, prompt_lengths:]
+    response_lengths = response_mask.sum(dim=1)
     step_ids = data.batch.get("step_ids", None)
 
-    # 1. 提取 Outcome (OutcomeScore) - 序列末尾
-    reward_scores_obj = data.non_tensor_batch["reward_scores"] 
+    # --- [越界防护] 过滤长度为0的无效样本 ---
+    valid_response_mask = (response_lengths > 0)
+    
+    last_token_indices = prompt_lengths + response_lengths - 1
+    max_len = full_seq_shape_tensor.shape[1]
+    last_token_indices = torch.clamp(last_token_indices, max=max_len - 1)
+
+    batch_indices = torch.arange(len(data), device=device)
+
+    reward_scores_obj = data.non_tensor_batch["reward_scores"]
     outcome_list = [item["outcome"] for item in reward_scores_obj]
-    outcome_tensor[torch.arange(len(data)), response_lengths - 1] = torch.tensor(outcome_list, dtype=torch.float32)
+    
+    if valid_response_mask.any():
+        valid_batch_idxs = batch_indices[valid_response_mask]
+        valid_token_idxs = last_token_indices[valid_response_mask]
+        valid_outcome_vals = torch.tensor(outcome_list, dtype=torch.float32, device=device)[valid_response_mask]
+        outcome_tensor[valid_batch_idxs, valid_token_idxs] = valid_outcome_vals
 
-    # 2. 提取 Efficiency (从 metadata 中读取) - 序列末尾
     eff_list = [item.get("metadata", {}).get("efficiency_score", 0.0) for item in reward_scores_obj]
-    eff_tensor[torch.arange(len(data)), response_lengths - 1] = torch.tensor(eff_list, dtype=torch.float32)
+    if valid_response_mask.any():
+        valid_eff_vals = torch.tensor(eff_list, dtype=torch.float32, device=device)[valid_response_mask]
+        eff_tensor[valid_batch_idxs, valid_token_idxs] = valid_eff_vals
 
-    # 3. 提取 API 和 Repetition (Step-wise Dense Filling)
     if step_ids is not None:
-        batch_size, seq_len = step_ids.shape
+        batch_size, seq_len = step_ids.shape 
         api_scores_batch = [item.get("step_api_rewards", []) for item in reward_scores_obj]
         rep_scores_batch = [item.get("step_repetition_rewards", []) for item in reward_scores_obj]
 
         for b in range(batch_size):
+            if not valid_response_mask[b]: continue 
+
             valid_steps = step_ids[b]
             cur_api = api_scores_batch[b]
             cur_rep = rep_scores_batch[b]
             
-            # 遍历序列中的每一个 Token
             for t in range(seq_len):
                 if t >= response_lengths[b]: break
                 s_id = valid_steps[t].item()
-                
-                # 跳过非 Step 内容 (如 Think 标记或 System Prompt)
                 if s_id < 0: continue
                 
-                # [修改点] 只要当前 Token 属于第 s_id 步，就赋予该步的奖励
-                # 这样 API 奖励在时间轴上是稠密的 (Dense)，覆盖整个 Action 生成过程
-                if s_id < len(cur_api): 
-                    api_tensor[b, t] = cur_api[s_id]
+                is_last_token_of_step = (t == seq_len - 1) or \
+                                        (t + 1 < seq_len and step_ids[b, t+1].item() != s_id) or \
+                                        (t + 1 >= response_lengths[b])
                 
-                if s_id < len(cur_rep): 
-                    rep_tensor[b, t] = cur_rep[s_id]
+                if is_last_token_of_step:
+                    write_pos = prompt_lengths + t
+                    if write_pos < max_len:
+                        if s_id < len(cur_api): 
+                            api_tensor[b, write_pos] = cur_api[s_id]
+                        if s_id < len(cur_rep): 
+                            rep_tensor[b, write_pos] = cur_rep[s_id]
 
     data.batch["outcome_reward_tensor"] = outcome_tensor
     data.batch["api_reward_tensor"] = api_tensor
     data.batch["rep_reward_tensor"] = rep_tensor
-    data.batch["eff_reward_tensor"] = eff_tensor 
-
-    # 总奖励 (Log用)
+    data.batch["eff_reward_tensor"] = eff_tensor
     total_reward_tensor = outcome_tensor + api_tensor + rep_tensor + eff_tensor
 
     if return_dict:
@@ -173,21 +392,18 @@ def parse_reward_from_dataproto(data: DataProto, return_dict=False) -> dict | to
     else:
         return total_reward_tensor
 
+
+# =============================================================================
+# [缺失补充] 辅助函数 (请确保它们在 class AgentEvolverRayPPOTrainer 之前定义)
+# =============================================================================
+
 def create_rl_sampler(data_config, dataset):
     """
     为数据集创建采样器。
-
-    Arguments:
-        data_config: 数据配置对象，包含是否打乱 (shuffle) 和种子 (seed) 等设置。
-        dataset (Dataset): 数据集对象。
-
-    Returns:
-        sampler (Sampler): 创建的采样器。
     """
     import torch
     from torch.utils.data import RandomSampler, SequentialSampler
 
-    # 使用采样器以便更好地进行断点续训 (Checkpoint Resume)
     if data_config.shuffle:
         train_dataloader_generator = torch.Generator()
         train_dataloader_generator.manual_seed(data_config.get("seed", 1))
@@ -199,26 +415,61 @@ def create_rl_sampler(data_config, dataset):
 
 def union_gen_batch_via_task_id(tasks, batch: DataProto, gen_batch_output: DataProto):
     """
-    基于 `task_id` 将生成批次输出 (`gen_batch_output`) 与原始批次 (`batch`) 合并。
-    这通常用于将 Rollout 产生的新轨迹与原始的任务描述（Prompt）对齐。
-
-    Args:
-        tasks (list): 任务对象列表，每个对象包含一个 `task_id`。
-        batch (DataProto): 原始数据批次。
-        gen_batch_output (DataProto): 需要合并的生成批次输出。
-
-    Returns:
-        DataProto: 最终合并后的批次。
+    [终极修复版] 彻底放弃不唯一的 task_id 对齐！
+    利用框架原生的 group_ids 或真实 Prompt Token 指纹进行 100% 绝对安全的对齐。
     """
-    map_task_id_to_index = {t.task_id:i for i, t in enumerate(tasks)}  # ⭐ 创建 task_id 到任务索引的映射
-    gen_task_task_ids = gen_batch_output.non_tensor_batch['task_ids']
-    # 找到生成数据对应的原始任务索引
-    indices = [map_task_id_to_index[tid] for tid in gen_task_task_ids]
-    # 从原始批次中选出对应的数据
+    from collections import defaultdict
+    import torch
+    
+    # =========================================================================
+    # 方案 1：最优解 - 使用框架原生专用的 group_ids (最安全、最精准)
+    # group_ids 记录了每一条生成轨迹对应的原始 batch 索引，完美解决同 task_id 冲突
+    # =========================================================================
+    if 'group_ids' in gen_batch_output.batch:
+        group_ids = gen_batch_output.batch['group_ids']
+        # 展平 tensor
+        if group_ids.dim() > 1:
+            group_ids = group_ids.squeeze(-1)
+        group_ids_list = group_ids.tolist()
+        
+        # 严谨的防崩校验：确保索引列表长度对得上，且最大索引不越界
+        if isinstance(group_ids_list, list) and len(group_ids_list) == len(gen_batch_output) and max(group_ids_list) < len(batch):
+            logger.info(f"✅ Successfully aligned {len(gen_batch_output)} trajectories using native 'group_ids'.")
+            batch_extend = batch.select_idxs(group_ids_list)
+            return batch_extend.union(gen_batch_output)
+
+    # =========================================================================
+    # 方案 2：备用解 - 如果 group_ids 缺失，则使用 Prompt Token 内容作为指纹
+    # 因为不同 Prompt 的 token ID 序列是绝对不一样的，借此完美区分不同的 prompt
+    # =========================================================================
+    logger.warning("⚠️ Native 'group_ids' not found or invalid. Falling back to Token-based fingerprint matching.")
+    prompt_to_batch_idx = defaultdict(list)
+    
+    # 提取输入 Batch 的 Prompt 指纹
+    for i in range(len(batch)):
+        p_tensor = batch.batch['prompts'][i]
+        # 过滤掉常见的 pad / 特殊 token (比如 0, 1, 2)，保留核心文字作为指纹
+        core_tokens = tuple(tok for tok in p_tensor.tolist() if tok > 10)
+        prompt_to_batch_idx[core_tokens].append(i)
+        
+    indices = []
+    # 根据生成的输出去找对应的原始 Prompt
+    for j in range(len(gen_batch_output)):
+        p_tensor = gen_batch_output.batch['prompts'][j]
+        core_tokens = tuple(tok for tok in p_tensor.tolist() if tok > 10)
+        
+        if core_tokens in prompt_to_batch_idx and len(prompt_to_batch_idx[core_tokens]) > 0:
+            # 如果存在完全一模一样的 Prompt (指纹 100% 相同)，
+            # 它们在数学上等效，统一指向第一个索引即可
+            idx = prompt_to_batch_idx[core_tokens][0]
+            indices.append(idx)
+        else:
+            error_msg = f"[CRITICAL ERROR] Generated trajectory {j} cannot find its original prompt fingerprint!"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+            
     batch_extend = batch.select_idxs(indices)
-    # 将选出的原始数据与生成的数据合并
-    batch_final = batch_extend.union(gen_batch_output)  # ⭐ 合并数据
-    return batch_final
+    return batch_extend.union(gen_batch_output)
 
 
 def compute_grpo_outcome_advantage(
@@ -231,6 +482,24 @@ def compute_grpo_outcome_advantage(
     """
     计算 GRPO (Group Relative Policy Optimization) 的优势函数 (Advantage)。
     仅针对 Outcome Reward（结果奖励）进行操作，即每个响应只有一个标量奖励。
+
+    Args:
+        token_level_rewards: `(torch.Tensor)`
+            形状为 (bs, response_length)，包含 Token 级别的奖励。
+        response_mask: `(torch.Tensor)`
+            形状为 (bs, response_length)，响应掩码。
+        index: `(np.ndarray)`
+            组索引 (Group Index)，通常对应 prompt_id 或 uid，用于标识哪些样本属于同一个组。
+        epsilon: (float)
+            防止除零的小数值。
+        norm_adv_by_std_in_grpo: (bool)
+            是否对 GRPO 优势进行缩放。
+            如果为 True，优势会除以组内标准差 (std)，如原始 GRPO 论文所述。
+            如果为 False，不进行缩放，类似于 Dr.GRPO。
+
+    Returns:
+        advantages: `(torch.Tensor)` 形状 (bs, response_length)
+        returns: `(torch.Tensor)` 形状 (bs, response_length)
     """
     # 将 Token 级别的奖励求和得到总分数 (因为是 Outcome Reward)
     scores = token_level_rewards.sum(dim=-1)
@@ -255,8 +524,9 @@ def compute_grpo_outcome_advantage(
                 id2mean[idx] = torch.tensor(0.0)
                 id2std[idx] = torch.tensor(1.0) # 防止除以0
             elif len(id2score[idx]) > 1:
-                id2mean[idx] = torch.mean(torch.tensor(id2score[idx]))
-                id2std[idx] = torch.std(torch.tensor([id2score[idx]]))
+                stacked_scores = torch.stack(id2score[idx])
+                id2mean[idx] = torch.mean(stacked_scores)
+                id2std[idx] = torch.std(stacked_scores)
             else:
                 raise ValueError(f"no score in prompt index: {idx}")
         
@@ -274,16 +544,153 @@ def compute_grpo_outcome_advantage(
 
     return scores, scores
 
+# def compute_outcome_advantage_dual_strategy(
+#     token_level_rewards: torch.Tensor,
+#     response_mask: torch.Tensor,
+#     uid_index: np.ndarray,
+#     gamma: float = 1.0,
+#     strategy: str = "discount_first", 
+#     epsilon: float = 1e-8,
+#     norm_adv_by_std: bool = True
+# ):
+#     """
+#     [新增 + FileLog] 专门处理 Outcome Stream 的双策略优势计算函数。
+#     """
+#     raw_scores = token_level_rewards.sum(dim=-1) 
+#     lengths = response_mask.sum(dim=-1)
+#     bsz = raw_scores.shape[0]
+    
+#     id2data = defaultdict(list)
+#     for i in range(bsz):
+#         id2data[uid_index[i]].append((raw_scores[i], lengths[i], i))
 
-def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_repeat=1, multi_turn=False, norm_adv_by_std_in_grpo=True, config=None):
+#     final_advantages = torch.zeros_like(raw_scores)
+
+#     # --- Debug Logic ---
+#     # 使用随机采样来决定是否打印日志，避免文件变得太大 (例如 5% 概率)
+#     # 或者你可以设置一个全局计数器
+#     do_debug_print = (torch.rand(1).item() < 0.05) 
+#     printed_group = False 
+
+#     if do_debug_print:
+#         write_debug_log(f"\n>>> [Advantage Logic] Strategy: {strategy}, Gamma: {gamma}")
+
+#     for uid, group_items in id2data.items():
+#         g_scores = torch.stack([x[0] for x in group_items])
+#         g_lens = torch.stack([x[1] for x in group_items])
+#         g_idxs = [x[2] for x in group_items]
+        
+#         # Debug: 打印第一个 Group 的信息
+#         if do_debug_print and not printed_group:
+#             write_debug_log(f"[Advantage Logic] Group {uid} (Size {len(g_scores)}):")
+#             write_debug_log(f"  - Raw Scores: {g_scores.tolist()}")
+#             write_debug_log(f"  - Lengths:    {g_lens.tolist()}")
+
+#         if strategy == "strict_consistency":
+#             if torch.std(g_scores) < epsilon:
+#                 if do_debug_print and not printed_group: 
+#                     write_debug_log(f"  - Action: Variance is 0. All advantages set to 0.0")
+#                 for idx in g_idxs:
+#                     final_advantages[idx] = 0.0
+#             else:
+#                 discounted_returns = g_scores * (gamma ** g_lens)
+#                 g_mean = discounted_returns.mean()
+#                 g_std = discounted_returns.std() + epsilon
+                
+#                 if norm_adv_by_std:
+#                     g_adv = (discounted_returns - g_mean) / g_std
+#                 else:
+#                     g_adv = discounted_returns - g_mean
+                
+#                 if do_debug_print and not printed_group:
+#                     write_debug_log(f"  - Action: Variance > 0. Normalizing.")
+#                     write_debug_log(f"  - Discounted: {discounted_returns.tolist()}")
+#                     write_debug_log(f"  - Mean: {g_mean.item():.4f}, Std: {g_std.item():.4f}")
+#                     write_debug_log(f"  - Final Adv: {g_adv.tolist()}")
+
+#                 for local_i, global_idx in enumerate(g_idxs):
+#                     final_advantages[global_idx] = g_adv[local_i]
+
+#         elif strategy == "discount_first":
+#             # 先折损
+#             discounted_returns = g_scores * (gamma ** g_lens)
+#             g_std = discounted_returns.std()
+            
+#             if g_std < epsilon:
+#                 if do_debug_print and not printed_group: 
+#                     write_debug_log(f"  - Action: Discounted Variance is 0. All set to 0.0")
+#                     write_debug_log(f"  - Discounted (Identical): {discounted_returns.tolist()}")
+#                 for idx in g_idxs:
+#                     final_advantages[idx] = 0.0
+#             else:
+#                 g_mean = discounted_returns.mean()
+#                 if norm_adv_by_std:
+#                     g_adv = (discounted_returns - g_mean) / (g_std + epsilon)
+#                 else:
+#                     g_adv = discounted_returns - g_mean
+                
+#                 if do_debug_print and not printed_group:
+#                     write_debug_log(f"  - Action: Calculating Discounted Advantage")
+#                     write_debug_log(f"  - Discounted: {discounted_returns.tolist()}")
+#                     write_debug_log(f"  - Mean: {g_mean.item():.4f}, Std: {g_std.item():.4f}")
+#                     write_debug_log(f"  - Final Adv: {g_adv.tolist()}")
+
+#                 for local_i, global_idx in enumerate(g_idxs):
+#                     final_advantages[global_idx] = g_adv[local_i]
+        
+#         else:
+#             raise ValueError(f"Unknown Outcome Strategy: {strategy}")
+        
+#         if do_debug_print:
+#             printed_group = True
+
+#     advantage_output = final_advantages.unsqueeze(-1) * response_mask
+#     return advantage_output
+
+def align_dense_rewards_to_model(reward_tensor, loss_mask):
     """
-    计算策略优化的优势估计 (Advantage Estimates)。
-    [修改版] 实现“动态锚定 API 奖励 + GRPO Outcome 归一化”策略。
+    [核心修复算法]：解决 Tokenizer 边界错位导致的奖励丢失。
+    将落在环境反馈区域 (loss_mask=0) 上的奖励，强制向左吸附到
+    最近的一个属于模型生成的有效 Token (loss_mask=1) 身上（如 <|im_end|>）。
     """
+    if reward_tensor is None:
+        return None
+    aligned_tensor = torch.zeros_like(reward_tensor)
+    bsz, seq_len = reward_tensor.shape
+    for b in range(bsz):
+        last_valid_idx = -1
+        for i in range(seq_len):
+            if loss_mask[b, i] == 1:
+                last_valid_idx = i
+            
+            rew = reward_tensor[b, i].item()
+            if rew != 0.0:
+                # 如果左侧有合法的模型 Token，吸附过去
+                if last_valid_idx != -1:
+                    aligned_tensor[b, last_valid_idx] += rew
+                else:
+                    # 极小概率边界情况：句首就没有合法 Token，原样保留
+                    aligned_tensor[b, i] += rew
+    return aligned_tensor
+
+
+def compute_advantage(
+    data: DataProto, 
+    adv_estimator, 
+    gamma=1.0, 
+    lam=1.0, 
+    num_repeat=1, 
+    multi_turn=False, 
+    norm_adv_by_std_in_grpo=True, 
+    config=None,
+    tokenizer=None,     
+    global_steps=0      
+):
     if "response_mask" not in data.batch.keys():
         data.batch["response_mask"] = compute_response_mask(data)
     
     if adv_estimator == AdvantageEstimator.GAE:
+        from verl.trainer.ppo import core_algos
         advantages, returns = core_algos.compute_gae_advantage_return(
             token_level_rewards=data.batch["token_level_rewards"],
             values=data.batch["values"],
@@ -294,116 +701,195 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
         data.batch["advantages"] = advantages
         data.batch["returns"] = returns
         if config.get("use_pf_ppo", False):
-             data = core_algos.compute_pf_ppo_reweight_data(
+            data = core_algos.compute_pf_ppo_reweight_data(
                 data,
                 config.get("pf_ppo_reweight_method", "pow"),
                 config.get("pf_ppo_weight_pow", 2.0),
             )
 
     elif adv_estimator == AdvantageEstimator.GRPO:
-        # 1. 准备 Mask 和 UID
-        if multi_turn:
-            response_length = data.batch["response_mask"].size(1)
-            grpo_mask = data.batch["loss_mask"][:, -response_length:]
+        if "loss_mask" in data.batch:
+            loss_mask = data.batch["loss_mask"]
         else:
-            grpo_mask = data.batch["response_mask"]
-        uid_index = data.non_tensor_batch["uid"]
-        
-        # 2. 读取权重
-        w_outcome = config.get("w_outcome", 1.0)
-        w_efficiency = config.get("w_efficiency", 0.1)
-        # w_api 建议设为 1.0，因为我们在内部动态计算 Scaling
-        w_api = config.get("w_api", 1.0) 
-        w_rep = config.get("w_rep", 1.0)
+            loss_mask = data.batch["response_mask"]
+            
+        base_tensor = data.batch.get("outcome_reward_tensor", data.batch["token_level_rewards"])
+        if loss_mask.size(1) != base_tensor.size(1):
+            pad_len = base_tensor.size(1) - loss_mask.size(1)
+            padded_loss_mask = torch.zeros_like(base_tensor)
+            if pad_len > 0:
+                padded_loss_mask[:, pad_len:] = loss_mask
+                loss_mask = padded_loss_mask
 
-        # =================================================================
-        # 3. [关键修改] 计算各部分解耦优势 (Decoupled Advantage)
-        # =================================================================
+        uid_index = data.non_tensor_batch["uid"]
+        full_input_ids_tensor = data.batch.get("input_ids", None)
         
-        # A. Outcome (基准层: 标准 GRPO 归一化)
-        # 强制 norm_adv_by_std_in_grpo=True，使 adv_out ~ N(0, 1)
-        adv_out = compute_single_component_advantage(
-            data.batch.get("outcome_reward_tensor", data.batch["token_level_rewards"]),
-            grpo_mask, uid_index, norm_by_std=True
+        # [提取并补齐 step_ids]
+        step_ids_tensor = data.batch.get("step_ids", None)
+        padded_step_ids = None
+        if step_ids_tensor is not None:
+            if step_ids_tensor.size(1) != base_tensor.size(1):
+                pad_len = base_tensor.size(1) - step_ids_tensor.size(1)
+                padded_step_ids = torch.zeros(
+                    (step_ids_tensor.size(0), base_tensor.size(1)),
+                    dtype=step_ids_tensor.dtype,
+                    device=step_ids_tensor.device
+                )
+                if pad_len > 0:
+                    padded_step_ids[:, pad_len:] = step_ids_tensor
+                else:
+                    padded_step_ids = step_ids_tensor
+            else:
+                padded_step_ids = step_ids_tensor
+
+        # =====================================================================
+        # 🛡️ [应用核心修复]：强制平移吸附 API 和 Repetition 奖励，防止落入无效区
+        # =====================================================================
+        api_reward_raw = data.batch.get("api_reward_tensor", None)
+        if api_reward_raw is not None:
+            data.batch["api_reward_tensor"] = align_dense_rewards_to_model(api_reward_raw, loss_mask)
+            
+        rep_reward_raw = data.batch.get("rep_reward_tensor", None)
+        if rep_reward_raw is not None:
+            data.batch["rep_reward_tensor"] = align_dense_rewards_to_model(rep_reward_raw, loss_mask)
+        # =====================================================================
+
+        process_mode = config.get("process_reward_mode", "dense")
+        w_outcome = config.get("w_outcome", 1.0)
+        w_efficiency = 0.0
+        w_api = config.get("w_api", 1.0)
+        w_rep = config.get("w_rep", 1.0)
+        outcome_strategy = config.get("outcome_strategy", "normalize_then_decay") 
+
+        # --- 2. Outcome Stream ---
+        outcome_tensor = data.batch.get("outcome_reward_tensor", data.batch["token_level_rewards"])
+        adv_out = compute_outcome_advantage_dual_strategy(
+            token_level_rewards=outcome_tensor,
+            response_mask=loss_mask,  
+            uid_index=uid_index,
+            gamma=gamma, 
+            strategy=outcome_strategy,
+            norm_adv_by_std=norm_adv_by_std_in_grpo,
+            tokenizer=tokenizer,         
+            input_ids=full_input_ids_tensor, 
+            step_ids=padded_step_ids,        
+            step_info=f"Step {global_steps}" 
         )
         
-        # B. Efficiency (标准 GRPO)
-        # [注释掉 Efficiency]
-        # adv_eff = compute_single_component_advantage(
-        #     data.batch.get("eff_reward_tensor", torch.zeros_like(data.batch["responses"])),
-        #     grpo_mask, uid_index, norm_by_std=True
-        # )
-        adv_eff = 0.0
+        # --- 3. Process Streams ---
+        adv_api = compute_single_component_advantage(
+            data.batch.get("api_reward_tensor", torch.zeros_like(data.batch["responses"])),
+            loss_mask, uid_index, norm_adv_by_std_in_grpo,
+            mode=process_mode,
+            tokenizer=tokenizer,         
+            input_ids=full_input_ids_tensor, 
+            component_name="API Reward"  
+        ) if "api_reward_tensor" in data.batch else torch.zeros_like(adv_out)
         
-        # C. API (激励层: 动态锚定 + 绝对值叠加)
-        if "api_reward_tensor" in data.batch:
-            raw_api_reward = data.batch["api_reward_tensor"] # (BS, T) From parse_reward
-            
-            # --- 动态系数计算开始 ---
-            outcome_scores = data.batch.get("outcome_reward_tensor", data.batch["token_level_rewards"]).sum(dim=-1)
-            scale_tensor = torch.zeros_like(outcome_scores)
-            
-            uid2indices = defaultdict(list)
-            for i, uid in enumerate(uid_index):
-                uid2indices[uid].append(i)
-                
-            with torch.no_grad():
-                for uid, indices in uid2indices.items():
-                    indices_tensor = torch.tensor(indices, device=outcome_scores.device)
-                    grp_raw_scores = outcome_scores[indices_tensor]
-                    
-                    if len(indices) > 1:
-                        std = torch.std(grp_raw_scores)
-                        raw_range = torch.max(grp_raw_scores) - torch.min(grp_raw_scores)
-                        
-                        # 计算归一化后的极差: Norm_Range = Raw_Range / Std
-                        if std > 0:
-                            norm_range = raw_range / std
-                        else:
-                            norm_range = torch.tensor(0.0, device=std.device)
-                    else:
-                        norm_range = torch.tensor(0.0, device=outcome_scores.device)
+        adv_rep = compute_single_component_advantage(
+            data.batch.get("rep_reward_tensor", torch.zeros_like(data.batch["responses"])),
+            loss_mask, uid_index, norm_adv_by_std_in_grpo,
+            mode=process_mode,
+            tokenizer=tokenizer,         
+            input_ids=full_input_ids_tensor, 
+            component_name="Repetition Penalty" 
+        ) if "rep_reward_tensor" in data.batch else torch.zeros_like(adv_out)
 
-                    # [策略]: API Bonus = 10% * Outcome极差 + 0.1 保底
-                    lambda_coef = 0.1 
-                    epsilon = 0.1
-                    final_bonus = lambda_coef * norm_range + epsilon
-                    
-                    scale_tensor[indices_tensor] = final_bonus
-            # --- 动态系数计算结束 ---
+        adv_eff = compute_single_component_advantage(
+            data.batch.get("eff_reward_tensor", torch.zeros_like(data.batch["responses"])),
+            loss_mask, uid_index, norm_adv_by_std_in_grpo,
+            mode="sparse",
+            tokenizer=tokenizer,         
+            input_ids=full_input_ids_tensor, 
+            component_name="Efficiency Reward" 
+        )
 
-            # 广播系数到 (BS, T)
-            api_scale_broadcast = scale_tensor.unsqueeze(-1)
-            
-            # [核心]: 绝对值叠加 (不减均值)
-            # adv_api = Mask * Raw_Reward * Dynamic_Scale
-            adv_api = raw_api_reward * api_scale_broadcast * grpo_mask
-            
-        else:
-            adv_api = 0.0
+        # # --- 4. 非对称门控 (Asymmetric Gating) ---
+        # raw_outcome_per_traj = outcome_tensor.sum(dim=-1)
+        # raw_outcome_expanded = raw_outcome_per_traj.unsqueeze(1).expand_as(adv_api)
         
-        # D. Repetition (简单绝对值或 GRPO，视偏好而定，这里保持原样用 GRPO)
-        # adv_rep = compute_single_component_advantage(
-        #     data.batch.get("rep_reward_tensor", torch.zeros_like(data.batch["responses"])),
-        #     grpo_mask, uid_index, norm_by_std=True
-        # ) if "rep_reward_tensor" in data.batch else 0.0
-        adv_rep = 0.0
+        # success_threshold = 0.5
+        # api_gate = torch.ones_like(adv_api)
+        # mask_to_suppress = (adv_api > 0) & (raw_outcome_expanded < success_threshold)
+        # api_gate[mask_to_suppress] = 0.0
 
-        # 4. 加权求和
+        # final_advantages = (w_outcome * adv_out) + (w_efficiency * adv_eff) + \
+        #                    (w_api * adv_api * api_gate) + (w_rep * adv_rep)
+
+        # data.batch["advantages"] = final_advantages
+        # data.batch["returns"] = outcome_tensor + \
+        #                         data.batch.get("api_reward_tensor", 0) + \
+        #                         data.batch.get("rep_reward_tensor", 0)
+        
+        # --- 4. 非对称门控 (Asymmetric Gating) ---
+        # 🚨 [关键修复：释放早期探索奖励]
+        # 在高难度长序列任务中，早期的失败是正常的。
+        # 强制将 api_gate 设为 1.0，保证正确的过程操作（如 API 调用）在任务失败时依然能提供正向梯度。
+        
+        api_gate = 1.0
+
         final_advantages = (w_outcome * adv_out) + (w_efficiency * adv_eff) + \
-                           (w_api * adv_api) + (w_rep * adv_rep)
+                           (w_api * adv_api * api_gate) + (w_rep * adv_rep)
 
+        # [必加修复] 将计算结果写回 TensorDict
         data.batch["advantages"] = final_advantages
-        
-        # Returns 用于 Critic
-        total_returns = data.batch.get("outcome_reward_tensor", 0) + \
-                        data.batch.get("eff_reward_tensor", 0) + \
-                        data.batch.get("api_reward_tensor", 0) + \
-                        data.batch.get("rep_reward_tensor", 0)
-        data.batch["returns"] = total_returns
-        
+        data.batch["returns"] = outcome_tensor + \
+                                data.batch.get("api_reward_tensor", 0) + \
+                                data.batch.get("rep_reward_tensor", 0)
+
+        # =====================================================================
+        # 👑 [终极核查]：打印对齐矩阵表格 (Alignment Verification Table)
+        # =====================================================================
+        try:
+            do_table_print = True
+            if do_table_print and full_input_ids_tensor is not None and tokenizer is not None:
+                api_rew = data.batch.get("api_reward_tensor")
+                rep_rew = data.batch.get("rep_reward_tensor")
+                
+                for b in range(min(4, final_advantages.shape[0])): 
+                    nz_indices = []
+                    if api_rew is not None:
+                        nz_indices.extend(torch.nonzero(api_rew[b]).squeeze(-1).tolist())
+                    if rep_rew is not None:
+                        nz_indices.extend(torch.nonzero(rep_rew[b]).squeeze(-1).tolist())
+                    
+                    if not nz_indices:
+                        valid_idx = torch.nonzero(loss_mask[b]).squeeze(-1)
+                        if valid_idx.numel() > 0:
+                            nz_indices.append(valid_idx[-1].item())
+                    
+                    if not nz_indices: continue
+                    
+                    target_idx = nz_indices[0] if isinstance(nz_indices, list) else nz_indices
+                    
+                    start_idx = max(0, target_idx - 8)
+                    end_idx = min(full_input_ids_tensor.size(1), target_idx + 9)
+                    
+                    log_str = f"\n👑 === [Alignment Verification Table] Step {global_steps} | Trajectory {b} === 👑\n"
+                    log_str += f"{'Idx':<5} | {'Token_Text':<18} | {'StepID':<6} | {'API_Rew':<8} | {'Rep_Rew':<8} | {'Out_Adv':<8} | {'Final_Adv':<9}\n"
+                    log_str += "-"*80 + "\n"
+                    
+                    for i in range(start_idx, end_idx):
+                        tid = full_input_ids_tensor[b, i].item()
+                        ttext = repr(tokenizer.decode([tid])) if tid >= 0 else f"<unk_{tid}>"
+                        sid = padded_step_ids[b, i].item() if padded_step_ids is not None else 0
+                        api_val = api_rew[b, i].item() if api_rew is not None else 0.0
+                        rep_val = rep_rew[b, i].item() if rep_rew is not None else 0.0
+                        out_val = adv_out[b, i].item()
+                        fadv_val = final_advantages[b, i].item()
+                        
+                        flag = ">> " if i == target_idx else "   "
+                        if api_val != 0 or rep_val != 0:
+                            flag = "🚀 " 
+                            
+                        log_str += f"{flag}{i:<4} | {ttext:<18} | {sid:<6} | {api_val:>8.4f} | {rep_val:>8.4f} | {out_val:>8.4f} | {fadv_val:>9.4f}\n"
+                    
+                    write_debug_log(log_str)
+        except Exception as e:
+            write_debug_log(f"[Warning] Failed to print verification table: {e}")
+
     else:
-        # ... (其他 Estimator 处理保持不变) ...
+        from verl.trainer.ppo import core_algos
         adv_estimator_fn = core_algos.get_adv_estimator_fn(adv_estimator)
         adv_kwargs = {
             "token_level_rewards": data.batch["token_level_rewards"],
@@ -574,7 +1060,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
         if self.use_reference_policy:
             resource_pool = self.resource_pool_manager.get_resource_pool(Role.RefPolicy)
             ref_policy_cls = RayClassWithInitArgs(self.role_worker_mapping[Role.RefPolicy],
-                                                                        config=self.config.actor_rollout_ref, role="ref")
+                                                  config=self.config.actor_rollout_ref, role="ref")
             self.resource_pool_to_cls[resource_pool]["ref"] = ref_policy_cls
 
         # 创建 Reward Model (如果 reward_fn 为 None)
@@ -1478,7 +1964,16 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                     batch.non_tensor_batch["uid"] = np.array([str(uuid.uuid4()) for _ in range(len(batch.batch))], dtype=object)
                     batch.non_tensor_batch['original_extras']=batch_extras
                     batch = union_gen_batch_via_task_id(tasks, batch, gen_batch_output)
-                    batch.batch["response_mask"] = compute_response_mask(batch)
+
+                    # batch.batch["response_mask"] = compute_response_mask(batch)
+
+                    prompt_length = batch.batch['prompts'].shape[1]
+                    attention_mask = batch.batch['attention_mask'] # 这是全长的 (Prompt + Response) 
+
+                    response_mask = attention_mask.clone()
+                    response_mask[:, :prompt_length] = 0 # 把 Prompt 区域盖住，只留 Response
+
+                    batch.batch["response_mask"] = response_mask # 赋值回去
 
                     # 更新经验池
                     summary_task = self.exp_manager.submit_summary_task(trajectories, self.global_steps)
@@ -1504,12 +1999,57 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
 
                     # 重新计算 old_log_probs
                     with _timer("old_log_prob", timing_raw):
-                        main_log(f"Step {self.global_steps}: Computing Old Log Probs...") # [Log Add]
+                        main_log(f"Step {self.global_steps}: Computing Old Log Probs...") 
                         old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
                         entropys = old_log_prob.batch["entropys"]
                         response_masks = batch.batch["response_mask"]
+                        
+                        # ========================================================
+                        # [ROBUST CRASH FIX] 动态对齐掩码长度 (带三重安全保险)
+                        # ========================================================
+                        import torch.nn.functional as F
+
+                        ent_len = entropys.size(1)
+                        mask_len = response_masks.size(1)
+
+                        if ent_len != mask_len:
+                            if ent_len < mask_len:
+                                # 【保险 1：双向边界探测】
+                                # 尝试两种截断方式，看底层引擎到底是裁掉了左侧还是右侧的 Padding
+                                left_slice = response_masks[:, :ent_len]
+                                right_slice = response_masks[:, -ent_len:]
+                                
+                                # 原始 Mask 中有效 Response Token 的总数
+                                orig_valid_tokens = response_masks.sum()
+                                
+                                if left_slice.sum() == orig_valid_tokens:
+                                    # 如果保留左侧，有效 Token 一个没丢，说明底层裁掉的是右侧的空白
+                                    response_masks_for_loss = left_slice
+                                elif right_slice.sum() == orig_valid_tokens:
+                                    # 如果保留右侧，有效 Token 一个没丢，说明底层裁掉的是左侧的空白
+                                    response_masks_for_loss = right_slice
+                                else:
+                                    # 【保险 2：致命错误硬阻断】
+                                    # 如果无论怎么截取，都会把值为 1 的有效 Token 切掉，说明序列严重错位！
+                                    # 此时必须抛出异常，绝不能让模型用错位的错误数据继续训练。
+                                    raise RuntimeError(
+                                        f"[Fatal Alignment Error] 无法安全对齐 LogProb 掩码！\n"
+                                        f"-> 原始有效 Token 数: {orig_valid_tokens.item()}\n"
+                                        f"-> 左截断保留数: {left_slice.sum().item()}, 右截断保留数: {right_slice.sum().item()}\n"
+                                        f"-> Entropys 长度: {ent_len}, 原始 Mask 长度: {mask_len}"
+                                    )
+                            else:
+                                # 【保险 3：反向扩充】
+                                # 极小概率下，entropys 反而比 mask 长（例如底层强行 Padding 到了某个基数）
+                                # 安全的做法是在 mask 右侧补 0（即视为无效区）
+                                pad_len = ent_len - mask_len
+                                response_masks_for_loss = F.pad(response_masks, (0, pad_len), value=0)
+                        else:
+                            response_masks_for_loss = response_masks
+                        # ========================================================
+                            
                         loss_agg_mode = self.config.actor_rollout_ref.actor.loss_agg_mode
-                        entropy_loss = agg_loss(loss_mat=entropys, loss_mask=response_masks, loss_agg_mode=loss_agg_mode)
+                        entropy_loss = agg_loss(loss_mat=entropys, loss_mask=response_masks_for_loss, loss_agg_mode=loss_agg_mode)
                         old_log_prob_metrics = {"actor/entropy_loss": entropy_loss.detach().item()}
                         metrics.update(old_log_prob_metrics)
                         old_log_prob.batch.pop("entropys")
@@ -1585,7 +2125,24 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                             norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
                             multi_turn=self.config.actor_rollout_ref.rollout.multi_turn.enable,
                             config=self.config.algorithm,
+                            tokenizer=self.tokenizer,          # [新增行] 传入 tokenizer
+                            global_steps=self.global_steps     # [新增行] 传入当前 step
                         )
+                        # =====================================================================
+                        # [CRASH FIX] 强制对齐 Advantages 和 Returns 的维度
+                        # 截取掉 Prompt 部分，仅保留与 Responses 长度一致的后半部分
+                        # =====================================================================
+                        resp_len = batch.batch["responses"].size(1)
+                        
+                        if batch.batch["advantages"].size(1) != resp_len:
+                            batch.batch["advantages"] = batch.batch["advantages"][:, -resp_len:]
+                            
+                        if "returns" in batch.batch and batch.batch["returns"].size(1) != resp_len:
+                            batch.batch["returns"] = batch.batch["returns"][:, -resp_len:]
+                            
+                        if "token_level_rewards" in batch.batch and batch.batch["token_level_rewards"].size(1) != resp_len:
+                            batch.batch["token_level_rewards"] = batch.batch["token_level_rewards"][:, -resp_len:]
+                        # =====================================================================
 
                         # ... (Hindsight logic & ADCA GRPO) ...
                         # ==================== Hindsight 反向归纳逻辑 ====================

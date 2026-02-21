@@ -29,7 +29,7 @@ class DashScopeClient:
     With Rate Limiting (40 RPM).
     """
     
-    def __init__(self, api_key: Optional[str] = None, model_name: str = "azure-gpt-5-mini", 
+    def __init__(self, api_key: Optional[str] = None, model_name: str = "azure-gpt-5", 
                  temperature: float = 0.7, max_tokens: int = 2048):
         
         if load_dotenv:
@@ -50,7 +50,7 @@ class DashScopeClient:
         # ----------------------------------------------------------------------
         # Modification 1: Set default model to azure-gpt-5-mini
         # ----------------------------------------------------------------------
-        self.model_name = "azure-gpt-5-mini"
+        self.model_name = "azure-gpt-5"
         # if model_name:
         #     self.model_name = model_name
         # else:

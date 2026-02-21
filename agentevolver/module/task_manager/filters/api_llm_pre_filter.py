@@ -175,9 +175,9 @@ REJECT (Logical Flaws/Over-specification): Commands that include precise values 
 Unacceptable: "Buy a fan that costs exactly $20.50" (Price fluctuations make this high-risk).
 Unacceptable: "If my current balance is $100, then pay my phone bill" (The user should not speculate on internal states that only the Agent can verify).
 ACCEPT (Delegated Commands): Queries where the user sets a goal and lets the Agent handle the filtering/optimization.
-Example: "Help me find a good desktop fan," "Update my username to 'Alex'."
+Example: "Help me find a desktop fan under $50.", "Update my username to 'Alex'."
 Is this a valid and usable query? Please think first, then reply with the result strictly in this format: <answer>True</answer> or <answer>False</answer>"""
-        
+
 #         f"""You are a strict Data Quality Auditor for an advanced AI Agent dataset.
 # Your goal is to accept **ONLY** high-quality, intent-clear, and logically robust user commands, and **REJECT** vague, trivial, or queries containing unreasonable assumptions.
 

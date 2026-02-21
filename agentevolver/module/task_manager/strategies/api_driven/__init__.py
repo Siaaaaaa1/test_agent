@@ -39,6 +39,10 @@ from agentevolver.module.task_manager.strategies.api_driven.prompts.prompt_summa
     parse_tasks_from_response,
 )
 from agentevolver.client.llm_client_mix import Mix_DashScopeClient
+from agentevolver.module.task_manager.strategies.api_driven.prompts.prompt_summarize_first import (
+    get_direct_verify_prompt,
+    parse_direct_verification
+)
 
 UNIVERSAL_INFO_PROVIDERS = {"notes", "gmail", "simple_messages", "calendar", "contacts"}
 
@@ -324,7 +328,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                 last_trajectory = trajectory
                 
                 # ================= 严格的成功判定 =================
-                # 检查 trajectory.reward.outcome 是否 >= 0.7
+                # 检查 trajectory.reward.outcome 是否 >= 0.8    
                 is_success = False
                 current_score = 0.0
                 
@@ -336,11 +340,11 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                     logger.info(f"📝 [Judge Result] Task: {data_id} | Model: {model_name} | Score: {current_score}\nReasoning: {judge_reason}")
                     # ---------------------------------
                     
-                    # 阈值设定为 0.7
-                    if current_score >= 0.7:
+                    # 阈值设定为 0.8
+                    if current_score >= 0.8:
                         is_success = True
                     else:
-                        logger.warning(f"[Explore] Model {model_name} score {current_score} < 0.7. Marked as Fail.")
+                        logger.warning(f"[Explore] Model {model_name} score {current_score} < 0.8. Marked as Fail.")
                 else:
                     logger.warning(f"[Explore] Model {model_name} produced no reward object.")
 
@@ -408,6 +412,76 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         except StopIteration:
             return "train_001"
 
+    # ================= 上下文构建辅助方法 (Text-Based Format) =================
+    
+    def _get_enhanced_context(self, app_name: str, anchor_api_names: List[str]) -> Tuple[str, str, str]:
+        """
+        构建增强的上下文信息（格式化文本，而非 JSON）。
+        
+        修改说明：
+        1. target_app_apis_info: 格式改为 "call_name: description"
+        2. anchor_apis_detailed_info: 仅包含 call_name, description, parameters, returns
+        """
+        # 1. Global Context: 所有 APP 的概况
+        global_lines = []
+        for app, details in self.api_knowledge.items():
+            desc = details.get("description", "No description available.")
+            global_lines.append(f'APP: "{app}"\ndescription: "{desc}"')
+        all_apps_info = "\n\n".join(global_lines)
+
+        # 2. Target App APIs: 指定 APP 的所有 API 概况
+        # 格式要求: call_name: description
+        target_app_data = self.api_knowledge.get(app_name, {})
+        target_app_apis = target_app_data.get("apis", {})
+        
+        api_lines = []
+        for api_key, details in target_app_apis.items():
+            desc = details.get("description", "No description available.")
+            # 优先获取 call_name，如果取不到则使用 key (short name)
+            full_call_name = details.get("call_name", api_key)
+            api_lines.append(f"{full_call_name}: {desc}")
+        target_app_apis_info = "\n".join(api_lines)
+
+        # 3. Anchor APIs Details: 锚定 API 的详细信息
+        anchor_details_list = []
+        
+        for input_api_name in anchor_api_names:
+            # 兼容处理：尝试获取短名字（例如从 apis.spotify.search_songs 提取 search_songs）
+            if "." in input_api_name:
+                short_name = input_api_name.split('.')[-1]
+                full_path = input_api_name
+            else:
+                short_name = input_api_name
+                # 尝试构造全路径，假设标准格式
+                full_path = f"apis.{app_name}.{short_name}"
+
+            # 从知识库中查找数据
+            api_data = None
+            if short_name in target_app_apis:
+                api_data = target_app_apis[short_name]
+            
+            if api_data:
+                # 确保 call_name 准确（以防 input_api_name 只有短名）
+                correct_call_name = api_data.get("call_name", full_path)
+                
+                # 构造详细信息块
+                params_str = json.dumps(api_data.get("parameters", []), indent=2)
+                returns_str = json.dumps(api_data.get("returns", {}), indent=2)
+                
+                # 按照要求：call_name 作为主要标识，去除 short name，保留 desc, params, returns
+                block = (
+                    f'api_name: "{correct_call_name}"\n'
+                    f'description: "{api_data.get("description", "")}"\n'
+                    f'parameters: {params_str}\n'
+                    f'returns: {returns_str}'
+                )
+                anchor_details_list.append(block)
+        
+        # 如果没有找到任何 anchor，为了防止 Prompt 为空，给一个提示
+        anchor_apis_detailed_info = "\n\n---\n\n".join(anchor_details_list) if anchor_details_list else "None provided."
+
+        return all_apps_info, target_app_apis_info, anchor_apis_detailed_info
+    
     # ================= 任务生成 (Generation) =================
     
     def generate_intra_task(self, api_data: Union[dict, List[dict]], task: Task = None) -> List[Task]:
@@ -428,25 +502,36 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                 continue
 
             target_app = api_dict.get("app_name", "UnknownApp")
-            
-            # 2. 安全处理 API 列表转字符串
             raw_api_list = api_dict.get("apis_name_list", [])
-            if isinstance(raw_api_list, list):
-                api_list_str = ",".join([str(x) for x in raw_api_list])
-            else:
-                api_list_str = str(raw_api_list)
+            
+            # 2. 获取增强的上下文信息
+            all_apps_info, target_app_apis_info, anchor_apis_detailed_info = self._get_enhanced_context(
+                target_app, raw_api_list
+            )
 
             logger.debug(f"[Intra-Gen] Preparing prompt for App: {target_app}")
 
-            # 3. Prompt 格式化 (带容错)
+            # 3. Prompt 格式化 (使用增强信息)
             try:
-                prompt = INTRA_DOMAIN_PURPOSE_PROMPT.format(
-                    APP_NAME=target_app,
-                    API_LIST=api_list_str
-                )
-            except KeyError as e:
-                logger.warning(f"[Intra-Gen] .format() failed ({e}). Switching to .replace().")
-                prompt = INTRA_DOMAIN_PURPOSE_PROMPT.replace("{APP_NAME}", target_app).replace("{API_LIST}", api_list_str)
+                # 兼容处理：检查 prompt 模板是否支持新变量，如果只是旧模板则回退
+                if "{ALL_APPS_DESC}" in INTRA_DOMAIN_PURPOSE_PROMPT:
+                    prompt = INTRA_DOMAIN_PURPOSE_PROMPT.format(
+                        APP_NAME=target_app,
+                        ALL_APPS_DESC=all_apps_info,
+                        TARGET_APP_API_DESCS=target_app_apis_info,
+                        ANCHOR_API_DETAILS=anchor_apis_detailed_info
+                    )
+                else:
+                    # # Fallback old format
+                    # api_list_str = str(raw_api_list)
+                    # prompt = INTRA_DOMAIN_PURPOSE_PROMPT.replace("{APP_NAME}", target_app).replace("{API_LIST}", api_list_str)
+                    prompt = INTRA_DOMAIN_PURPOSE_PROMPT.format(
+                        APP_NAME=target_app,
+                        ALL_APPS_DESC=all_apps_info,
+                        TARGET_APP_API_DESCS=target_app_apis_info,
+                        ANCHOR_API_DETAILS=anchor_apis_detailed_info
+                    )
+
             except Exception as e:
                 logger.error(f"[Intra-Gen] Prompt formatting critical error: {e}")
                 continue
@@ -478,7 +563,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                 new_task.metadata = {
                     "phase": "intra", 
                     "target_app": target_app,
-                    "app1_apis": list(api_dict.get("apis_name_list", [])),
+                    "app1_apis": list(raw_api_list),
                     "origin_query": scenario["user_query"],
                     "target_api": scenario["target_api"],
                     "prompt": prompt,
@@ -528,6 +613,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         生成跨域探索任务：选择两个 App，合成跨应用场景。
         
         [Updated] 增加了白名单检查，确保只生成符合预期的组合。
+        [Updated] 使用 _get_enhanced_context 提供全面信息。
         """
         generated_tasks = []
 
@@ -545,27 +631,51 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             logger.warning(f"[Cross-Gen] Skipping invalid combination: {app1_name} -> {app2_name}")
             return []
         
-        # 安全转换 API List
-        apis1_str = ",".join(api_dict1.get("apis_name_list", []))
-        apis2_str = ",".join(api_dict2.get("apis_name_list", []))
+        # 获取 Anchor API 列表
+        raw_api_list1 = api_dict1.get("apis_name_list", [])
+        raw_api_list2 = api_dict2.get("apis_name_list", [])
 
-        # 2. Prompt 格式化 (带容错)
+        # 2. 获取增强上下文信息
+        # 获取全局信息（只需要获取一次）
+        all_apps_info, app1_apis_info, app1_anchor_details = self._get_enhanced_context(app1_name, raw_api_list1)
+        _, app2_apis_info, app2_anchor_details = self._get_enhanced_context(app2_name, raw_api_list2)
+
+        # 3. Prompt 格式化
         try:
-            prompt = CROSS_DOMAIN_PURPOSE_PROMPT.format(
-                APP_NAME1=app1_name,
-                API_LIST1=apis1_str,
-                APP_NAME2=app2_name,
-                API_LIST2=apis2_str
-            )
-        except KeyError as e:
-            logger.warning(f"[Cross-Gen] .format() failed ({e}). Switching to .replace().")
-            prompt = CROSS_DOMAIN_PURPOSE_PROMPT \
-                .replace("{APP_NAME1}", app1_name) \
-                .replace("{API_LIST1}", apis1_str) \
-                .replace("{APP_NAME2}", app2_name) \
-                .replace("{API_LIST2}", apis2_str)
+             if "{ALL_APPS_DESC}" in CROSS_DOMAIN_PURPOSE_PROMPT:
+                prompt = CROSS_DOMAIN_PURPOSE_PROMPT.format(
+                    ALL_APPS_DESC=all_apps_info,
+                    APP_NAME1=app1_name,
+                    APP1_API_DESCS=app1_apis_info,
+                    APP1_ANCHOR_DETAILS=app1_anchor_details,
+                    APP_NAME2=app2_name,
+                    APP2_API_DESCS=app2_apis_info,
+                    APP2_ANCHOR_DETAILS=app2_anchor_details
+                )
+             else:
+                # Fallback old format
+                # apis1_str = ",".join(raw_api_list1)
+                # apis2_str = ",".join(raw_api_list2)
+                # prompt = CROSS_DOMAIN_PURPOSE_PROMPT \
+                #     .replace("{APP_NAME1}", app1_name) \
+                #     .replace("{API_LIST1}", apis1_str) \
+                #     .replace("{APP_NAME2}", app2_name) \
+                #     .replace("{API_LIST2}", apis2_str)
+                prompt = CROSS_DOMAIN_PURPOSE_PROMPT.format(
+                    ALL_APPS_DESC=all_apps_info,
+                    APP_NAME1=app1_name,
+                    APP1_API_DESCS=app1_apis_info,
+                    APP1_ANCHOR_DETAILS=app1_anchor_details,
+                    APP_NAME2=app2_name,
+                    APP2_API_DESCS=app2_apis_info,
+                    APP2_ANCHOR_DETAILS=app2_anchor_details
+                )
 
-        # 3. 调用 LLM
+        except Exception as e:
+            logger.error(f"[Cross-Gen] Prompt formatting error: {e}")
+            return []
+
+        # 4. 调用 LLM
         try:
             response = self._chat_with_retry(messages=[{"role": "user", "content": prompt}])
         except Exception as e:
@@ -575,7 +685,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         if not response: 
             return []
         
-        # 4. 解析结果 (返回 List[dict])
+        # 5. 解析结果 (返回 List[dict])
         try:
             parsed_scenarios = parse_cross_purpose_from_response(response.content)
         except Exception as e:
@@ -586,7 +696,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             logger.warning(f"[Cross-Gen] No valid scenarios parsed for {app1_name} <-> {app2_name}")
             return []
 
-        # 5. 构建 Task 列表
+        # 6. 构建 Task 列表
         for scenario in parsed_scenarios:
             new_task = copy.deepcopy(task) if task else Task()
             
@@ -595,8 +705,8 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                 "phase": "extra", # 注意：跨域通常叫 cross 或 inter
                 "app1": app1_name,
                 "app2": app2_name,
-                "app1_apis": list(api_dict1.get("apis_name_list", [])),
-                "app2_apis": list(api_dict2.get("apis_name_list", [])),
+                "app1_apis": list(raw_api_list1),
+                "app2_apis": list(raw_api_list2),
                 "origin_query": scenario["user_query"],
                 "source_api" : scenario["source_info_api"],
                 "target_api": scenario["target_action_api"],
@@ -614,20 +724,18 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         """
         单域探索总结：检查是否调用目标 API，如果调用则使用 LLM 归纳任务意图。
         """ 
-        # 2. 构造 LLM 函数 (使用修正后的变量名)
         client = self._summarize_client
         llm_fn = self._get_llm_chat_fn(client)
         
-        # 3. 数据脱敏 (Masking)
+        # 数据脱敏
         masked_trajectory = copy.deepcopy(trajectory)
         if len(masked_trajectory.steps) > 2:
-            # Mask user instructions to prevent leaking into summary prompt context incorrectly
             if masked_trajectory.steps[1].get('role') == 'user':
                 masked_trajectory.steps[1]['content'] = '[MASKED]'
             if masked_trajectory.steps[2].get('role') == 'user':
                 masked_trajectory.steps[2]['content'] = '[MASKED]'
 
-        # 4. 生成 Prompt
+        # 生成 Prompt
         system_prompt, user_prompt = get_task_summarize_prompt(
             [masked_trajectory], old_objectives=task.query, profile=self._env_profile
         )
@@ -637,7 +745,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             {"role": "user", "content": user_prompt}
         ]
         
-        # 5. 调用 LLM
+        # 调用 LLM
         try:
             llm_response = llm_fn(messages=messages)
             llm_output = llm_response["content"]
@@ -645,22 +753,49 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             logger.error(f"[Summarize Intra] LLM call failed: {e}")
             return []
         
-        # 6. 解析结果
+        # 解析结果
+        # parse_tasks_from_response 会负责将 LLM 生成的新 Query 和新 Code (action_sequence) 填入 task.query 和 task.ground_truth
         task_copy = task.copy()
         task_copy.evaluator = 'synthetic'
-        tasks = parse_tasks_from_response(task_copy, llm_output)
         
+        tasks = parse_tasks_from_response(task_copy, llm_output)
+
+        # 获取 Reward 信息
+        reward_info = None
+        if trajectory.reward:
+            reward_info = {
+                "outcome": trajectory.reward.outcome,
+                "reason": getattr(trajectory.reward, "reason", "No reason provided")
+            }
+
+        # [关键] 注入元数据
+        for task_obj in tasks:
+            if task_obj.task.metadata is None:
+                task_obj.task.metadata = {}
+            
+            # 1. 设置原始 Query (Schema 字段已更新为 origin_query)
+            task_obj.task.origin_query = task.query
+            
+            # 2. 保存分析过程 (Debug 核心)
+            task_obj.task.metadata["summary_analysis_process"] = llm_output
+            
+            # 3. 保存 Reward 信息
+            task_obj.task.metadata["execution_reward"] = reward_info
+            
+            # 4. 链路追踪 ID
+            task_obj.task.metadata["source_data_id"] = task.metadata.get("data_id")
+            task_obj.task.metadata["generation_type"] = "evolved" # 标记这是演化出来的任务
+
         return tasks
 
     def summarize_cross(self, task: Task, trajectory: Trajectory) -> List[TaskObjective]:
         """
         跨域探索总结：验证是否跨两个 App 进行了交互，如果是，则归纳任务。
         """
-        # 2. 构造 LLM 函数 (使用修正后的变量名)
         client = self._summarize_client
         llm_fn = self._get_llm_chat_fn(client)
         
-        # 3. 数据脱敏
+        # 数据脱敏
         masked_trajectory = copy.deepcopy(trajectory)
         if len(masked_trajectory.steps) > 2:
             if masked_trajectory.steps[1].get('role') == 'user':
@@ -668,7 +803,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             if masked_trajectory.steps[2].get('role') == 'user':
                 masked_trajectory.steps[2]['content'] = '[MASKED]'
         
-        # 4. 生成 Prompt
+        # 生成 Prompt
         system_prompt, user_prompt = get_task_summarize_prompt(
             [masked_trajectory], old_objectives=task.query, profile=self._env_profile
         )
@@ -678,7 +813,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             {"role": "user", "content": user_prompt}
         ]
         
-        # 5. 调用 LLM
+        # 调用 LLM
         try:
             llm_response = llm_fn(messages=messages)
             llm_output = llm_response["content"]
@@ -686,12 +821,95 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             logger.error(f"[Summarize Cross] LLM call failed: {e}")
             return []
             
-        # 6. 解析结果
+        # 解析结果
         task_copy = task.copy()
         task_copy.evaluator = 'synthetic'
+        
         tasks = parse_tasks_from_response(task_copy, llm_output)
         
+        reward_info = None
+        if trajectory.reward:
+            reward_info = {
+                "outcome": trajectory.reward.outcome,
+                "reason": getattr(trajectory.reward, "reason", "No reason provided")
+            }
+
+        for task_obj in tasks:
+            if task_obj.task.metadata is None:
+                task_obj.task.metadata = {}
+            
+            # 设置原始 Query (Schema 字段已更新为 origin_query)
+            task_obj.task.origin_query = task.query
+            
+            task_obj.task.metadata["summary_analysis_process"] = llm_output
+            task_obj.task.metadata["execution_reward"] = reward_info
+            task_obj.task.metadata["source_data_id"] = task.metadata.get("data_id")
+            task_obj.task.metadata["generation_type"] = "evolved"
+            
         return tasks
+
+    def verify_direct_gt(self, task: Task, trajectory: Trajectory) -> Optional[TaskObjective]:
+        """
+        针对原始 Query，评估 Trajectory 是否构成了有效的 GT。
+        如果有效，返回包含 refined_code 的 TaskObjective。
+        """
+        # 1. 如果环境 Reward 极低，大概率不用浪费 LLM Token，直接过滤
+        # 但为了稳健性（防止环境 Reward 误判），可以选择保留或设定一个较低的硬阈值
+        if trajectory.reward and trajectory.reward.outcome < 0.3:
+            logger.info(f"[Verify] Skipping task {task.task_id} due to very low reward {trajectory.reward.outcome}")
+            return None
+
+        client = self._summarize_client
+        llm_fn = self._get_llm_chat_fn(client)
+
+        # 2. 构造 Prompt
+        system_prompt, user_prompt = get_direct_verify_prompt(
+            task, trajectory, self._env_profile
+        )
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+
+        # 3. 调用 LLM
+        try:
+            llm_response = llm_fn(messages=messages)
+            llm_output = llm_response["content"]
+        except Exception as e:
+            logger.error(f"[Verify] LLM call failed: {e}")
+            return None
+
+        # 4. 解析结果
+        result = parse_direct_verification(llm_output)
+
+        if result.get("is_valid"):
+            # 构造新的 TaskObjective
+            new_task = task.copy()
+            new_task.evaluator = 'synthetic' # 标记为合成/验证过的
+            
+            # 使用 LLM 提炼过的干净代码作为 GT
+            new_task.ground_truth = result.get("refined_code", "")
+            
+            # 设置原始 Query (Direct 模式下，original 就是当前的 query)
+            # Schema 字段已更新为 origin_query
+            new_task.origin_query = task.query 
+            
+            # 补充 Metadata
+            if new_task.metadata is None: new_task.metadata = {}
+            new_task.metadata["verification_reason"] = result.get("reason")
+            new_task.metadata["verification_confidence"] = result.get("confidence")
+            new_task.metadata["data_pair_type"] = "direct_verified"
+            
+            # 设置高置信度 (基于 LLM 验证 + 环境执行)
+            return TaskObjective(
+                task=new_task,
+                confidence=result.get("confidence", 0.9),
+                reward=trajectory.reward.outcome if trajectory.reward else 0.0
+            )
+        else:
+            logger.info(f"[Verify] Task {task.task_id} rejected: {result.get('reason')}")
+            return None
 
     # ================= 辅助私有方法 =================
 

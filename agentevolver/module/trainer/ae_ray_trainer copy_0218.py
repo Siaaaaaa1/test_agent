@@ -68,50 +68,103 @@ from agentevolver.module.adv_processor.adca_grpo_pipeline import apply_adca_grpo
 
 from agentevolver.module.exp_manager.exp_manager import ExperienceManager
 
+def compute_single_component_advantage(
+    token_level_rewards: torch.Tensor, 
+    response_mask: torch.Tensor,
+    uid_index: np.ndarray,
+    norm_by_std: bool = True,
+    epsilon: float = 1e-8
+):
+    """
+    [新增] 通用组件：计算单一种类奖励的 GRPO Advantage。
+    """
+    scores = token_level_rewards.sum(dim=-1) 
+    id2score = defaultdict(list)
+    id2mean = {}
+    id2std = {}
+    bsz = scores.shape[0]
+    
+    for i in range(bsz):
+        id2score[uid_index[i]].append(scores[i])
 
+    for idx in id2score:
+        vals = torch.stack([x if isinstance(x, torch.Tensor) else torch.tensor(x) for x in id2score[idx]]).float()
+        if len(vals) > 1:
+            id2mean[idx] = torch.mean(vals)
+            id2std[idx] = torch.std(vals) + epsilon
+        else:
+            id2mean[idx] = vals[0]
+            id2std[idx] = torch.tensor(1.0, device=vals.device)
+
+    normalized_scores = torch.zeros_like(scores)
+    for i in range(bsz):
+        mean = id2mean[uid_index[i]].to(scores.device)
+        std = id2std[uid_index[i]].to(scores.device)
+        if norm_by_std:
+            normalized_scores[i] = (scores[i] - mean) / std
+        else:
+            normalized_scores[i] = scores[i] - mean
+
+    advantage_component = normalized_scores.unsqueeze(-1) * response_mask
+    return advantage_component
+    
 def parse_reward_from_dataproto(data: DataProto, return_dict=False) -> dict | torch.Tensor:
     """
-    从数据批次中计算/提取奖励。
-
-    Args:
-        data: DataProto 对象，包含输入数据。
-        return_dict: 是否返回字典形式的详细信息，还是只返回奖励张量。
-
-    Returns:
-        如果 return_dict 为 False，返回形状为 (bs, response_len) 的张量；
-        否则返回包含 'reward_tensor' 和 'reward_extra_info' 的字典。
+    [修改] 解析 DataProto，分离 Outcome, API, Repetition 和 Efficiency 为独立 Tensor。
     """
-    # 在 DataFlow 中，world.execute() 会传递一个浮点数分数，该分数包含在 DataProto.non_tensor_batch('reward_scores') 中
-
-    # 初始化奖励张量
-    reward_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)  # (bs, reslen)  # ⭐ 初始化奖励张量，默认全0
+    outcome_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
+    api_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
+    rep_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
+    eff_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32) # 新增效率Tensor
+    
     reward_extra_info = defaultdict(list)
+    prompt_lengths = data.batch["prompts"].shape[-1]
+    response_lengths = data.batch["attention_mask"][:, prompt_lengths:].sum(dim=1)
+    step_ids = data.batch.get("step_ids", None)
 
-    # 批次级处理
-    prompt_ids_batch = data.batch["prompts"]  # (bs, prompt_len)
-    prompt_lengths = prompt_ids_batch.shape[-1]
+    # 1. 提取 Outcome (OutcomeScore)
+    reward_scores_obj = data.non_tensor_batch["reward_scores"] # List of dicts/Rewards
+    outcome_list = [item["outcome"] for item in reward_scores_obj]
+    outcome_tensor[torch.arange(len(data)), response_lengths - 1] = torch.tensor(outcome_list, dtype=torch.float32)
 
-    # 获取所有项的注意力掩码
-    attention_masks = data.batch["attention_mask"]  # (bs, total_len)
-    # 计算响应长度
-    response_lengths = attention_masks[:, prompt_lengths:].sum(dim=1)  # (bs, )
+    # 2. 提取 Efficiency (从 metadata 中读取)
+    # 注意：Efficiency 也是序列级奖励，放在最后一个 token
+    eff_list = [item.get("metadata", {}).get("efficiency_score", 0.0) for item in reward_scores_obj]
+    eff_tensor[torch.arange(len(data)), response_lengths - 1] = torch.tensor(eff_list, dtype=torch.float32)
 
-    # 获取奖励分数 (Outcome Reward)
-    reward_scores_list = [item["outcome"] for item in data.non_tensor_batch["reward_scores"]]
-    reward_scores = torch.tensor(reward_scores_list, device=reward_tensor.device, dtype=torch.float32)  # (bs, )  # ⭐ 将奖励列表转换为张量
+    # 3. 提取 API 和 Repetition (Step-wise)
+    if step_ids is not None:
+        batch_size, seq_len = step_ids.shape
+        api_scores_batch = [item.get("step_api_rewards", []) for item in reward_scores_obj]
+        rep_scores_batch = [item.get("step_repetition_rewards", []) for item in reward_scores_obj]
 
-    # 使用高级索引将奖励分配给响应的最后一个 Token 位置
-    # 这是一个稀疏奖励设置，只在序列结束时给分
-    reward_tensor[torch.arange(len(data)), response_lengths - 1] = reward_scores
+        for b in range(batch_size):
+            valid_steps = step_ids[b]
+            cur_api = api_scores_batch[b]
+            cur_rep = rep_scores_batch[b]
+            for t in range(seq_len):
+                if t >= response_lengths[b]: break
+                s_id = valid_steps[t].item()
+                if s_id < 0: continue
+                is_last_token_of_step = (t == seq_len - 1) or \
+                                        (t + 1 < seq_len and step_ids[b, t+1].item() != s_id) or \
+                                        (t + 1 >= response_lengths[b])
+                if is_last_token_of_step:
+                    if s_id < len(cur_api): api_tensor[b, t] = cur_api[s_id]
+                    if s_id < len(cur_rep): rep_tensor[b, t] = cur_rep[s_id]
+
+    data.batch["outcome_reward_tensor"] = outcome_tensor
+    data.batch["api_reward_tensor"] = api_tensor
+    data.batch["rep_reward_tensor"] = rep_tensor
+    data.batch["eff_reward_tensor"] = eff_tensor # 存入 batch
+
+    # 总奖励 (Log用)
+    total_reward_tensor = outcome_tensor + api_tensor + rep_tensor + eff_tensor
 
     if return_dict:
-        return {
-            "reward_tensor": reward_tensor,
-            "reward_extra_info": reward_extra_info,
-        }
+        return {"reward_tensor": total_reward_tensor, "reward_extra_info": reward_extra_info}
     else:
-        return reward_tensor
-
+        return total_reward_tensor
 
 def create_rl_sampler(data_config, dataset):
     """
@@ -237,21 +290,7 @@ def compute_grpo_outcome_advantage(
 def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_repeat=1, multi_turn=False, norm_adv_by_std_in_grpo=True, config=None):
     """
     计算策略优化的优势估计 (Advantage Estimates)。
-
-    此函数支持多种优势估计器，如 GAE, GRPO, REINFORCE++ 等。
-
-    Args:
-        data (DataProto): 包含批处理模型输出和输入的数据。
-        adv_estimator: 使用的优势估计器类型 (AdvantageEstimator 枚举)。
-        gamma (float, optional): 折扣因子。默认为 1.0。
-        lam (float, optional): GAE 的 Lambda 参数。默认为 1.0。
-        num_repeat (int, optional): 重复计算次数。默认为 1。
-        multi_turn (bool, optional): 数据是否来自多轮对话。默认为 False。
-        norm_adv_by_std_in_grpo (bool, optional): 是否在 GRPO 中按标准差归一化。默认为 True。
-        config (dict, optional): 算法设置的配置字典。默认为 None。
-
-    Returns:
-        DataProto: 更新后的数据，包含计算出的 'advantages' 和 'returns'。
+    [修改版] 针对 GRPO 实现了多路奖励的分别归一化与加权融合。
     """
     # 向后兼容：如果 fit 中未计算 response_mask，则在此处计算
     if "response_mask" not in data.batch.keys():
@@ -259,10 +298,9 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
     
     # 准备响应组
     if adv_estimator == AdvantageEstimator.GAE:
-        # 使用广义优势估计 (GAE) 计算优势和回报
-        # GAE 需要 Critic 网络 (Values)
+        # GAE 逻辑保持不变，通常只使用 total_reward_tensor
         advantages, returns = core_algos.compute_gae_advantage_return(
-            token_level_rewards=data.batch["token_level_rewards"],
+            token_level_rewards=data.batch["token_level_rewards"], # 这是 parse_reward 返回的总和
             values=data.batch["values"],
             response_mask=data.batch["response_mask"],
             gamma=gamma,
@@ -276,44 +314,79 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
                 config.get("pf_ppo_reweight_method", "pow"),
                 config.get("pf_ppo_weight_pow", 2.0),
             )
+
     elif adv_estimator == AdvantageEstimator.GRPO:
-        # GRPO 不需要 Critic 网络，而是基于组内平均基线
-        
-        # 初始化 GRPO 计算掩码
-        grpo_calculation_mask = data.batch["response_mask"]
+        # 1. 准备 Mask 和 UID
         if multi_turn:
-            # 如果是多轮对话，使用 loss_mask 的相关部分
-            response_length = grpo_calculation_mask.size(1)
-            grpo_calculation_mask = data.batch["loss_mask"][:, -response_length:]
+            response_length = data.batch["response_mask"].size(1)
+            grpo_mask = data.batch["loss_mask"][:, -response_length:]
+        else:
+            grpo_mask = data.batch["response_mask"]
+        uid_index = data.non_tensor_batch["uid"]
         
-        # 调用专门的 GRPO 优势计算函数
-        advantages, returns = compute_grpo_outcome_advantage(
-            token_level_rewards=data.batch["token_level_rewards"],
-            response_mask=grpo_calculation_mask,
-            index=data.non_tensor_batch["uid"], # 使用 uid 作为分组依据
-            norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
-        )  # ⭐ 计算 GRPO 优势和回报
-        data.batch["advantages"] = advantages
-        data.batch["returns"] = returns
+        # 2. 读取权重 (建议在 config.algorithm 中配置，这里给默认值)
+        w_outcome = config.get("w_outcome", 1.0)
+        w_efficiency = config.get("w_efficiency", 0.1) # 效率权重
+        w_api = config.get("w_api", 0.1)
+        w_rep = config.get("w_rep", 1.0) # 复读惩罚权重 (保持原数值大小影响力)
+
+        # 3. 计算各部分解耦优势
+
+        # A. Outcome
+        adv_out = compute_single_component_advantage(
+            data.batch.get("outcome_reward_tensor", data.batch["token_level_rewards"]),
+            grpo_mask, uid_index, norm_adv_by_std_in_grpo
+        )
+        
+        # B. Efficiency (读取上面 parse 出来的 tensor)
+        adv_eff = compute_single_component_advantage(
+            data.batch.get("eff_reward_tensor", torch.zeros_like(data.batch["responses"])),
+            grpo_mask, uid_index, norm_adv_by_std_in_grpo
+        )
+        
+        # C. API
+        adv_api = compute_single_component_advantage(
+            data.batch.get("api_reward_tensor", torch.zeros_like(data.batch["responses"])),
+            grpo_mask, uid_index, norm_adv_by_std_in_grpo
+        ) if "api_reward_tensor" in data.batch else 0.0
+        
+        # D. Repetition
+        adv_rep = compute_single_component_advantage(
+            data.batch.get("rep_reward_tensor", torch.zeros_like(data.batch["responses"])),
+            grpo_mask, uid_index, norm_adv_by_std_in_grpo
+        ) if "rep_reward_tensor" in data.batch else 0.0
+
+        # 4. 加权求和
+        final_advantages = (w_outcome * adv_out) + (w_efficiency * adv_eff) + \
+                           (w_api * adv_api) + (w_rep * adv_rep)
+
+        data.batch["advantages"] = final_advantages
+        
+        # Returns 用于 Critic (直接加和原始值)
+        total_returns = data.batch.get("outcome_reward_tensor", 0) + \
+                        data.batch.get("eff_reward_tensor", 0) + \
+                        data.batch.get("api_reward_tensor", 0) + \
+                        data.batch.get("rep_reward_tensor", 0)
+        data.batch["returns"] = total_returns
+        
     else:
-        # 处理除 GAE 和 GRPO 之外的其他优势估计器类型
+        # 处理其他 Estimator (REMAX, etc.) - 保持原样，或根据需要修改
         adv_estimator_fn = core_algos.get_adv_estimator_fn(adv_estimator)
         adv_kwargs = {
             "token_level_rewards": data.batch["token_level_rewards"],
             "response_mask": data.batch["response_mask"],
             "config": config,
         }
-        if "uid" in data.non_tensor_batch:  # 可选
+        if "uid" in data.non_tensor_batch:
             adv_kwargs["index"] = data.non_tensor_batch["uid"]
-        if "reward_baselines" in data.batch:  # 可选 (例如 ReMax 需要)
+        if "reward_baselines" in data.batch:
             adv_kwargs["reward_baselines"] = data.batch["reward_baselines"]
 
-        # 计算优势估计
-        advantages, returns = adv_estimator_fn(**adv_kwargs)  # ⭐ 计算其他估计器的优势和回报
+        advantages, returns = adv_estimator_fn(**adv_kwargs)
         data.batch["advantages"] = advantages
         data.batch["returns"] = returns
-    return data
 
+    return data
 
 class AgentEvolverRayPPOTrainer(RayPPOTrainer):
     """
@@ -1149,8 +1222,9 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
     def fit(self):
         """
         PPO 训练的主循环。
-        Driver 进程只需通过 RPC 调用 Worker 组的计算函数来构建 PPO 数据流。
-        轻量级的优势 (Advantage) 计算在 Driver 进程上完成。
+        [修改说明] 
+        1. 新增 Generation-Only Mode 检测逻辑。
+        2. 如果开启，创建独立归档目录，设置环境变量，触发任务生成，并直接退出。
         """
         from omegaconf import OmegaConf
         from agentevolver.utils.tracking import Tracking
@@ -1161,6 +1235,56 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
         # [Log Add] 辅助打印函数
         def main_log(msg):
             print(f"[{time.strftime('%H:%M:%S')}] [MainLoop] {msg}", flush=True)
+
+        # ================= [新增] Generation-Only Mode 逻辑 =================
+        # 检查是否开启纯生成模式
+        generate_task_only = self.config.task_manager.get("generate_task_only", False)
+        
+        if generate_task_only:
+            main_log("🚀 Detected 'generate_task_only' mode. Initializing Generation Sequence...")
+            
+            # 1. 优先检查是否存在 GEN_OUTPUT_DIR 环境变量
+            if "GEN_OUTPUT_DIR" in os.environ:
+                isolation_dir = os.environ["GEN_OUTPUT_DIR"]
+                # 确保目录存在（即使用户指定了路径，也需要保证文件夹被创建）
+                os.makedirs(isolation_dir, exist_ok=True)
+                main_log(f"📂 Using existing output directory from ENV: {isolation_dir}")
+            else:
+                # 2. 若不存在，则创建带时间戳的新目录
+                timestamp_str = time.strftime("%Y%m%d_%H%M%S")
+                # 允许通过配置指定前缀，默认为 gen_
+                dir_prefix = self.config.get("gen_output_prefix", "gen_")
+                isolation_dir = os.path.join(os.getcwd(), f"{dir_prefix}{timestamp_str}")
+                
+                os.makedirs(isolation_dir, exist_ok=True)
+                main_log(f"📂 Created isolation directory: {isolation_dir}")
+                
+                # 3. 设置环境变量，供 TaskManager 和 AgentFlow 使用
+                os.environ["GEN_OUTPUT_DIR"] = isolation_dir
+            # 同时也强制修改 config 中的相关路径，双重保险
+            # self.config.task_manager.train_data_path = os.path.join(isolation_dir, "train_dataset_cache.json")
+            
+            # 3. 强制生成 (Force Execution)
+            # 通过调用 train_dataset 的 reload_new_task 来触发 TaskManager 的生成逻辑
+            # TaskManager 内部会检测环境变量或参数来决定是否忽略断点
+            main_log("🔄 Triggering Task Generation (Force Execution)...")
+            
+            try:
+                # 这里的 reload_new_task 会调用 TaskManager.generate_task
+                self.train_dataset.reload_new_task()
+                
+                # 如果需要保存最终生成的 dataset cache
+                self.train_dataset.save_to_file()
+                
+                main_log(f"✅ Generation Complete. All data saved to {isolation_dir}")
+            except Exception as e:
+                main_log(f"❌ Generation Failed: {e}")
+                raise e
+            
+            # 4. 直接退出程序，跳过 PPO 训练
+            main_log("🛑 Exiting program as 'generate_task_only' is active.")
+            return
+        # ====================================================================
 
         logger = Tracking(
             project_name=self.config.trainer.project_name,
@@ -1206,7 +1330,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
         for epoch in range(self.config.trainer.total_epochs):
             main_log(f"=== Starting Epoch {epoch} ===")
             
-            # ================= [NEW] 动态数据注入逻辑 =================
+            # 动态数据注入逻辑
             if hasattr(self.train_task_manager, 'load_new_hindsight_tasks'):
                 new_count = self.train_task_manager.load_new_hindsight_tasks()
                 if new_count > 0:
@@ -1214,7 +1338,6 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                     self._create_dataloader_from_manager(collate_fn=self._collate_fn, shuffle_trainset=True)
                     progress_bar.total = self.total_training_steps
                     progress_bar.refresh()
-            # ========================================================
 
             for i, batch_dict in enumerate(self.train_dataloader):
                 step_start_time = time.time()
@@ -1275,7 +1398,6 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                             main_log(f"Step {self.global_steps}: Generating Rollouts (Async)...") # [Log Add]
                             print("=" * 10 + "start fit rollout" + "=" * 10)
                             
-                            # >>> 这里的 rollout 是最容易卡住的地方 <<<
                             trajectories = self.env_manager.rollout(tasks, task_exp_configs, mode="sample", epoch=f"train.{epoch}.{i}")
                             
                             assert len(trajectories)>0, "{len(trajectories)=}?"
@@ -1290,9 +1412,9 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                             context_time_cost = [x.metadata["context_time_cost"] for x in trajectories if "context_time_cost" in x.metadata]
                             if context_time_cost:
                                 metrics.update({
-                                    "exp_manager/context_cost_avg":   np.mean(context_time_cost),
-                                    "exp_manager/context_cost_max":   np.max(context_time_cost),
-                                    "exp_manager/context_cost_min":   np.min(context_time_cost),
+                                    "exp_manager/context_cost_avg":    np.mean(context_time_cost),
+                                    "exp_manager/context_cost_max":    np.max(context_time_cost),
+                                    "exp_manager/context_cost_min":    np.min(context_time_cost),
                                 })
 
                             print(f"gen_batch_output.info batch.keys={gen_batch_output.batch.keys()}")
@@ -1433,7 +1555,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                         )
 
                         # ... (Hindsight logic & ADCA GRPO) ...
-                        # ==================== [NEW] Hindsight 反向归纳逻辑 ====================
+                        # ==================== Hindsight 反向归纳逻辑 ====================
                         attribution_cfg = self._get_attribution_config()
                         
                         if getattr(attribution_cfg, "enable_hindsight", False) and getattr(self, "hindsight_manager", None) is not None:
@@ -1603,6 +1725,20 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                 n_gpus = self.resource_pool_manager.get_n_gpus()
                 metrics.update(compute_throughout_metrics(batch=batch, timing_raw=timing_raw, n_gpus=n_gpus))
 
+                # 自定义 WandB 数据提取逻辑
+                if "reward_scores" in batch.non_tensor_batch:
+                    reward_scores_list = batch.non_tensor_batch["reward_scores"]
+                    custom_stats = defaultdict(list)
+                    for r_item in reward_scores_list:
+                        meta = r_item.get('metadata', {})
+                        if meta:
+                            for k, v in meta.items():
+                                if k.startswith("metric/"):
+                                    custom_stats[k].append(v)
+                    for k, v_list in custom_stats.items():
+                        if v_list:
+                            metrics[f"rollout/{k.split('/')[-1]}"] = np.mean(v_list)
+                
                 # 记录日志
                 logger.log(data=metrics, step=self.global_steps)
                 

@@ -92,8 +92,6 @@ class RewardProps(TypedDict):
     original_grader: str  # 原始任务（种子）使用的评分器
     synthetic_grader: str # 合成任务（演化出的）使用的评分器
 
-# --- 工具函数 ---
-
 def get_exploration_strategy(name: str, strategy_args, *, tokenizer, config, llm_client, env_profile) -> TaskExploreStrategy:
     logger.info(f"loading exploration strategy {name}")
     if name == "random":
@@ -175,7 +173,6 @@ class TaskManager(object):
         self.api_llm_pre_filter = [
             LlmQualityPreFilter(llm_client, num_threads=self._num_exploration_threads)
         ]
-
         self._tasks: list[Task] = [] # 存储加载的种子任务
         self._hindsight_file_offset = 0  # 记录读取文件的位置
         self._hindsight_file_path = self._config.task_manager.get('exploration_strategy_args', {}).get('hindsight_data_path', './tasks_explored/hindsight_supplement.jsonl')
@@ -448,24 +445,20 @@ class TaskManager(object):
     def _generate_task_api_driven(self, tasks: Sequence[Task], *, show_progress=False, resume_file: Optional[str] = None) -> list[TaskObjective]:
         """
         重构后的 API-Driven 生成流程：支持全链路流式写入 (Streaming) 和强制执行 (Force Execution)
-        [修改说明]
-        1. 路径重定向：如果存在 GEN_OUTPUT_DIR，所有文件路径都指向该目录。
-        2. 实时流式保存：废弃 "跑完再存" 逻辑，改为在 Worker 完成后立即追加写入 (Append) 到文件。
+        [修改说明] 增加了 verify_direct_gt 的调用
         """
         generate_task_only = self._config.task_manager.get('generate_task_only', False)
         strategy_args = self._config.task_manager.get('exploration_strategy_args', {})
         a = strategy_args.get('a', 1)
         b = strategy_args.get('b', 1)
-        debug_mode = False # self._config.get("debug_log", False)
+        debug_mode = False 
         
         logger.info(f"[API-Driven] Strategy Args: a={a}, b={b}, debug_log={debug_mode}")
         if debug_mode:
             logger.warning("Debug mode enabled: forcing single thread.")
 
-        # [修改] 路径重定向逻辑
         gen_output_dir = os.environ.get("GEN_OUTPUT_DIR")
-        if gen_output_dir and generate_task_only:
-            # 在独立模式下，文件名只保留核心部分，放在新目录下
+        if gen_output_dir:
             base_name = "generated_tasks"
             resume_file = os.path.join(gen_output_dir, base_name)
             logger.info(f"📂 [Isolation] Redirecting all generation outputs to: {resume_file}")
@@ -474,21 +467,18 @@ class TaskManager(object):
         
         current_tasks_hash = self._compute_tasks_hash(tasks)
         
-        # --- 内部 Helper 函数: 读写中间状态 ---
         def load_intermediate_tasks(path: str) -> Optional[List[Task]]:
             if os.path.exists(path):
                 try:
-                    # 尝试读取 JSONL
                     tasks_list = []
                     with open(path, 'r') as f:
                         for line in f:
                             if line.strip():
                                 try:
                                     data = json.loads(line)
-                                    # 兼容旧的 wrap 格式或者直接 Task 格式
-                                    if "task" in data and "processed_indices" in data: # 旧的全量文件格式
+                                    if "task" in data and "processed_indices" in data:
                                         return [Task.parse_obj(t) for t in data['tasks']]
-                                    else: # 新的流式格式 (Task dict)
+                                    else:
                                         tasks_list.append(Task.parse_obj(data))
                                 except: pass
                     logger.info(f"Loaded {len(tasks_list)} tasks from stream file {path}")
@@ -497,22 +487,19 @@ class TaskManager(object):
                     logger.warning(f"Failed to load checkpoint {path}: {e}")
             return None
 
-        # [新增] 线程安全的流式追加写入函数
         def thread_safe_append(path: str, items: List[Any]):
-            """实时追加写入文件，防止数据丢失"""
             if not items: return
-            with io_lock: # 使用全局锁
+            with io_lock:
                 try:
                     with open(path, 'a', encoding='utf-8') as f:
                         for item in items:
-                            # 统一转为 dict 存储
                             obj = item.dict() if hasattr(item, 'dict') else item
                             f.write(json.dumps(obj, ensure_ascii=False) + "\n")
                 except Exception as e:
                     logger.error(f"Failed to append to {path}: {e}")
 
         # =================================================================
-        # WORKER FUNCTIONS (定义在函数内部以利用闭包)
+        # WORKER FUNCTIONS 
         # =================================================================
 
         def worker_generate_intra(idx: int, api_dict: dict, seed_task: Task) -> List[Task]:
@@ -529,13 +516,6 @@ class TaskManager(object):
                 for sub_idx, current_task in enumerate(tasks):
                     data_id = f"gen_intra_{idx}_{sub_idx}"
                     current_task.metadata["data_id"] = data_id
-                    
-                    debug_log(self._config, "evolution_trace", {
-                        "type": "intra_input",
-                        "data_id": data_id,
-                        "generated_task_query": current_task.query,
-                        "task_metadata": current_task.metadata
-                    })
                     generated_tasks_list.append(current_task)
                 return generated_tasks_list
             except Exception as e:
@@ -556,13 +536,6 @@ class TaskManager(object):
                 for sub_idx, current_task in enumerate(tasks):
                     data_id = f"gen_cross_{idx}_{sub_idx}"
                     current_task.metadata["data_id"] = data_id
-
-                    debug_log(self._config, "evolution_trace", {
-                        "type": "cross_input",
-                        "data_id": data_id,
-                        "generated_task_query": current_task.query,
-                        "task_metadata": current_task.metadata
-                    })
                     generated_tasks_list.append(current_task)
                 return generated_tasks_list
             except Exception as e:
@@ -573,44 +546,176 @@ class TaskManager(object):
             try:
                 data_id = task.metadata.get("data_id", f"unknown_{random.randint(0,1000)}")
                 logger.info(f"[Intra-Explore] Exploring {data_id}...")
+                
+                # 1. 执行探索
                 trajectories = self._exploration_strategy.explore(task, data_id, data_id)
                 
-                simple_trajs = []
-                for t in trajectories:
-                    steps_data = [s if isinstance(s, dict) else (s.dict() if hasattr(s, 'dict') else str(s)) for s in t.steps]
-                    simple_trajs.append({"steps_count": len(t.steps), "steps": steps_data})
-                
-                debug_log(self._config, "evolution_trace", {"type": "intra_output", "data_id": data_id, "trajectories": simple_trajs})
+                # 筛选成功轨迹
+                success_traj = None
+                if trajectories and trajectories[0].reward and trajectories[0].reward.outcome >= 0.7:
+                    success_traj = trajectories[0]
 
-                results = []
-                if trajectories and trajectories[0].steps:
-                    results = self._exploration_strategy.summarize(task, trajectories[0])
-                return results if results else []
+                if not success_traj:
+                    return []
+
+                reward_val = success_traj.reward.outcome
+                # [关键] 获取原始轨迹步骤
+                # 使用 dict() 序列化防止引用问题，保存完整的原始执行流
+                raw_gt_steps = [s.dict() if hasattr(s, 'dict') else s for s in success_traj.steps]
+
+                # =========================================================
+                # Step 1: 尝试生成 Direct Verified Pair (Refined Code)
+                # =========================================================
+                direct_verified_obj = self._exploration_strategy.verify_direct_gt(task, success_traj)
+                
+                # [核心修改] 定义 Evolved 阶段需要的“起源”信息
+                # 1. origin_query 始终是当前的 task.query
+                origin_query_for_evolved = task.query
+                # 2. origin_gt 默认为 None (因为你说“最最初始的task.ground_truth需要丢弃”，它是空的)
+                origin_gt_for_evolved = None 
+
+                if direct_verified_obj:
+                    # --- A. 保存 Direct 结果 ---
+                    direct_verified_obj.task.raw_trajectory = raw_gt_steps
+                    
+                    # Direct 任务本身的 Origin GT 也是 None (因为它来自种子)
+                    direct_verified_obj.task.origin_ground_truth = None
+                    direct_verified_obj.task.origin_query = task.query
+                    
+                    direct_verified_obj.task.metadata["source_data_id"] = data_id
+                    direct_verified_obj.task.metadata["execution_reward"] = {"outcome": reward_val}
+                    
+                    logger.info(f"✅ [Intra] Direct GT Verified for {data_id}")
+                    thread_safe_append(intra_direct_path, [direct_verified_obj])
+
+                    # --- B. 更新 Evolved 的 Origin GT ---
+                    # 只有当验证成功，我们才拥有一个“起源 GT”。
+                    # 将这个 Direct 验证出的 Refined Code 传给 Evolved 任务作为 Origin。
+                    origin_gt_for_evolved = direct_verified_obj.task.ground_truth 
+                else:
+                    logger.info(f"⚠️ [Intra] Direct GT Verification Failed for {data_id}. Origin GT will be None.")
+
+                # =========================================================
+                # Step 2: 生成 Evolved Pair (New Query + New GT)
+                # =========================================================
+                evolved_results = self._exploration_strategy.summarize(task, success_traj)
+
+                if evolved_results:
+                    for res in evolved_results:
+                        # 1. 填充 Raw Trajectory (始终携带原始轨迹)
+                        res.task.raw_trajectory = raw_gt_steps
+                        
+                        # 2. 填充 Origin 信息
+                        # 这里使用了上面计算好的变量：
+                        # - 如果 Direct Verify 成功：Origin GT = Refined Code
+                        # - 如果 Direct Verify 失败：Origin GT = None (初始 GT 被丢弃)
+                        res.task.origin_ground_truth = origin_gt_for_evolved
+                        res.task.origin_query = origin_query_for_evolved
+                        
+                        # 3. 填充元数据
+                        res.confidence = 0  # 初始置信度
+                        res.reward = reward_val
+                        res.task.metadata.update({
+                            "data_pair_type": "evolved",
+                            "source_data_id": data_id,
+                            # 标记该演化任务是否基于一个已验证的代码
+                            "has_verified_origin": (origin_gt_for_evolved is not None)
+                        })
+                    
+                    thread_safe_append(intra_evolved_path, evolved_results)
+
+                return evolved_results if evolved_results else []
+
             except Exception as e:
                 logger.error(f"[Intra-Explore] Error: {e}", exc_info=True)
                 return []
-            
+
         def worker_explore_cross(task: Task) -> List[TaskObjective]:
             try:
                 data_id = task.metadata.get("data_id", f"unknown_{random.randint(0,1000)}")
                 logger.info(f"[Cross-Explore] Exploring {data_id}...")
+                
+                # 1. 执行探索
                 trajectories = self._exploration_strategy.explore(task, data_id, data_id)
                 
-                simple_trajs = []
-                for t in trajectories:
-                    steps_data = [s if isinstance(s, dict) else (s.dict() if hasattr(s, 'dict') else str(s)) for s in t.steps]
-                    simple_trajs.append({"steps_count": len(t.steps), "steps": steps_data})
-                
-                debug_log(self._config, "evolution_trace", {"type": "cross_output", "data_id": data_id, "trajectories": simple_trajs})
+                # 筛选成功轨迹 (Reward >= 0.7)
+                success_traj = None
+                if trajectories and trajectories[0].reward and trajectories[0].reward.outcome >= 0.7:
+                    success_traj = trajectories[0]
 
-                results = []
-                if trajectories and trajectories[0].steps:
-                    results = self._exploration_strategy.summarize(task, trajectories[0])
-                return results if results else []
+                if not success_traj:
+                    return []
+
+                reward_val = success_traj.reward.outcome
+                # [关键] 获取原始轨迹步骤 (Raw Steps)
+                # 使用 dict() 序列化防止引用问题
+                raw_gt_steps = [s.dict() if hasattr(s, 'dict') else s for s in success_traj.steps]
+
+                # =========================================================
+                # Step 1: 尝试生成 Direct Verified Pair (Refined Code)
+                # =========================================================
+                direct_verified_obj = self._exploration_strategy.verify_direct_gt(task, success_traj)
+                
+                # [核心修改] 定义 Evolved 阶段需要的“起源”信息
+                # 1. origin_query 始终是当前的 task.query
+                origin_query_for_evolved = task.query
+                # 2. origin_gt 默认为 None (丢弃最原始的空 GT)
+                origin_gt_for_evolved = None 
+
+                if direct_verified_obj:
+                    # --- A. 保存 Direct 结果 ---
+                    # 1. 填充 Raw Trajectory
+                    direct_verified_obj.task.raw_trajectory = raw_gt_steps
+                    
+                    # Direct 任务本身的 Origin GT 也是 None (因为它来自种子)
+                    direct_verified_obj.task.origin_ground_truth = None
+                    direct_verified_obj.task.origin_query = task.query
+                    
+                    direct_verified_obj.task.metadata["source_data_id"] = data_id
+                    direct_verified_obj.task.metadata["execution_reward"] = {"outcome": reward_val}
+                    
+                    logger.info(f"✅ [Cross] Direct GT Verified for {data_id}")
+                    thread_safe_append(cross_direct_path, [direct_verified_obj])
+
+                    # --- B. 更新 Evolved 的 Origin GT ---
+                    # 只有当验证成功，将 Refined Code 传给 Evolved 任务作为 Origin
+                    origin_gt_for_evolved = direct_verified_obj.task.ground_truth
+                else:
+                    logger.info(f"⚠️ [Cross] Direct GT Verification Failed for {data_id}. Origin GT will be None.")
+
+                # =========================================================
+                # Step 2: 生成 Evolved Pair (New Query + New GT)
+                # =========================================================
+                evolved_results = self._exploration_strategy.summarize(task, success_traj)
+
+                if evolved_results:
+                    for res in evolved_results:
+                        # 1. 填充 Raw Trajectory (始终携带原始轨迹)
+                        res.task.raw_trajectory = raw_gt_steps
+                        
+                        # 2. 填充 Origin 信息
+                        # 逻辑：如果 Direct 成功，则继承 Refined Code；否则为 None
+                        res.task.origin_ground_truth = origin_gt_for_evolved
+                        res.task.origin_query = origin_query_for_evolved
+                        
+                        # 3. 填充元数据
+                        res.confidence = 0 # 初始置信度
+                        res.reward = reward_val
+                        res.task.metadata.update({
+                            "data_pair_type": "evolved",
+                            "source_data_id": data_id,
+                            # 标记该演化任务是否基于一个已验证的代码
+                            "has_verified_origin": (origin_gt_for_evolved is not None)
+                        })
+                    
+                    thread_safe_append(cross_evolved_path, evolved_results)
+
+                return evolved_results if evolved_results else []
+
             except Exception as e:
                 logger.error(f"[Cross-Explore] Error: {e}", exc_info=True)
                 return []
-
+            
         # 获取基础数据
         api_knowledge = getattr(self._exploration_strategy, 'api_knowledge', {})
         active_apps_set = getattr(self._exploration_strategy, 'active_apps', set(api_knowledge.keys()))
@@ -623,6 +728,16 @@ class TaskManager(object):
         cross_gen_path = f"{resume_file}.cross.generated.jsonl"
         cross_filtered_path = f"{resume_file}.cross.filtered.jsonl"
         cross_final_path = f"{resume_file}.extra.jsonl"
+
+        # [新增] 定义两对数据的保存路径
+        # 1. Direct Pair (Original Query + Trajectory)
+        intra_direct_path = f"{resume_file}.intra.direct.jsonl"
+        cross_direct_path = f"{resume_file}.cross.direct.jsonl"
+        
+        # 2. Evolved Pair (New Query + Trajectory) - 这里复用 final_path 或者定义新的
+        intra_evolved_path = f"{resume_file}.intra.evolved.jsonl" 
+        cross_evolved_path = f"{resume_file}.cross.evolved.jsonl"
+        
 
         # =================================================================
         # PART 1: INTRA-DOMAIN (生成 -> 过滤)

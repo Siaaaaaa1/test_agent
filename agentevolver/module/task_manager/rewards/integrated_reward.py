@@ -164,8 +164,9 @@ You are an expert AI agent evaluator. Your job is to judge an agent's performanc
 2) **Agent Trajectory** — chronological steps the agent took, including actions, decisions, and outputs.
 
 ### Ground Rules
+- **Strictly Verify Final Content**: You must judge whether the **final submitted content** (e.g., specific numbers, code, file contents, or answers) is factually correct and fully addresses the User Task. Do not be fooled by a polite closing statement if the actual data is wrong.
+- **Validate the Path**: You must ensure the intermediate steps **actually** completed the task. The agent must not "hallucinate" success; the path of actions must logically and truthfully lead to the final result.
 - Base your judgment strictly on the provided trajectory. Do **not** invent missing steps or assumptions.
-- Rely on your own knowledge to validate the correctness of the approach and the final result.
 - Be deterministic: follow the procedure below and the scoring constraints exactly.
 
 ---
@@ -173,23 +174,29 @@ You are an expert AI agent evaluator. Your job is to judge an agent's performanc
 ## Evaluation Procedure
 1. **Relevance Gate**: If the approach is wholly unrelated → **score = 0**.
 2. **Repetition Penalty**: If infinite/runaway repetition exists → **max score = 20**.
-3. **Goal Achievement**: Examine all steps. Did it actually complete the task correctly?
-4. **Deductions**: Deduct for execution errors, inefficiency, or roundabout steps.
+3. **Path Verification**: Examine the intermediate steps. Did the agent actually execute the necessary tools/APIs to solve the problem? Did it skip essential logic or fake the execution?
+4. **Result Verification**: Examine the final submission. Is the final answer/output **correct** based on the executed steps? Does it directly satisfy the User Task requirements?
+5. **Deductions**: Deduct for execution errors, inefficiency, or roundabout steps.
 
 ## Scoring Guidelines
 **If goal achieved (must be 60-100):**
-- **90-100:** Exceptional — clean, efficient.
-- **80-89:** Strong — correct with minor inefficiencies.
-- **70-79:** Good — correct but notably less efficient.
-- **60-69:** Adequate — correct yet with significant problems.
+*CRITICAL: Only assign this range if the final answer is correct AND the path validates it.*
+- **90-100:** Exceptional — clean path, perfect result.
+- **80-89:** Strong — correct result, path has minor inefficiencies.
+- **70-79:** Good — correct result, but path is notably inefficient.
+- **60-69:** Adequate — correct result, but path had significant issues (e.g., recovered from many errors).
 
 **If goal not achieved (must be 0-40):**
-- **30-40:** Poor — incorrect but generally relevant.
-- **10-29:** Very poor — incorrect with major execution issues.
-- **0-9:** Failure — irrelevant or infinite repetition.
+*Assign this range if the final answer is wrong, OR if the path does not support the answer (hallucinated success).*
+- **30-40:** Poor — incorrect result, but approach was generally relevant.
+- **10-29:** Very poor — incorrect result with major execution issues.
+- **0-9:** Failure — irrelevant, infinite repetition, or fake success.
 
 ## Output Format
-First, provide a **detailed reasoning analysis**.
+First, provide a **detailed reasoning analysis**. Explicitly state:
+1. Whether the intermediate path truly completed the task.
+2. Whether the final submitted content is correct.
+
 Then output a single integer score (either **0-40** or **60-100**, never 41-59) wrapped in tags:
 
 <reward>75</reward>
@@ -202,6 +209,52 @@ Then output a single integer score (either **0-40** or **60-100**, never 41-59) 
 ** Agent Trajectory (STEP-ACTION-OBSERVATION) **
 {trajs}
 """
+
+# USER_PROMPT = """### Role
+# You are an expert AI agent evaluator. Your job is to judge an agent's performance using the following inputs:
+
+# 1) **User Task** — what the agent was supposed to accomplish.
+# 2) **Agent Trajectory** — chronological steps the agent took, including actions, decisions, and outputs.
+
+# ### Ground Rules
+# - Base your judgment strictly on the provided trajectory. Do **not** invent missing steps or assumptions.
+# - Rely on your own knowledge to validate the correctness of the approach and the final result.
+# - Be deterministic: follow the procedure below and the scoring constraints exactly.
+
+# ---
+
+# ## Evaluation Procedure
+# 1. **Relevance Gate**: If the approach is wholly unrelated → **score = 0**.
+# 2. **Repetition Penalty**: If infinite/runaway repetition exists → **max score = 20**.
+# 3. **Goal Achievement**: Examine all steps. Did it actually complete the task correctly?
+# 4. **Deductions**: Deduct for execution errors, inefficiency, or roundabout steps.
+
+# ## Scoring Guidelines
+# **If goal achieved (must be 60-100):**
+# - **90-100:** Exceptional — clean, efficient.
+# - **80-89:** Strong — correct with minor inefficiencies.
+# - **70-79:** Good — correct but notably less efficient.
+# - **60-69:** Adequate — correct yet with significant problems.
+
+# **If goal not achieved (must be 0-40):**
+# - **30-40:** Poor — incorrect but generally relevant.
+# - **10-29:** Very poor — incorrect with major execution issues.
+# - **0-9:** Failure — irrelevant or infinite repetition.
+
+# ## Output Format
+# First, provide a **detailed reasoning analysis**.
+# Then output a single integer score (either **0-40** or **60-100**, never 41-59) wrapped in tags:
+
+# <reward>75</reward>
+
+# ---
+
+# ** User Task **
+# {task}
+
+# ** Agent Trajectory (STEP-ACTION-OBSERVATION) **
+# {trajs}
+# """
 
 def steps_to_msg(steps: list[dict[str, Any]]) -> str:
     """

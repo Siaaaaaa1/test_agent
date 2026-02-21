@@ -12,6 +12,8 @@ fuser -k -9 8080/tcp >/dev/null 2>&1
 fuser -k -9 6379/tcp >/dev/null 2>&1
 rm -rf /tmp/ray/* 2>/dev/null
 
+find /mnt/cephfs/haowengao/test_agent/env_service/environments/appworld/experiments/outputs -type d -depth -exec rmdir {} + 2>/dev/null
+
 sleep 2
 export GEN_OUTPUT_DIR="/mnt/cephfs/haowengao/test_agent/GEN_NEW_DATA"
 mkdir -p "$GEN_OUTPUT_DIR"
@@ -148,7 +150,7 @@ python3 -m agentevolver.main_ppo \
     trainer.logger="['console','wandb']" \
     trainer.project_name="AgentEvolver" \
     trainer.experiment_name="appworld_single_mixed" \
-    trainer.save_freq=2 \
+    trainer.save_freq=5 \
     trainer.test_freq=5 \
     trainer.total_epochs=40 \
     trainer.val_before_train=false \

@@ -147,3 +147,8 @@ GEN_NEW_DATA/generated_tasks.cross.filtered.jsonl
 GEN_NEW_DATA/generated_tasks.cross.generated.jsonl
 GEN_NEW_DATA/generated_tasks.intra.filtered.jsonl
 GEN_NEW_DATA/generated_tasks.intra.generated.jsonl
+GEN_NEW_DATA/
+GEN_NEW_DATA_1/
+GEN_NEW_DATA_OLD/
+logs/
+env_service/environments/appworld/data

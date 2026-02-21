@@ -2,64 +2,72 @@ import json
 import re
 
 INTRA_DOMAIN_PURPOSE_PROMPT = """
-You are an expert data generator for an AI Agent in a **"Black Box" Environment**.
-Given an App's APIs, select one target API and construct a **logical, natural** User Query.
+You are an expert Data Synthetic Generator for Single-App Automation.
+Create a realistic, logically robust user command within a specific app using its APIs.
 
-### 🌑 Core Context (Black Box)
-The user **CANNOT** see internal states (IDs, specific filenames, inventory). They rely on **fuzzy needs** or **common sense**, expecting the Agent to handle details.
-*Goal:* Balance **Ambiguity** (don't micromanage) and **Precision** (give enough context).
+You have access to:
+1. **Global Context**: Descriptions of all available apps.
+2. **App Overview**: A list of ALL APIs in this app (Format: `call_name: description`).
+3. **Anchor API Details**: Detailed specifications (call_name, parameters, returns) for specific APIs we **MUST** focus on.
 
-### 📐 Construction Guidelines
-1.  **The Goldilocks Rule (No Gambling):**
-    Provide functional constraints, but NEVER guess specific values the user can't know.
-    * *Bad (Gambling):* "Buy a fan that costs exactly $20.50." (User can't predict exact price).
-    * *Good:* "Buy a highly-rated desktop fan for under $25." (Delegates filtering to Agent).
+### 🚫 STRICT Constraints
+1.  **Use Available Info**: Utilize the `Anchor API Details` to ensure parameter compatibility (e.g., if an API requires a `category`, ensure the user query implies a category filter).
+2.  **Source Uncertainty (Black Box)**: 
+    * Do NOT assume specific data content exists (e.g., specific senders like 'from HR', specific file contents).
+    * Do NOT assume specific user-defined tags/folders exist unless they are system defaults (like 'Inbox', 'Spam').
+3.  **Relative over Specific**: Prefer relative references (e.g., "my last email", "the most recent order") over specific entities.
+4.  **Action Oriented**: The query must imply a clear action that corresponds to the capabilities of the Anchor API.
 
-2.  **No Hard-coded Containers/Files (Robustness):**
-    Do not assume specific user-defined folder names or filenames exist unless you are creating them.
-    * *Bad:* "Compress my 'Projects' folder." (Assumes a specific folder exists).
-    * *Good:* "Find all documents from last week and archive them." (Discovery based).
-
-3.  **Blind Action (State-Agnostic):**
-    State the desired outcome directly. Do NOT use conditional logic based on hidden states.
-    * *Bad:* "If my name is 'J. Doe', change it to 'Jane'."
-    * *Good:* "Update my account name to 'Jane Smith'."
-
-### 🎯 Target Scenarios
-* **Acquisition:** Search with soft constraints (e.g., "Find a restaurant near me rated 4.5+").
-* **Batch Processing:** Operate on groups via attributes (e.g., "Move all PDF files to Documents").
-* **Overwrite:** Change settings directly (e.g., "Set bio to 'Working hard'").
-
-### Task
-Select a target API. Generate 1 realistic user scenario based on fuzzy needs or functional constraints. Construct a natural, discovery-oriented user query.
+### ✅ Logic Patterns
+1.  **Relative Search**: User refers to items by time or order (e.g., "Delete the last message").
+2.  **Keyword Search**: User performs a broad search where 0 results is acceptable (e.g., "Search for 'invoice'").
+3.  **State Modification**: User provides a value -> App updates settings (e.g., "Turn on Do Not Disturb").
+4.  **Content Creation**: User provides content -> App creates a note/list/message (e.g., "Create a shopping list with 'Milk'").
 
 ### Few-Shot Examples
 
-**❌ BAD Examples (Overly specific/Hard-coded logic):**
-- **Bad 1:** Get the names of all tasks under my 'Concert Prep' section and search for them online. (*Reason: Assumes a specific section name exists.*)
-- **Bad 2:** Check if a file named 'weekly_report.pdf' exists in my directory and send it to my boss. (*Reason: Hard-codes a specific filename.*)
-- **Bad 3:** Move all images from my 'Projects' folder to the cloud. (*Reason: Assumes a specific folder name exists.*)
+❌ **BAD Examples (Overly specific/Hard-coded logic):**
+- **Bad 1:** "Search for the email from 'John Doe'." (*Reason: Assumes John Doe has emailed the user.*)
+- **Bad 2:** "Move 'report.pdf' to the 'Finance' folder." (*Reason: Assumes specific file and folder names exist.*)
+- **Bad 3:** "Play the song 'Shape of You'." (*Reason: Assumes this specific song is in the library.*)
 
-**✅ GOOD Examples (Robust & Natural):**
-- **Good 1:** Find a highly-rated coffee maker under $50 and add it to my shopping cart.
-- **Good 2:** Archive all emails received from 'newsletter@tech.com' in the last 30 days.
-- **Good 3:** Set a wake-up alarm for 7:00 AM on weekdays, replacing any existing alarms.
-- **Good 4:** Send $20 for 'Lunch' to the last person I paid.
-- **Good 5:** Create a new note titled 'Grocery List' and add 'Milk' as the first line.
+✅ **GOOD Examples (Robust & Natural):**
+- **Good 1:** "Find the most recent email I received and mark it as important." (Robust: Relies on time, not sender).
+- **Good 2:** "Set a daily alarm for 7:00 AM labeled 'Morning Run'." (Robust: Creation/Setting).
+- **Good 3:** "Search for tasks containing the word 'deadline' and mark them as complete." (Robust: Search intent is valid even if no tasks match).
+- **Good 4:** "Update my status to 'Away' and set the auto-reply message to 'Traveling'." (Robust: Configuration).
+- **Good 5:** "Create a new note titled 'Ideas' and append the text 'Project Alpha' to it." (Robust: Creation).
+- **Good 6:** "Get the details of my last order." (Robust: Relative reference).
+
+### Task
+You are provided with a set of **Anchor APIs**. You **MUST** select one API from the provided Anchor list as the target action.
+Generate 1 realistic user scenario where the user's intent directly leads to calling this Anchor API.
+The constructed user query **MUST** utilize the functionality described in the **Anchor API Details**.
 
 ### Output Format (JSON Only)
 [
     {{
         "user_query": "Natural language instruction 1",
-        "target_api": "The primary API call_name used"
+        "target_api": "The exact call_name of the selected anchor API"
     }}
 ]
 
 ### Input Data
-App Name: {APP_NAME}
-App APIs: {API_LIST}
-"""
 
+#### 📱 Target App: {APP_NAME}
+
+**All APIs Overview:**
+{TARGET_APP_API_DESCS}
+
+**⚓ Anchor API Details (YOU MUST USE ONE OF THESE):**
+{ANCHOR_API_DETAILS}
+
+### 🚨 FINAL MANDATORY REQUIREMENT
+**You MUST strictly adhere to the following logic:**
+1. **Identify the Anchor API:** Look at the "Anchor API Details" provided above.
+2. **Center the Task around the Anchor:** The generated `user_query` MUST be designed to specifically trigger the functionality of this Anchor API.
+3. **Selection Verification:** The `target_api` in your output JSON **MUST** be exactly one of the `call_name`s listed in the **Anchor API Details** section.
+"""
 
 def parse_intra_purpose_from_response(response_text: str) -> list:
     """
@@ -77,7 +85,6 @@ def parse_intra_purpose_from_response(response_text: str) -> list:
                 content = match.group(1)
         
         # 2. [正则提取最外层的 JSON 列表]
-        # 查找以 [ 开头，以 ] 结尾的内容
         match = re.search(r'(\[.*\])', content, re.DOTALL)
         
         if match:
@@ -87,34 +94,24 @@ def parse_intra_purpose_from_response(response_text: str) -> list:
 
         parsed_data = json.loads(json_str)
 
-        # 3. [类型检查] 确保解析出来的是列表
+        # 3. [类型检查]
         if not isinstance(parsed_data, list):
-            print(f"[Parse Warning] 期望得到 list，但得到了 {type(parsed_data)}")
             return []
 
-        # 4. [字段校验] 遍历 List，筛选有效项
+        # 4. [字段校验]
         valid_items = []
         required_keys = ["user_query", "target_api"]
         
         for index, item in enumerate(parsed_data):
             if not isinstance(item, dict):
                 continue
-                
             missing_keys = [k for k in required_keys if k not in item]
-            
-            # 如果缺少键，跳过该项并打印警告
             if missing_keys:
-                print(f"[Parse Warning] 第 {index+1} 项缺少必要字段: {missing_keys}")
                 continue
-            
             valid_items.append(item)
             
         return valid_items
 
-    except json.JSONDecodeError as e:
-        print(f"[Parse Error] JSON 解码失败: {e}")
-        # print(f"--> 原始文本: {response_text}") 
-        return []
     except Exception as e:
-        print(f"[Parse Error] 未知错误: {e}")
+        print(f"[Parse Error] Intra Domain: {e}")
         return []

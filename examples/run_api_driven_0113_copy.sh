@@ -1,52 +1,89 @@
 #!/bin/bash
 
-# ---- 0. 获取本机 IP 地址 ----
-export MASTER_ADDRESS=$(ip route get 1.1.1.1 | grep -oP 'src \K\S+')
-echo "Detected Master Address: $MASTER_ADDRESS"
+# ==========================================
+# 1. 环境与网络配置 (保留这些修复！)
+# ==========================================
 
-# ---- Start Environment Service ----
+# [修复包冲突] 强制 Python 忽略用户目录(.local)
+export PYTHONNOUSERSITE=1
 
-# 1. 确保 conda 可以在脚本中使用
-CONDA_BASE=$(conda info --base 2>/dev/null || echo "$HOME/anaconda3")
-source "$CONDA_BASE/etc/profile.d/conda.sh"
+# [修复 Ray 连接超时] 获取本机 IP 并设置不走代理
+HOST_IP=$(hostname -i)
+# 这一步非常关键，保留它！
+export no_proxy="localhost,127.0.0.1,::1,${HOST_IP},${no_proxy}"
+echo "Current Host IP: ${HOST_IP}"
+echo "No Proxy Set To: ${no_proxy}"
 
-# 2. 激活环境
+# [vLLM/NCCL 设置]
+export VLLM_LOGGING_LEVEL=INFO
+export NCCL_P2P_DISABLE=1
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+
+# ==========================================
+# 2. Conda 环境初始化
+# ==========================================
+if [ -z "$CONDA_EXE" ]; then
+    CONDA_BASE=$(conda info --base 2>/dev/null || echo "$HOME/anaconda3")
+    source "$CONDA_BASE/etc/profile.d/conda.sh"
+else
+    source "$(dirname $(dirname $CONDA_EXE))/etc/profile.d/conda.sh"
+fi
+
+# ==========================================
+# 3. 启动 AppWorld 环境服务
+# ==========================================
 conda activate appworld
+echo "Starting AppWorld Environment Service..."
 
-# 3. 启动 Server 并放入后台运行
-echo "Starting AppWorld Environment Service on $MASTER_ADDRESS..."
-# 注意：这里会调用 sh2，sh2 内部也需要支持 MASTER_ADDRESS
+pkill -f "bash env_service/launch_script/appworld.sh" || true
 bash env_service/launch_script/appworld.sh > server.log 2>&1 &
 SERVER_PID=$!
 
-# 注册退出陷阱
-trap "kill $SERVER_PID" EXIT
+# 清理函数
+cleanup() {
+    echo "Stopping AppWorld Server (PID: $SERVER_PID)..."
+    kill $SERVER_PID
+    echo "Stopping Ray..."
+    ray stop --force  # 脚本结束时强制清理 Ray
+}
+trap cleanup EXIT
 
-# 4. 等待服务启动
 echo "Waiting for server to start (PID: $SERVER_PID)..."
 sleep 10
 
+# ==========================================
+# 4. 准备训练 (回退到让 Python 自动启动 Ray)
+# ==========================================
 conda activate agentevolver
 
-# ---- Start Training ----
+# [关键修改]：
+# 1. 确保没有残留的 Ray 进程干扰
+ray stop --force 2>/dev/null
+# 2. 删除 ray start --head ...
+# 3. 删除 export RAY_ADDRESS ...
+# 4. 取消 RAY_ADDRESS 变量，确保 Python 脚本启动本地实例
+unset RAY_ADDRESS
+
+# ==========================================
+# 5. 训练参数配置
+# ==========================================
 PROJECT_DIR="$(pwd)"
 CONFIG_PATH="$PROJECT_DIR/config"
-# 使用动态获取的 IP 配置 env_url
-env_url="http://$MASTER_ADDRESS:8080"
-current_time=$(date "+%Y%m%d_%H%M%S")
-log_file="log_${current_time}.log"
+ENV_URL="http://127.0.0.1:8080"
+CURRENT_TIME=$(date "+%Y%m%d_%H%M%S")
+LOG_FILE="log_${CURRENT_TIME}.log"
+EXP_NAME="appworld_optimized"
 
-# Ray / CUDA 配置 (针对 8*A800)
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
-export RAY_NUM_CPUS=64
+echo "Starting Training..."
+echo "Log file: ${LOG_FILE}"
 
-echo "Starting Training with env_url: $env_url"
-echo "Total Context: 25580 (Prompt: 4000, Response: 21580)..."
-
+# ==========================================
+# 6. 执行训练
+# ==========================================
 python3 -m agentevolver.main_ppo \
     --config-path="$CONFIG_PATH" \
     --config-name='script_config' \
-    env_service.env_url=$env_url \
+    env_service.env_url=$ENV_URL \
     env_service.env_type=appworld \
     seed=1 \
     debug_log=True \
@@ -101,27 +138,26 @@ python3 -m agentevolver.main_ppo \
     trainer.critic_warmup=0 \
     trainer.logger="['console','wandb']" \
     trainer.project_name="AgentEvolver" \
-    trainer.experiment_name="appworld_optimized" \
+    trainer.experiment_name="${EXP_NAME}" \
     trainer.save_freq=2 \
     trainer.test_freq=5 \
     trainer.total_epochs=40 \
     trainer.val_before_train=false \
-    trainer.validation_data_dir="experiments/tech_synthetic/${experiment_name}/validation_log" \
-    trainer.rollout_data_dir="experiments/tech_synthetic/${experiment_name}/rollout_log" \
+    trainer.validation_data_dir="experiments/tech_synthetic/${EXP_NAME}/validation_log" \
+    trainer.rollout_data_dir="experiments/tech_synthetic/${EXP_NAME}/rollout_log" \
     \
     attribution_driven_credit_assignment.enable=false \
     attribution_driven_credit_assignment.enable_hindsight=false \
     \
-    task_manager.n=128 \
+    task_manager.n=256 \
     task_manager.mixture.synthetic_data_ratio=2.0 \
     task_manager.mixture.use_original_tasks=False \
     task_manager.train_data_path=./tasks_explored/tasks_explored.train.json \
-    task_manager.val_data_path=.tasks_explored/tasks_explored.val.json \
+    task_manager.val_data_path=./tasks_explored/tasks_explored.val.json \
     task_manager.exploration_strategy_args.a=1 \
     task_manager.exploration_strategy_args.b=4 \
     task_manager.strategy=api_driven \
     task_manager.exploration_strategy_args.active_apps="['amazon','gmail','spotify','venmo','simple_note','todoist','splitwise','phone','file_system']" \
     task_manager.exploration_strategy_args.task_labels_path="./environments/appworld/data/datasets/train.jsonl" \
     task_manager.llm_client="azure-gpt-5" \
-    ray_init.num_cpus=64 \
-    2>&1 | tee "$log_file"
+    2>&1 | tee "$LOG_FILE"
