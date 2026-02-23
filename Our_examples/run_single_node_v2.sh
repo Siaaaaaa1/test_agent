@@ -132,7 +132,7 @@ python3 -m agentevolver.main_ppo \
     actor_rollout_ref.rollout.n=8 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.temperature=0.8 \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.8 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.5 \
     actor_rollout_ref.rollout.max_model_len=32768 \
     actor_rollout_ref.rollout.prompt_length=28672 \
     actor_rollout_ref.rollout.response_length=4096 \

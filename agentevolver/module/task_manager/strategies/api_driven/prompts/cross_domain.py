@@ -1,128 +1,178 @@
 import json
 import re
+from loguru import logger
 
-CROSS_DOMAIN_PURPOSE_PROMPT = """
-You are an expert Data Synthetic Generator for Cross-App Automation.
-Create a realistic, logically robust user command bridging two apps using their APIs. 
+# ================= 动态 Schema 字典库 =================
+# 将各个 App 的 Schema 拆解为字典，便于按需动态组合，节省 Token 并提高 LLM 专注度
+APP_SCHEMA_MAP = {
+    "amazon": "## amazon (E-Commerce)\n- `Product`: Items available for purchase (contains price, rating, description, delivery_days).\n- `CartEntry`: Items currently in the user's shopping cart.\n- `Order`, `OrderItem`: History of completed purchases and specific items within those orders.\n- `Address`: User's delivery addresses (Home, Work, etc.).\n- `PaymentCard`: Credit/Debit cards linked to the account.\n- `PrimeSubscription`: Details about Amazon Prime membership.\n- `ProductReview`, `ProductReturn`: User reviews and return records for products.\n- `WishListEntry`: Items saved for later.",
+    "venmo": "## venmo (Peer-to-Peer Payments)\n- `User`: Venmo account profiles, including current `venmo_balance`.\n- `Transaction`: Completed money transfers between users (contains amount, description, privacy status).\n- `PaymentRequest`: Pending requests for money (contains amount, description, status).\n- `Friendship`: Social connections/friends list on Venmo.\n- `Notification`: Alerts for received money or new requests.\n- `PaymentCard`: Linked bank cards for funding transactions.",
+    "gmail": "## gmail (Email Services)\n- `Email`: Individual email messages (contains sender, recipient, subject, body content, date).\n- `UserEmailThread`: User's view of an email thread (contains read/unread status, starred, labels).\n- `Draft`: Unsent emails currently being composed.\n- `Attachment`: Files attached to specific emails.",
+    "phone": "## phone (Device Native Apps)\n- `Contact`: Address book (contains names, phone numbers, emails, physical addresses, relationships like 'manager' or 'coworker').\n- `Alarm`: Configured device alarms (contains time, repeat_days, label, enabled status).\n- `GlobalTextMessage`, `UserTextMessage`: SMS text message history.\n- `GlobalVoiceMessage`, `UserVoiceMessage`: Voicemail history.",
+    "todoist": "## todoist (Task Management)\n- `Task`, `SubTask`: To-do items (contains title, description, due_date, priority, is_completed).\n- `Project`, `Section`: Organization folders for tasks (e.g., 'Inbox', 'Grocery Shopping').\n- `Label`, `TaskLabelLink`: Tags applied to specific tasks.\n- `TaskComment`: Notes or discussions attached to a task.\n- `ProjectCollaboratorLink`: Users sharing a specific project.",
+    "splitwise": "## splitwise (Shared Expenses)\n- `Group`, `GroupMember`: Groups of users sharing costs (e.g., 'Roommates', 'Trip to Japan').\n- `Expense`, `ExpenseShare`: Shared bills and how the cost is divided among members.\n- `Payment`: Settlements (records of users paying back their debts).\n- `ExpenseComment`: Chat and notes attached to a shared bill.",
+    "spotify": "## spotify (Music Streaming)\n- `Song`, `Album`, `Artist`: Core music catalog entities (contains play_count, genre, duration).\n- `Playlist`, `PlaylistSong`: User-created playlists and the songs within them.\n- `MusicPlayer`: Current playback state (contains queue, is_playing, volume).\n- `SongLike`, `PlaylistLike`: User's saved/liked music.",
+    "file_system": "## file_system (Local Storage)\n- `File`: Local files on the user's device (contains path, file_name, text/binary content).\n- `Directory`: Folders on the local device.",
+    "simple_note": "## simple_note (Note Taking)\n- `Note`: Text notes (contains title, content, tags, pinned status). Often contains structured lists.",
+    "supervisor": "## supervisor (Global/System Settings)\n- `AccountPassword`: The user's login passwords for all the apps mentioned above.\n- `Supervisor`, `Address`, `PaymentCard`: The user's primary identity, global addresses, and default bank cards."
+}
 
-You have access to:
-1. **Global Context**: Descriptions of all available apps.
-2. **App Overviews**: A list of all APIs within the two target apps (Format: `call_name: description`).
-3. **Anchor API Details**: Detailed specifications (call_name, parameters, returns) for specific APIs we **MUST** focus on.
+def get_dynamic_schema_overview(app_names: list) -> str:
+    """根据传入的 app_names 列表，动态拼装仅包含这些 App 的 Schema 字符串"""
+    schemas = []
+    for app in app_names:
+        if app in APP_SCHEMA_MAP:
+            schemas.append(APP_SCHEMA_MAP[app])
+    return "\n\n".join(schemas)
 
-### 🚫 STRICT Constraints
-1.  **Use Available Info**: Utilize the `Anchor API Details` to ensure parameter compatibility (e.g., if an API requires a `song_id`, ensure the logical source provides something equivalent or a search capability).
-2.  Source Uncertainty (Black Box): Do NOT assume specific data exists. You must refer to data dynamically (e.g., "my last email", "the current song").
-3.  No Hard-coded Containers/Files: Do not assume specific user-defined folder names or filenames exist.
-4.  Type & Semantic Safety: Do NOT mix Text with Files. Ensure extracted data logically fits the Target action.
 
-### ✅ Logic Patterns
-1.  Search & Act: Source gives Name -> Target Searches Name -> Act.
-2.  Notification: Source gives Content -> Target sends to Contact.
-3.  Record Keeping: Source gives Transaction -> Target logs it.
-4.  File Management: Source gives File -> Target saves/uploads it.
+# ================= 第一阶段：跨域选拔 (Cross-Domain Selector) =================
+CROSS_DOMAIN_SELECTOR_PROMPT = """
+You are an expert API Judge for Cross-App Automation. 
+Your task is to evaluate {CANDIDATE_COUNT} groups of cross-app API combinations spanning {APP_COUNT} apps, and select the ONE group that makes the most logical sense for a complex, natural cross-domain workflow.
 
-### Few-Shot Examples
+### Apps Involved Context
+{APPS_INFO_STR}
 
-❌ BAD Examples (Overly specific/Hard-coded logic):
-- Bad 1: Get the names of all tasks under my 'Concert Prep' section in Todoist and search Spotify for each name to add any matching live recordings to my queue. (*Reason: Assumes a specific project named 'Concert Prep' exists.*)
-- Bad 2: Check if a file named 'weekly_report.pdf' exists in my Downloads directory, and if so, create a Gmail draft. (*Reason: Hard-codes a specific filename.*)
-- Bad 3: Compress all files in my 'Projects' folder into a single archive. (*Reason: Assumes a specific folder named 'Projects' exists.*)
+### Candidate API Groups
+{CANDIDATE_GROUPS_STR}
 
-✅ GOOD Examples:
-- Good 1: Forward the full content of the most recent text message I received to my work email address for archiving.
-- Good 2: Retrieve the total cost of my very last Amazon order and request exactly half of that amount from 'Roommate' on Venmo with the note 'Split purchase'.
-- Good 3: Get the share link for the song currently playing on Spotify and text it to the last person I called on the Phone.
-- Good 4: Summarize the titles of all Amazon orders placed in the last 30 days and create a new list in SimpleNote containing these names.
-- Good 5: Locate the last Venmo payment I made. Extract the transaction ID and amount, and email these details to my accountant for tax tracking.
-- Good 6: Find the to-do item in my Todoist that is most relevant to shopping, and purchase that item on Amazon.
-- Good 7: Identify the note most relevant to "workout playlist" in SimpleNote, and search for the corresponding songs on Spotify to play them.
+### AppWorld Database Schema Overview
+Use the following exact schema to accurately determine the `required_tables`. 
+🚫 STRICT CONSTRAINT: Do NOT hallucinate or guess table names. You MUST strictly select from the entities listed below:
 
-### Task
-Select the most naturally compatible APIs from Source and Target.
-You **MUST** prioritize the provided **Anchor APIs**. 
-The constructed user query **MUST** utilize the functionality described in the Anchor API Details.
+{DB_SCHEMA_OVERVIEW}
+
+### Task Requirements
+1. Evaluate which API combination represents the most realistic, multi-step information flow between these apps (e.g., Data Extraction -> Conditional Logic -> Action Target). Prioritize groups that allow for rich context merging.
+2. Select exactly ONE winning group index.
+3. Identify which underlying Database Tables (Table Names) in EACH app would realistically need to be queried.
+🚫 STRICT LIMIT: You MUST select a MAXIMUM of 2 tables per App. Prioritize the most crucial tables.
 
 ### Output Format (JSON Only)
-[
-    {{
-        "user_query": "Natural language instruction 1",
-        "source_info_api": "API call_name from App 1",
-        "target_action_api": "API call_name from App 2",
-        "logic_pattern": "Pattern Name"
+Output valid JSON only.
+``json
+{{
+    "selected_group_index": 1,
+    "selected_apis": {{
+        "app_1_name": ["api_1", "api_2"],
+        "app_2_name": ["api_3"]
+    }},
+    "reasoning": "Detailed explanation of the cross-app logical flow.",
+    "required_tables": {{
+        "app_1_name": ["table_1"],
+        "app_2_name": ["table_2"]
     }}
-]
-
-### Input Data
-
-#### 📱 App 1 (Source): {APP_NAME1}
-
-**All APIs Overview:**
-{APP1_API_DESCS}
-
-**⚓ Anchor API Details (YOU MUST USE ONE OF THESE):**
-{APP1_ANCHOR_DETAILS}
-
----
-
-#### 📱 App 2 (Target): {APP_NAME2}
-
-**All APIs Overview:**
-{APP2_API_DESCS}
-
-**⚓ Anchor API Details (YOU MUST USE ONE OF THESE):**
-{APP2_ANCHOR_DETAILS}
-
-### 🚨 FINAL MANDATORY REQUIREMENT
-**You MUST strictly adhere to the following logic:**
-1. **Identify the Anchor API(s):** Look at the "Anchor API Details" provided above for both apps.
-2. **Center the Task around the Anchor:** The generated `user_query` MUST be designed to trigger the functionality of the provided Anchor API(s).
-3. **Selection Verification:** The `source_info_api` OR `target_action_api` in your output JSON **MUST** be one of the APIs explicitly listed in the **Anchor API Details** sections.
+}}
+``
 """
 
-def parse_cross_purpose_from_response(response_text: str) -> list:
-    """
-    解析 LLM 返回的 JSON 列表字符串，返回 Python list[dict]。
-    如果解析失败或没有有效数据，返回空列表 []。
-    """
+def parse_cross_selector(response_text: str) -> dict:
+    if not response_text:
+        return {}
     try:
         content = response_text.strip()
-        
-        # 1. [尝试移除 Markdown 代码块]
-        if "```" in content:
-            pattern = r"```(?:json)?\s*(\[.*?\])\s*```"
-            match = re.search(pattern, content, re.DOTALL)
-            if match:
-                content = match.group(1)
-        
-        # 2. [正则提取最外层的 JSON 列表]
-        match = re.search(r'(\[.*\])', content, re.DOTALL)
-        
+        json_str = ""
+        match = re.search(r'``(?:json)?\s*([\[\{].*?[\]\}])\s*``', content, re.DOTALL | re.IGNORECASE)
         if match:
             json_str = match.group(1)
         else:
-            json_str = content
-
-        parsed_data = json.loads(json_str)
-
-        # 3. [类型检查]
-        if not isinstance(parsed_data, list):
-            return []
-
-        # 4. [字段校验]
-        valid_items = []
-        required_keys = ["user_query", "source_info_api", "target_action_api"]
-        
-        for index, item in enumerate(parsed_data):
-            if not isinstance(item, dict):
-                continue
-            missing_keys = [k for k in required_keys if k not in item]
-            if missing_keys:
-                continue
-            valid_items.append(item)
-            
-        return valid_items
-
+            start_idx = content.find('{')
+            end_idx = content.rfind('}')
+            if start_idx != -1 and end_idx != -1 and start_idx < end_idx:
+                json_str = content[start_idx:end_idx+1]
+            else:
+                json_str = content
+        return json.loads(json_str)
+    except json.JSONDecodeError as e:
+        logger.error(f"[Parse Error] Cross Selector JSON parsing failed: {e}\nRaw: {response_text}")
+        return {}
     except Exception as e:
-        print(f"[Parse Error] Cross Domain: {e}")
+        logger.error(f"[Parse Error] Cross Selector: {e}")
+        return {}
+
+
+# ================= 第二阶段：跨域生成 (Cross-Domain Generator) =================
+CROSS_DOMAIN_GENERATOR_PROMPT = """
+You are an expert Data Synthetic Generator for Cross-App Automation. 
+Create a realistic, highly DIVERSE, and EXPLORATORY user command bridging multiple apps, based on the selected APIs and Real Database Content.
+
+### Inputs
+1. **Apps Involved**: {APPS_NAMES}
+2. **Selected APIs**: {SELECTED_APIS_JSON}
+3. **Anchor API Details**: 
+{ANCHOR_API_DETAILS}
+4. **Real Database Content**: 
+{DB_CONTENT}
+5. **All APIs in App (Brief)**:
+{ALL_APIS_BRIEF}
+
+### 🚫 STRICT Constraints & Diversity Goals
+1. **Source Uncertainty (Black Box)**: Do NOT assume specific data exists. You must refer to data dynamically via semantic descriptions, timeframes, or relationships (e.g., "the email from my manager", "the cost of my cart").
+2. **No Hard-coded IDs/Filenames**: Do not assume specific user-defined folder names, exact filenames, or Exact IDs unless referencing standard system defaults (like '~/documents').
+3. **Complex Logic Injection**: Push for scenarios that require conditional checks (e.g., "If the total is higher than X..."), aggregations (e.g., "cost in total"), or multi-recipient looping (e.g., "for each of my following friends...").
+4. **Data Consistency**: Ensure the logic holds up based on the provided `Real Database Content`.
+
+### Few-Shot Examples
+
+❌ BAD Examples (Too simple, linear, or hard-coded):
+- Bad 1: "Get order #123 from Amazon and request $10 from Venmo ID 456." (Reason: Uses hardcoded, unrealistic IDs instead of natural language exploration).
+- Bad 2: "Find 'report.pdf' in File System and email it to John." (Reason: Too linear, assumes specific exact filenames, lacks conditional or aggregation logic).
+- Bad 3: "Check my Venmo balance and buy a watch on Amazon." (Reason: The two apps are disconnected in logic. Why does the balance dictate the watch purchase? Lacks a cohesive narrative).
+
+✅ GOOD Examples (Robust, Exploratory, Conditional, and Multi-App Chaining):
+- Good 1 (Conditionals & Multi-Target): "Buy the highest rated popcorn maker available on Amazon now, one for each of my following friends: Grant, Jose, Brenda. They have to be gift wrapped. If the total delivery fee is higher than the monthly prime subscription cost, subscribe me to prime first."
+- Good 2 (State Syncing & Math): "I maintain my work schedule in SimpleNote and track my tasks in Todoist. Delete the completed tasks from 'Today's Target'. Then, move the maximum number of incomplete tasks from my Inbox to 'Today's Target' assuming I work back-to-back as per my schedule."
+- Good 3 (Context Merging): "Angelica asked me for my song recommendations over email. I started drafting the response email off the top of my head. Please update the email draft with all of my liked songs that are in my library. Keep the existing format of the email, making changes only to the song entries."
+- Good 4 (Delegation Pipeline): "Denise has requested me to buy 'Nintendo Switch Lite' on amazon for them as their card is currently blocked. Place the order, forward the confirmation email containing the receipt to them, and make a venmo request to them for the total cost of the order."
+
+### Task
+Generate 1 realistic cross-app user scenario triggering the `Selected APIs` using the context of the `Real Database Content`. The query MUST require deep exploration and complex reasoning.
+
+### Output Format (JSON Only)
+``json
+[
+    {{
+        "user_query": "The fuzzy, exploratory, and complex natural language instruction",
+        "source_info_api": "API call_name acting as the source",
+        "target_action_api": "API call_name acting as the action target",
+        "logic_pattern": "Pattern Name (e.g., Conditional Chaining, Aggregation, State Sync)"
+    }}
+]
+``
+"""
+
+def parse_cross_generator(response_text: str) -> list:
+    if not response_text:
+        return []
+    try:
+        content = response_text.strip()
+        json_str = ""
+        match_list = re.search(r'``(?:json)?\s*(\[.*?\])\s*``', content, re.DOTALL | re.IGNORECASE)
+        match_dict = re.search(r'``(?:json)?\s*(\{.*?\})\s*``', content, re.DOTALL | re.IGNORECASE)
+        
+        if match_list:
+            json_str = match_list.group(1)
+        elif match_dict:
+            json_str = f"[{match_dict.group(1)}]"
+        else:
+            start_idx = content.find('[')
+            end_idx = content.rfind(']')
+            if start_idx != -1 and end_idx != -1 and start_idx < end_idx:
+                json_str = content[start_idx:end_idx+1]
+            else:
+                start_idx_dict = content.find('{')
+                end_idx_dict = content.rfind('}')
+                if start_idx_dict != -1 and end_idx_dict != -1 and start_idx_dict < end_idx_dict:
+                    json_str = f"[{content[start_idx_dict:end_idx_dict+1]}]"
+                else:
+                    json_str = content
+        
+        parsed = json.loads(json_str)
+        return parsed if isinstance(parsed, list) else [parsed]
+    except json.JSONDecodeError as e:
+        logger.error(f"[Parse Error] Cross Generator JSON parsing failed: {e}\nRaw: {response_text}")
+        return []
+    except Exception as e:
+        logger.error(f"[Parse Error] Cross Generator: {e}")
         return []

@@ -18,7 +18,6 @@ def log_reward(msg):
 
 # ================= PROMPTS =================
 
-# 🛠️ [核心修改] 引入里程碑断档 (Milestone Tiering) 的 Prompt
 CONTINUOUS_SCORE_PROMPT = """Based on the conversation trajectory above, evaluate the task completion quality using the framework provided.
 
 Your evaluation should address the following dimensions in order:
@@ -41,23 +40,26 @@ Your evaluation should address the following dimensions in order:
 **MANDATORY SCORING CONSTRAINTS:**
 - If steps are relevant AND goal is achieved/answer is correct: Score MUST be 60-100
 - If steps are relevant BUT goal is not achieved/answer is incorrect: Score MUST be 0-40
-- FORBIDDEN: Do not assign scores between 41-59 (This forces a clear distinction between success and failure)
+- FORBIDDEN: Do not assign scores between 41-59 (这是为了强制模型明确判定任务是否成功)
 
 **Step 4: Additional Deductions (within the above constraints)**
 - **Code Execution Errors**: Deduct points for runtime errors, bugs, or failed executions
 - **Unnecessary/Irrelevant Steps**: Deduct points for redundant or off-topic actions
 
-**Scoring Guidelines (STRICT COMPLIANCE REQUIRED):**
-- 90-100: Exceptional - goal achieved with efficient, clean execution.
-- 70-89: Strong/Good - goal achieved but with minor inefficiencies or redundant steps.
-- 60-69: Adequate - goal achieved but with notable problems or messy logic.
+**Scoring Guidelines:**
+- 90-100: Exceptional performance - goal achieved with efficient, clean execution
+- 80-89: Strong performance - goal achieved with minor inefficiencies or small errors
+- 70-79: Good performance - goal achieved with some unnecessary steps or code issues
+- 60-69: Adequate performance - goal achieved but with notable problems
+- 30-40: Poor performance - goal not achieved but relevant approach with some progress
+- 10-29: Very poor performance - goal not achieved with major execution issues
+- 1-9: Minimal relevant attempt - goal not achieved with severe problems
+- 0: Complete failure - irrelevant approach or infinite repetition of irrelevant steps
 
-*(DO NOT assign scores between 41-59)*
-
-- 30-40: [High Partial] Goal NOT achieved, BUT agent successfully retrieved core information (e.g., successfully searched/read the target emails/messages) and attempted the final state-changing action but failed due to syntax/logic errors.
-- 15-29: [Low Partial] Goal NOT achieved. Agent made good progress in reading/searching for information, but did NOT attempt the final required action.
-- 1-14: [Setup Only] Goal NOT achieved. Agent ONLY performed basic setup actions (e.g., getting passwords, logging in) without making meaningful progress on the actual query.
-- 0: Complete failure, infinite loops, or totally irrelevant actions.
+**REMEMBER**: 
+- No scores between 41-59 are allowed
+- Goal achievement determines the 60+ vs 0-40 range
+- Infinite repetition caps score at 20 (if steps are relevant) or 0 (if irrelevant)
 
 Provide your detailed analysis first, explaining your reasoning for each evaluation dimension. Then assign a precise integer score following the mandatory constraints above.
 
@@ -120,7 +122,7 @@ def steps_to_msg(steps: list[dict[str, Any]]) -> str:
 class APIProcessRewardCalculator(RewardCalculator):
     """
     混合型奖励计算器 (增强版)：
-    1. 步骤奖励：API 命中奖励 (基于语义梯队) + 复读惩罚 + 执行错误四象限惩罚。
+    1. 步骤奖励：API 命中奖励 + 复读惩罚 + 执行错误惩罚。
     2. 结果奖励：语义打分 (Outcome) + 效率打分 (Efficiency)。
     """
     def __init__(self, task: Task, model_name='DeepSeek-V3-Online-64K', 
@@ -131,8 +133,9 @@ class APIProcessRewardCalculator(RewardCalculator):
                  ngram_n=3,
                  ngram_threshold=0.1,
                  repetition_penalty=-1.0,
-                 efficiency_lambda: float = 0.05,     
-                 api_cost_weight: float = 2.0         
+                 # [新增] 效率奖励配置
+                 efficiency_lambda: float = 0.05,     # 衰减系数
+                 api_cost_weight: float = 2.0         # API 调用的步骤当量
                  ): 
         super().__init__(task)
         self.model_name = model_name
@@ -155,10 +158,16 @@ class APIProcessRewardCalculator(RewardCalculator):
         self.gt_apis: Set[str] = self._extract_apis(task.ground_truth)
         self.visited_apis: Set[str] = set()
         
+        num_gt = len(self.gt_apis)
+        if num_gt > 0:
+            self.reward_per_api = 1.0 / num_gt
+        else:
+            self.reward_per_api = 0.0 
+
         self.total_process_reward = 0.0 
 
         log_reward("-" * 40)
-        log_reward(f"Init RewardCalculator [Semantic API + Repetition + 4-Quadrant ErrorCheck].")
+        log_reward(f"Init RewardCalculator [API+Repetition+ErrorCheck].")
         log_reward(f"Efficiency: lambda={self.efficiency_lambda}, api_weight={self.api_cost_weight}")
         log_reward("-" * 40)
 
@@ -220,25 +229,32 @@ class APIProcessRewardCalculator(RewardCalculator):
             return False
             
         # --- Level 1: 绝对实锤的 Python 报错 (Regex) ---
+        # 匹配模式：单词结尾是Error + 冒号 + 空格 (例如 "NameError: ", "TypeError: ", "ValueError: ")
+        # 这能覆盖 NameError, TypeError, KeyError, IndexError 等所有标准异常
         if re.search(r"\b[a-zA-Z]*Error:\s", observation):
             return True
 
         # --- Level 2: 绝对实锤的 API/环境 报错 (Specific String) ---
+        # 针对: Exception: Response status code is 422 / 401
         if "Exception: Response status code" in observation:
             return True
+        
+        # 针对: Traceback (最标准的 Python 崩溃标志)
         if "Traceback (most recent call last)" in observation:
             return True
 
         # --- Level 3: 语义级报错 (Case Insensitive Keywords) ---
+        # 这里的词必须足够独特，不能是 "failed" 这种可能出现在正常日志里的词
         obs_lower = observation.lower()
+        
         critical_phrases = [
-            "command not found",      
-            "syntax error",           
-            "validation error",       
-            "internal server error",  
-            "access token is missing",
-            "module not found",       
-            "is not defined"          
+            "command not found",      # Shell 错误
+            "syntax error",           # 语法错误
+            "validation error",       # 针对 JSON Schema/422 校验失败
+            "internal server error",  # 500 错误
+            "access token is missing",# 针对 401 鉴权失败
+            "module not found",       # 针对 import 错误
+            "is not defined"          # 针对 NameError 的补充 (以防没有 Error: 前缀)
         ]
         
         for phrase in critical_phrases:
@@ -254,88 +270,70 @@ class APIProcessRewardCalculator(RewardCalculator):
             return set()
         return set(re.findall(r"(apis\.\w+\.\w+)", code_str))
 
-    def _get_api_weight_by_category(self, api_name: str) -> float:
-        """
-        [AppWorld 专属版] 根据 API 的核心语义动作分配阶梯权重。
-        权重设定：
-        - Setup (0.2): 账号、登录、验证等毫无业务进展的基础操作。
-        - Read/Search (0.6): 信息检索、文件读取、列表展示等中等难度操作。
-        - Write/Action (1.2): 状态修改、购买、发送、发帖等高风险核心操作。
-        """
-        api_lower = api_name.lower()
-        
-        # 梯队 1：基础准备 (Setup & Auth) -> 权重 0.2
-        setup_keywords = [
-            'login', 'logout', 'signup', 'account', 'profile', 
-            'password', 'verification', 'verify', 'help'
-        ]
-        if any(kw in api_lower for kw in setup_keywords):
-            return 0.2
-
-        # 梯队 3：核心状态变更 (Write & Action) -> 权重 1.2
-        write_action_keywords = [
-            'create', 'update', 'delete', 'add', 'remove', 'move', 'copy', 
-            'compress', 'decompress', 'send', 'reply', 'forward', 'upload',
-            'complete', 'apply', 'place', 'write', 'initiate', 'subscribe', 
-            'record', 'attach', 'settle_up', 'post', 'like', 'unlike', 
-            'follow', 'unfollow', 'review', 'play', 'pause', 'previous', 
-            'next', 'seek', 'loop', 'shuffle', 'clear', 'set', 'label', 
-            'unlabel', 'mark', 'withdraw', 'approve', 'deny', 'remind'
-        ]
-        if any(kw in api_lower for kw in write_action_keywords):
-            return 1.2
-
-        # 梯队 2：信息检索与读取 (Read & Search) -> 权重 0.6
-        read_search_keywords = [
-            'show', 'search', 'get', 'download', 'exists'
-        ]
-        if any(kw in api_lower for kw in read_search_keywords):
-            return 0.6
-
-        return 0.6
-
     def calculate_step_reward(self, step_code: str, observation: str = "") -> Dict[str, float]:
         """
-        计算单步奖励，引入四象限平滑惩罚逻辑。
+        计算单步奖励。
+        
+        Args:
+            step_code: LLM 生成的动作代码/内容。
+            observation: 环境返回的执行结果/Observation。
+            
+        Returns:
+            dict: {
+                "api_reward": float,          # API 命中得分 (正) 或 错误惩罚 (负)
+                "repetition_penalty": float,  # 复读惩罚扣分 (负)
+                "total_score": float          # 两者之和
+            }
         """
-        is_error = self._check_execution_error(observation)
-        step_apis = self._extract_apis(step_code)
-        matched_apis = step_apis.intersection(self.gt_apis)
-        
-        api_reward = 0.0
-        api_valid = 0
-        
-        if matched_apis:
-            if not is_error:
-                # 场景 1：选对 API 且执行成功 -> 按照 API 类别含金量发奖
-                newly_covered = matched_apis - self.visited_apis
-                if newly_covered:
-                    for api in newly_covered:
-                        api_reward += self._get_api_weight_by_category(api)
-                    api_valid = 1
-                    self.visited_apis.update(newly_covered)
-            else:
-                # 场景 3：选对 API 但报错 -> 轻微惩罚 (-0.1)，鼓励试错
-                api_reward = -0.1 
-        else:
-            if not is_error:
-                # 场景 2：无关 API 且成功 -> 0.0，靠最后的效率(Efficiency)衰减来软约束
-                api_reward = 0.0
-            else:
-                # 场景 4：无关 API 且报错 -> 中度惩罚 (-0.3)，警告换路
-                api_reward = -0.3 
+        # 预览日志
+        # log_reward(f"[Step Check] Action: {step_code[:50]}... | Obs: {observation[:50]}...")
 
-        # 检查是否发生退化 (死循环复读)
+        # 1. [最高优先级] 执行错误检查 (Case C: Error -> -1)
+        # 如果执行报错，直接给予惩罚，忽略是否命中 GT
+        is_error = self._check_execution_error(observation)
+        if is_error:
+            log_reward(f"[Step Error] Execution Failed. Obs snippet: {observation[:50]}...")
+            return {
+                "api_reward": -1.0,         # 强惩罚
+                "api_valid": 0,
+                "repetition_penalty": 0.0,  # 报错优于复读检查
+                "total_score": -1.0
+            }
+
+        # 2. 复读/退化检查 (Case: Repetition -> Negative)
         repetition_pen = 0.0
         is_bad, reason = self._check_step_degeneration(step_code)
         if is_bad:
-            repetition_pen = self.repetition_penalty 
+            repetition_pen = self.repetition_penalty # 使用初始化的惩罚值 (如 -1.0)
             log_reward(f"[Step Degeneration] Detected: {reason}")
+
+        # 3. API 命中检查 (Case A & B)
+        api_reward = 0.0
+        api_valid = 0
+        if step_code and self.gt_apis:
+            step_apis = self._extract_apis(step_code)
+            matched_apis = step_apis.intersection(self.gt_apis)
+            newly_covered_apis = matched_apis - self.visited_apis
             
+            if newly_covered_apis:
+                # Case A: GT 内且执行成功 (+Reward)
+                # 累加奖励 (注意: 这取决于 reward_per_api 的设定)
+                api_reward = len(newly_covered_apis) * self.reward_per_api
+                api_valid = 1
+                self.visited_apis.update(newly_covered_apis)
+            else:
+                # Case B: 不在 GT 内 (或已访问过)，但执行成功 -> 0.0
+                api_reward = 0.0
+
+        # 4. 汇总
         total_score = api_reward + repetition_pen
+        
+        # 统计
         if total_score != 0:
              self.total_process_reward += total_score
+             # log_reward(f"[Step Result] API: {api_reward:.2f}, Rep: {repetition_pen:.2f} -> Total: {total_score:.2f}")
 
+        # 返回字典
         return {
             "api_reward": api_reward,
             "api_valid": api_valid,
@@ -343,7 +341,7 @@ class APIProcessRewardCalculator(RewardCalculator):
             "total_score": total_score
         }
 
-    # ---------------- 结果奖励 (Only Semantic) ----------------
+    # ---------------- 核心修改：结果奖励 (Only Semantic) ----------------
 
     def pack_message(self, trajectory: Trajectory, use_binary_prompt: bool = False):
         messages=[]
@@ -363,7 +361,7 @@ class APIProcessRewardCalculator(RewardCalculator):
         ]
     
     def _count_trajectory_cost(self, trajectory: Trajectory) -> float:
-        """计算轨迹总成本"""
+        """[新增] 计算轨迹总成本"""
         assistant_steps = [s for s in trajectory.steps if s.get('role') == 'assistant']
         num_steps = len(assistant_steps)
         api_count = 0
@@ -371,11 +369,14 @@ class APIProcessRewardCalculator(RewardCalculator):
             content = step.get('content', '')
             api_count += len(re.findall(r"apis\.", content))
         
+        # [修改] 启用 API 计数权重
         total_cost = float(num_steps) + (self.api_cost_weight * float(api_count))
+        
+        # log_reward(f"[Cost] Steps:{num_steps}, APIs:{api_count} -> Total:{total_cost:.2f}")
         return total_cost
 
     def calculate_reward(self, trajectory: Trajectory, env: EnvClient, instance_id: str) -> GraderResult:
-        """计算最终奖励：Outcome + Efficiency"""
+        """计算最终奖励：Outcome + Efficiency (存入metadata)"""
         use_binary = 'binary' in self.reward_mode
         outcome_score, _ = self._calculate_llm_outcome(trajectory, use_binary=use_binary)
         
@@ -390,8 +391,10 @@ class APIProcessRewardCalculator(RewardCalculator):
 
         return {
             "score": outcome_score,
+            # [修改] 显式返回 efficiency_score，以便 AgentFlow 提取
             "efficiency_score": efficiency_score, 
             "reason": "LLM Semantic Evaluation",
+            # 将效率分传递给 Trainer
             "metadata": {
                 "efficiency_score": efficiency_score,
                 "process_reward_sum": self.total_process_reward

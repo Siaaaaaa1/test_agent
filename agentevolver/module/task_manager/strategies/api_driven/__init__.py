@@ -30,9 +30,17 @@ from agentevolver.module.task_manager.agent_flow import ModifiedAgentFlow
 # Prompt 与 Profile 相关
 from agentevolver.module.task_manager.prelude_profiles import appworld, bfcl, webshop
 from agentevolver.module.task_manager.strategies.api_driven.prompts import (
-    INTRA_DOMAIN_PURPOSE_PROMPT,
-    CROSS_DOMAIN_PURPOSE_PROMPT,
-    get_agent_interaction_system_prompt
+    INTRA_DOMAIN_SELECTOR_PROMPT,
+    parse_intra_selector,
+    INTRA_DOMAIN_GENERATOR_PROMPT,
+    parse_intra_generator,
+    CROSS_DOMAIN_SELECTOR_PROMPT,
+    parse_cross_selector,
+    CROSS_DOMAIN_GENERATOR_PROMPT,
+    parse_cross_generator,
+    get_agent_interaction_system_prompt,
+    get_intra_schema,
+    get_cross_schema,
 )
 from agentevolver.module.task_manager.strategies.api_driven.prompts.prompt_summarize import (
     get_task_summarize_prompt,
@@ -44,13 +52,19 @@ from agentevolver.module.task_manager.strategies.api_driven.prompts.prompt_summa
     parse_direct_verification
 )
 
+# AppWorld 依赖注入
+from appworld.environment import AppWorld
+
 UNIVERSAL_INFO_PROVIDERS = {"notes", "gmail", "simple_messages", "calendar", "contacts"}
 
 
 class ApiDrivenExploreStrategy(TaskExploreStrategy):
     """
     API 驱动的探索策略类
-    包含：任务生成(Intra/Cross) -> 任务执行(Explore) -> 任务总结(Summarize)
+    核心功能：
+    1. 任务生成 (Generation)：基于预设的 App 和 API 知识库，通过 LLM 生成 Intra-domain (同领域) 和 Cross-domain (跨领域) 的指令任务。
+    2. 任务执行 (Explore)：将生成的任务下发到沙盒环境中，使用多模型轮询的方式驱动 Agent 执行，收集环境反馈轨迹。
+    3. 任务总结 (Summarize)：对执行成功的轨迹进行归纳总结，提取并提炼为高质量的强化学习/微调数据集。
     """
 
     # ================= [新增] 预定义的合法 APP 组合白名单 =================
@@ -66,7 +80,47 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         ['file_system', 'gmail'], ['file_system', 'simple_note'], ['file_system', 'todoist']
     ]
 
+    def _get_valid_app_chain(self, target_apps: List[str]) -> Optional[List[str]]:
+        """
+        [新增] 基于 VALID_CROSS_COMBINATIONS 过滤并重排 APP，寻找合理的逻辑执行链 (A -> B -> C)。
+        如果无法形成合法链条，则返回 None。
+        
+        Args:
+            target_apps (List[str]): 待验证的 APP 列表 (支持 2 个、3 个或更多)
+            
+        Returns:
+            Optional[List[str]]: 经过逻辑排序的 APP 列表，或者 None
+        """
+        # 将合法的 2-APP 组合转换为 set，实现 O(1) 的快速查找
+        valid_edges = set(tuple(comb) for comb in self.VALID_CROSS_COMBINATIONS)
+        
+        # 遍历目标 APP 的所有可能的排列顺序
+        for perm in itertools.permutations(target_apps):
+            is_valid_chain = True
+            
+            # 检查当前排列下，所有相邻的 APP 是否都在白名单中
+            for i in range(len(perm) - 1):
+                if (perm[i], perm[i+1]) not in valid_edges:
+                    is_valid_chain = False
+                    break
+                    
+            if is_valid_chain:
+                # 找到了一条完全合法的调用顺序 (例如: amazon -> venmo -> splitwise)
+                return list(perm) 
+                
+        # 所有排列都走不通，说明这几个 APP 拼在一起逻辑不通，直接抛弃
+        return None
+
     def __init__(self, tokenizer, config: DictConfig, llm_client: Optional[LlmClient] = None, **kwargs):
+        """
+        初始化策略类，挂载环境配置、加载知识库并初始化所需的大模型客户端。
+        
+        Args:
+            tokenizer: 用于计算 token 的分词器实例
+            config: 系统的全局配置字典 (DictConfig)
+            llm_client: 可选传入的外部通用大模型客户端实例
+            **kwargs: 其他动态注入的配置参数 (例如 env_profile, active_apps 等)
+        """
         super().__init__()
         self.tokenizer = tokenizer
         self.config = config
@@ -74,8 +128,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         self._env_profile = kwargs.get("env_profile")
 
         # ================= [Init 修改] =================
-        # 1. 常规客户端 (self.llm_client): 用于 generate 和 summarize
-        # 保持兼容性：如果外部传入了 client，直接使用
+        # 1. 常规客户端 (self.llm_client): 用于 generate 和 summarize 阶段，通常是廉价或默认模型
         if llm_client:
             self.llm_client = llm_client
         else:
@@ -84,11 +137,9 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             
         self._summarize_client = kwargs.get("llm_client_summarize", self.llm_client)
 
-        # 2. 探索专用客户端 (self.explore_client): 仅用于 explore 阶段
-        # 强制尝试初始化 Mix_DashScopeClient 以支持动态路由和隔离限流
+        # 2. 探索专用客户端 (self.explore_client): 仅用于 explore (Agent 交互) 阶段，通常是能力最强的混合路由模型
         logger.info("[ApiDriven] Initializing Mix_DashScopeClient specifically for 'explore' phase.")
         try:
-            # 默认占位，实际调用时会通过参数覆盖
             self.explore_client = Mix_DashScopeClient(
                 model_name="HY-Qwen3-235B-A22B-Instruct-2507", 
                 temperature=config.get("exploration_llm_temperature", 0.7)
@@ -97,17 +148,16 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             logger.error(f"[ApiDriven] Failed to init Mix_DashScopeClient: {e}. Fallback to standard client.")
             self.explore_client = self.llm_client
         
-        # 3. 统计相关初始化
+        # 3. 统计相关初始化：用于记录各个模型在 explore 阶段的成功率，便于后期分析模型表现
         self._stats_lock = threading.Lock()
         self._total_finished_tasks = 0
-        # 结构: { "model_name": {"attempts": 0, "success": 0} }
         self._model_performance = defaultdict(lambda: {"attempts": 0, "success": 0})
         # ================= [Init 结束] =================
 
         self._max_llm_retries = kwargs.get("max_llm_retries", 5)
         self._lock = threading.Lock() 
         
-        # --- 路径与文件配置 ---
+        # --- 路径与文件配置：指定知识库和记忆存储的硬盘位置 ---
         self.api_knowledge_path = kwargs.get(
             "api_knowledge_path", 
             "./agentevolver/preprocess/output/appworld_tool_manual.json"
@@ -121,15 +171,19 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         self.intra_memory_path = kwargs.get("intra_memory_path", os.path.join(base_memory_dir, "intra_domain_success.json"))
         self.cross_memory_path = kwargs.get("cross_memory_path", os.path.join(base_memory_dir, "cross_domain_success.json"))
         
+        # 划定允许探索的 App 范围
         self.active_apps = set(kwargs.get("active_apps", ['amazon','gmail','spotify','venmo','simple_note','todoist','splitwise','phone','file_system']))
         
+        # 将静态 JSON 文件加载到内存
         self.api_knowledge = self._load_json(self.api_knowledge_path)
         if not self.api_knowledge:
             logger.warning(f"API Knowledge not found at {self.api_knowledge_path}.")
 
+        # 初始化用于探索环境的沙盒 ID 池，并创建一个循环迭代器以便持续分配
         self.sandbox_ids_pool = self._load_sandbox_task_ids(self.task_labels_path)
         self.sandbox_id_iterator = itertools.cycle(self.sandbox_ids_pool)
         
+        # 加载历史探索记忆，用于去重和策略调优
         self.intra_memory_data = self._load_json(self.intra_memory_path)
         self.explored_intra_apps = set(self.intra_memory_data.get("explored_apps", []))
         self.cross_memory_data = self._load_json(self.cross_memory_path)
@@ -141,26 +195,37 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
     # ================= [辅助逻辑] 统计与空闲检查 (新增) =================
     
     def _record_model_result(self, model_name: str, is_success: bool):
-        """记录单个模型的推理结果"""
+        """
+        记录单个大模型在环境中执行任务的成功或失败次数。
+        
+        Args:
+            model_name (str): 调用的模型名称
+            is_success (bool): 任务是否执行成功（通常指 Reward >= 0.8）
+        """
+        # 使用互斥锁保证多线程下统计数据的绝对安全
         with self._stats_lock:
             self._model_performance[model_name]["attempts"] += 1
             if is_success:
                 self._model_performance[model_name]["success"] += 1
 
     def _report_progress_if_needed(self):
-        """检查总任务数，每50条输出一次统计报表"""
+        """
+        定期（每完成50个任务）在控制台打印当前各个大模型的执行表现统计报表。
+        """
         with self._stats_lock:
             self._total_finished_tasks += 1
             current_count = self._total_finished_tasks
             
+            # 每当完成数量是 50 的倍数时，打印统计日志
             if current_count % 50 == 0:
                 logger.info(f"\n====== Model Performance Report (Processed {current_count} Tasks) ======")
                 logger.info(f"{'Model Name':<40} | {'Calls':<6} | {'Succ':<6} | {'Fail':<6} | {'Rate':<8}")
                 logger.info("-" * 80)
                 
-                # 按调用次数降序排列
+                # 按照调用次数从高到低排序模型
                 sorted_stats = sorted(self._model_performance.items(), key=lambda x: x[1]['attempts'], reverse=True)
                 
+                # 遍历计算并打印成功率
                 for model, stats in sorted_stats:
                     attempts = stats["attempts"]
                     success = stats["success"]
@@ -171,34 +236,35 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
 
     def _get_model_idle_score(self, model_name: str) -> Tuple[int, int]:
         """
-        获取指定模型的空闲分数。
-        返回 (并发空闲数, RPM空闲数) 的元组。
-        值越大代表越空闲。
+        获取指定模型的空闲分数，用于在多个主模型之间做负载均衡路由。
+        
+        Args:
+            model_name (str): 待评估的模型名称
+            
+        Returns:
+            Tuple[int, int]: 返回 (并发空闲数, RPM空闲数) 的元组，值越大代表模型越空闲可以立即接客。
         """
+        # 如果当前的客户端不支持状态查询（说明不是 MixClient），直接返回兜底值
         if not hasattr(self.explore_client, "_get_model_state"):
-            # 如果不是预期的 MixClient，返回默认值
             return (0, 0)
 
         try:
-            # 1. 确保状态已初始化
+            # 获取底层的模型并发控制锁和时间戳记录
             state = self.explore_client._get_model_state(model_name)
-            
-            # 2. 获取并发空闲数 (Semaphore 的内部 _value)
             semaphore = state.get("semaphore")
+            # semaphore._value 表示当前还剩下多少个并发额度可以使用
             concurrency_free = semaphore._value if semaphore else 0
             
-            # 3. 获取 RPM 空闲数
             rate_lock = state.get("rate_lock")
             timestamps = state.get("timestamps")
             rpm_free = 0
             
+            # 计算 RPM (Requests Per Minute) 剩余额度
             if rate_lock and isinstance(timestamps, list):
-                # 快速检查，不长时间持有锁
                 with rate_lock:
                     now = time.time()
-                    # 假定 MixClient 的 window 是 60s
+                    # 筛出最近一分钟内的调用记录
                     valid_timestamps = [t for t in timestamps if now - t < 60.0]
-                    # 假定 MAX_RPM 是 MixClient 的属性，默认为 30
                     max_rpm = getattr(self.explore_client, "MAX_RPM", 30)
                     rpm_free = max_rpm - len(valid_timestamps)
             
@@ -212,13 +278,30 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
 
     def explore(self, task: Task, data_id: str, rollout_id: str) -> List[Trajectory]:
         """
-        [ApiDriven] 执行探索任务的核心入口。
+        执行探索任务的核心入口：将生成的自然语言 Query 下发至真实环境交由 Agent 解决。
+        
+        工作流：
+        1. 锁定环境沙盒 ID (优先使用生成阶段的 ID 以保证数据一致性)。
+        2. 智能路由大模型 (比较多个模型的空闲度，优先调用不排队的模型)。
+        3. 实例化 EnvWorker 和 AgentFlow，并在沙盒中执行任务直至成功或触发最大步数。
+        4. 评估执行轨迹（Reward），对失败情况进行多模型 fallback 重试。
+        
+        Args:
+            task (Task): 待执行的任务对象，内含 user_query 和 metadata。
+            data_id (str): 数据流的唯一追踪 ID。
+            rollout_id (str): 该轮 rollout 的批次 ID。
+            
+        Returns:
+            List[Trajectory]: 返回包含执行步骤和最终 Reward 的轨迹列表。如果彻底失败，返回空列表或包含失败原因的最后一个轨迹。
         """
-        # 1. 动态获取沙箱 ID
-        real_sandbox_id = self.get_next_sandbox_id()
-        if real_sandbox_id:
-            if task.metadata is None:
-                task.metadata = {}
+        # [修改] 优先复用在 Generator 阶段绑定好的沙盒 ID，确保前后环境数据绝对一致
+        if task.metadata is None:
+            task.metadata = {}
+            
+        real_sandbox_id = task.metadata.get("env_sandbox_id")
+        if not real_sandbox_id:
+            # 如果是遗留任务没有 sandbox_id，则动态分配一个
+            real_sandbox_id = self.get_next_sandbox_id()
             task.metadata["env_sandbox_id"] = real_sandbox_id
             
         debug_log(self.config, "api_explore_start", {
@@ -229,18 +312,16 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         })
 
         # --- 动态构建模型尝试列表 ---
-        
-        # 第一梯队模型
         tier1_model_a = "HY-Qwen3-235B-A22B-Instruct-2507"
         tier1_model_b = "DeepSeek-V3-Online"
         
-        # 检查空闲状态
+        # 探测当前哪个一线大模型比较闲
         score_a = self._get_model_idle_score(tier1_model_a)
         score_b = self._get_model_idle_score(tier1_model_b)
         
         logger.debug(f"[Explore] Model Capacity - {tier1_model_a}: {score_a}, {tier1_model_b}: {score_b}")
         
-        # 优先比较并发空闲数 (idx 0)，其次比较 RPM 空闲数 (idx 1)
+        # 优先级判断：空闲分数高的排前面，一样空闲则随机打乱
         if score_a > score_b:
             tier1_models = [tier1_model_a, tier1_model_b]
         elif score_b > score_a:
@@ -249,24 +330,22 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             tier1_models = [tier1_model_a, tier1_model_b]
             random.shuffle(tier1_models)
             
-        # 第二梯队兜底模型
+        # 准备兜底的二线模型
         tier2_models = ["azure-gpt-5-mini", "azure-gpt-5"]
-        
-        # 最终执行顺序
         candidate_models = tier1_models + tier2_models
         
         last_trajectory = None
         max_steps = self.config.get("max_explore_step", 50) 
 
-        # 开始模型轮询
+        # 遍历候选模型列表（多重 fallback 机制）
         for model_name in candidate_models:
             logger.info(f"[Explore] Task {data_id}: Trying model '{model_name}'...")
 
-            # 2. 初始化环境工作者 (每次重置以防污染)
             thread_idx = 0
             if task.metadata and 'thread_index' in task.metadata:
                 thread_idx = task.metadata['thread_index']
             
+            # 初始化与沙盒交互的 Worker
             env_worker = EnvWorker(
                 task=task,
                 config=self.config, 
@@ -274,47 +353,39 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                 tokenizer=self.tokenizer
             )
 
-            # 3. 构造 LLM 聊天函数 (注入当前模型参数)
+            # 动态构造当前遍历到的大模型的聊天闭包函数 (Chat Closure)
             if model_name in ["DeepSeek-V3-Online","HY-Qwen3-235B-A22B-Instruct-2507"]:
                 sampling_params = {
                     "temperature": self.config.get("exploration_llm_temperature", 0.5),
                     "top_p": self.config.get("exploration_llm_top_p", 0.9),
                     "top_k": self.config.get("exploration_llm_top_k", 50),
-                    "model": model_name, # MixClient 根据此字段路由
+                    "model": model_name,
                 }
-            
-                llm_chat_fn = self._get_llm_chat_fn(
-                    self.explore_client,
-                    sampling_params=sampling_params
-                )
+                llm_chat_fn = self._get_llm_chat_fn(self.explore_client, sampling_params=sampling_params)
             else:
-                sampling_params = {
-                    "model": model_name, # MixClient 根据此字段路由
-                }
-                llm_chat_fn = self._get_llm_chat_fn(
-                    self.explore_client,
-                    sampling_params=sampling_params
-                )
+                sampling_params = {"model": model_name}
+                llm_chat_fn = self._get_llm_chat_fn(self.explore_client, sampling_params=sampling_params)
 
-            # ================= 实例化 Judge =================
+            # 初始化环境奖励计算器（Judge）
             reward_calculator = IntegratedRewardCalculator(task=task)
 
-            # 4. 初始化 Agent 工作流
+            # 组装完整的智能体工作流架构
             agent_flow = ModifiedAgentFlow(
                 llm_chat_fn=llm_chat_fn,
                 tokenizer=self.tokenizer,
                 config=self.config,
                 enable_context_generator=False,
-                reward_calculator=reward_calculator  # <--- 注入 Judge
+                reward_calculator=reward_calculator 
             )
             agent_flow._reward_calculator = reward_calculator
             agent_flow.max_steps = max_steps
             agent_flow.max_model_len = self.config.get("max_model_len", 102400)
 
-            # 5. 执行 Agent
             try:
+                # 获取该特定环境的角色系统 Prompt
                 system_prompt = get_agent_interaction_system_prompt(self._env_profile)
 
+                # 开始正式在环境中驱动智能体进行探索
                 trajectory = env_worker.execute(
                     data_id=data_id, 
                     rollout_id=rollout_id,
@@ -327,20 +398,16 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                 
                 last_trajectory = trajectory
                 
-                # ================= 严格的成功判定 =================
-                # 检查 trajectory.reward.outcome 是否 >= 0.8    
                 is_success = False
                 current_score = 0.0
                 
+                # [关键判定] 通过 Judge 计算最终反馈分数，评估任务是否圆满完成
                 if trajectory and trajectory.reward:
                     current_score = trajectory.reward.outcome
-
-                    # --- [NEW] 添加 Judge 结果日志 ---
                     judge_reason = getattr(trajectory.reward, "reason", "No detailed reasoning provided")
                     logger.info(f"📝 [Judge Result] Task: {data_id} | Model: {model_name} | Score: {current_score}\nReasoning: {judge_reason}")
-                    # ---------------------------------
                     
-                    # 阈值设定为 0.8
+                    # 只有分数 >= 0.8 才被视为真正有效的可供微调的成功轨迹
                     if current_score >= 0.8:
                         is_success = True
                     else:
@@ -348,17 +415,17 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                 else:
                     logger.warning(f"[Explore] Model {model_name} produced no reward object.")
 
-                # [统计] 记录当前模型结果
+                # 记录该模型的表现
                 self._record_model_result(model_name, is_success)
                 
+                # 如果成功，立即返回轨迹结束探索，节省算力
                 if is_success:
                     logger.info(f"[Explore] Model {model_name} SUCCEEDED (Score: {current_score}, Steps: {len(trajectory.steps)}). Returning result.")
-                    # [统计] 任务完成，检查是否汇报
                     self._report_progress_if_needed()
                     return [trajectory]
                 else:
+                    # 如果失败，清理资源并进入 next loop 尝试下一个更强的兜底模型
                     logger.warning(f"[Explore] Model {model_name} FAILED or Score too low. Retrying with next model...")
-                    # 资源清理
                     try:
                         if hasattr(env_worker, 'env') and env_worker.env:
                              pass 
@@ -366,109 +433,116 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                     continue
 
             except Exception as e:
+                # 捕获并记录环境崩溃或大模型接口熔断的极端异常
                 logger.error(f"[Explore] Critical Error with model {model_name}: {e}")
                 traceback.print_exc()
-                # [统计] 异常视为失败
                 self._record_model_result(model_name, False)
-                # 异常情况也继续尝试下一个模型
                 continue
 
-        # 如果所有模型都失败，返回最后一个模型的结果（即使是 Failed 状态）
+        # 走到这里意味着所有配置的模型都尝试过了，并且全部失败
         logger.warning(f"[Explore] All models failed.")
-        
-        # [统计] 任务完成（虽然全失败），检查是否汇报
         self._report_progress_if_needed()
 
+        # 返回最后一个模型跑出的失败轨迹（供后续分析或打负面标签）
         if last_trajectory:
             logger.warning(f"[Explore] Returning result from last model ({candidate_models[-1]}).")
             return [last_trajectory]
         
-        # 极端情况：没有任何轨迹生成
         return []
 
     # ================= 总结逻辑 =================
 
     def summarize(self, task: Task, trajectory: Trajectory) -> List[TaskObjective]:
         """
-        统一的总结入口，根据任务阶段路由到具体逻辑。
+        统一的轨迹总结提炼入口。
+        基于任务的元数据 phase (阶段) 来路由到对应的具体总结方法。
+        
+        Args:
+            task (Task): 原生成阶段封装的任务描述
+            trajectory (Trajectory): Explore 阶段产生的交互流水账
+            
+        Returns:
+            List[TaskObjective]: 提炼打包好的、包含强化学习所需的 Reward 和 GroundTruth 的标准目标集合。
         """
+        # 如果轨迹完全为空，没有价值，直接抛弃
         if not trajectory or not trajectory.steps:
             return []
 
         phase = task.metadata.get("phase", "unknown")
-        
         results = []
+        # 路由
         if phase == "intra":
             results = self.summarize_intra(task, trajectory)
         elif phase == "extra":
             results = self.summarize_cross(task, trajectory)
         
-        # 如果 summarize 子方法返回 None 或空列表，则返回空
         return results if results else []
 
     def get_next_sandbox_id(self) -> str:
+        """
+        从预设的沙盒池中循环安全地获取下一个可用的沙盒 ID。
+        
+        Returns:
+            str: 如 'train_001' 等环境实例标识
+        """
         try:
             return next(self.sandbox_id_iterator)
         except StopIteration:
+            # 兜底：如果迭代器出问题，返回一个默认的安全 ID
             return "train_001"
 
     # ================= 上下文构建辅助方法 (Text-Based Format) =================
     
     def _get_enhanced_context(self, app_name: str, anchor_api_names: List[str]) -> Tuple[str, str, str]:
         """
-        构建增强的上下文信息（格式化文本，而非 JSON）。
+        将 JSON 格式的 API 知识库转化为大模型更容易阅读和理解的格式化纯文本。
         
-        修改说明：
-        1. target_app_apis_info: 格式改为 "call_name: description"
-        2. anchor_apis_detailed_info: 仅包含 call_name, description, parameters, returns
+        Args:
+            app_name (str): 目标 App 的名称
+            anchor_api_names (List[str]): 在此轮任务中被强行选定的核心 API (锚点 API)
+            
+        Returns:
+            Tuple[str, str, str]: (所有 App 的概况, 目标 App 的全量 API 简述, 锚定 API 的详细参数文档)
         """
-        # 1. Global Context: 所有 APP 的概况
+        # 1. 构建所有可用 App 的全局描述
         global_lines = []
         for app, details in self.api_knowledge.items():
             desc = details.get("description", "No description available.")
             global_lines.append(f'APP: "{app}"\ndescription: "{desc}"')
         all_apps_info = "\n\n".join(global_lines)
 
-        # 2. Target App APIs: 指定 APP 的所有 API 概况
-        # 格式要求: call_name: description
+        # 2. 提取指定 App 内部所有的 API 的基础描述
         target_app_data = self.api_knowledge.get(app_name, {})
         target_app_apis = target_app_data.get("apis", {})
         
         api_lines = []
         for api_key, details in target_app_apis.items():
             desc = details.get("description", "No description available.")
-            # 优先获取 call_name，如果取不到则使用 key (short name)
             full_call_name = details.get("call_name", api_key)
             api_lines.append(f"{full_call_name}: {desc}")
         target_app_apis_info = "\n".join(api_lines)
 
-        # 3. Anchor APIs Details: 锚定 API 的详细信息
+        # 3. 为被选中的 Anchor API 提取详细的参数 (parameters) 和返回值 (returns) 结构
         anchor_details_list = []
-        
         for input_api_name in anchor_api_names:
-            # 兼容处理：尝试获取短名字（例如从 apis.spotify.search_songs 提取 search_songs）
+            # 尝试剥离多级路径前缀获取短名称
             if "." in input_api_name:
                 short_name = input_api_name.split('.')[-1]
                 full_path = input_api_name
             else:
                 short_name = input_api_name
-                # 尝试构造全路径，假设标准格式
                 full_path = f"apis.{app_name}.{short_name}"
 
-            # 从知识库中查找数据
             api_data = None
             if short_name in target_app_apis:
                 api_data = target_app_apis[short_name]
             
+            # 如果知识库里有这个 API，组装成带有 Markdown 风格的参数说明块
             if api_data:
-                # 确保 call_name 准确（以防 input_api_name 只有短名）
                 correct_call_name = api_data.get("call_name", full_path)
-                
-                # 构造详细信息块
                 params_str = json.dumps(api_data.get("parameters", []), indent=2)
                 returns_str = json.dumps(api_data.get("returns", {}), indent=2)
                 
-                # 按照要求：call_name 作为主要标识，去除 short name，保留 desc, params, returns
                 block = (
                     f'api_name: "{correct_call_name}"\n'
                     f'description: "{api_data.get("description", "")}"\n'
@@ -477,257 +551,334 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                 )
                 anchor_details_list.append(block)
         
-        # 如果没有找到任何 anchor，为了防止 Prompt 为空，给一个提示
         anchor_apis_detailed_info = "\n\n---\n\n".join(anchor_details_list) if anchor_details_list else "None provided."
 
         return all_apps_info, target_app_apis_info, anchor_apis_detailed_info
     
     # ================= 任务生成 (Generation) =================
-    
-    def generate_intra_task(self, api_data: Union[dict, List[dict]], task: Task = None) -> List[Task]:
+    def _fetch_real_table_data(self, sandbox_id: str, app_tables: Dict[str, List[str]]) -> str:
         """
-        生成单域探索任务：针对特定 App 的 API 生成 Prompt。
-        支持传入单个 api_dict 或 api_dict 列表。
-        返回生成的 Task 列表。
+        核心数据桥梁探针：根据大模型选择的表名，动态探测并提取底层 SQLite 的真实状态快照。
+        
+        Args:
+            sandbox_id (str): 目标沙盒环境对应的 ID (如 'train_001')
+            app_tables (Dict[str, List[str]]): LLM 选拔器输出的要求查询的表结构 (如 {"amazon": ["orders"]})
+            
+        Returns:
+            str: 包含真实数据且经过字段清洗和截断处理后的 JSON 字符串
+        """
+        fetched_data = {}
+        try:
+            # 唤起对应的真实环境上下文以挂载底层数据库
+            with AppWorld(task_id=sandbox_id) as world:
+                for app_name, table_names in app_tables.items():
+                    # 检查环境的 ORM models 是否存在该应用
+                    table_names = table_names[:2]
+
+                    if not hasattr(world.models, app_name):
+                        logger.warning(f"[Data Fetch] 环境中不存在 App: {app_name}")
+                        continue
+                    
+                    app_models = getattr(world.models, app_name)
+                    app_data = {}
+                    
+                    for table_name in table_names:
+                        # --- 模糊匹配逻辑：大模型容易造出单复数、大小写不一的表名，在此处做容错映射 ---
+                        table_lower = table_name.lower()
+                        # 粗暴去 's' 匹配单数形式的 ORM Class Name
+                        singular_name = table_lower[:-1] if table_lower.endswith('s') else table_lower
+                        
+                        matched_cls = None
+                        # 遍历该 App 命名空间下的所有类进行碰撞
+                        for attr_name in dir(app_models):
+                            attr_lower = attr_name.lower()
+                            if attr_lower == table_lower or attr_lower == singular_name:
+                                matched_cls = getattr(app_models, attr_name)
+                                break
+                        
+                        # 如果确实是继承自底层 SQLModel 且有 .all() 接口的表模型
+                        if matched_cls and hasattr(matched_cls, "all") and callable(matched_cls.all):
+                            try:
+                                records = matched_cls.all()
+                                if not records:
+                                    continue
+                                
+                                parsed_records = []
+                                # 【限制策略】每张表最多取前 2 条记录，防止塞入 Prompt 时导致 Context Window 爆炸
+                                for r in records[:2]:  
+                                    record_dict = {}
+                                    # 将 ORM 对象解包为字典
+                                    for k, v in r.__dict__.items():
+                                        # 数据脱敏：过滤掉系统内部前缀变量、密码和认证 Token 等大模型不需要的纯噪音
+                                        if k.startswith("_") or "password" in k.lower() or "token" in k.lower():
+                                            continue
+                                        # 文本截断：保留核心语义即可，拒绝几千字的邮件正文喧宾夺主
+                                        if isinstance(v, str) and len(v) > 60:
+                                            v = v[:57] + "..."
+                                        record_dict[k] = v
+                                    parsed_records.append(record_dict)
+                                    
+                                app_data[table_name] = parsed_records
+                            except Exception as e:
+                                logger.warning(f"[Data Fetch] 提取表数据失败 {app_name}.{table_name}: {e}")
+                                
+                    if app_data:
+                        fetched_data[app_name] = app_data
+                        
+        except Exception as e:
+            logger.error(f"[Data Fetch] 无法加载 AppWorld 沙盒 {sandbox_id}: {e}")
+            
+        # 返回 JSON 供 Prompt 直接内嵌使用
+        return json.dumps(fetched_data, indent=2, ensure_ascii=False) if fetched_data else "{}"
+
+    def generate_intra_task(self, app_name: str, task: Task = None) -> List[Task]:
+        """
+        两阶段数据生成：同领域 (Intra-domain)
+        第一阶段：(Selector) 大模型从 App 全局视角挑选出一组最符合人类逻辑的 API 搭配，并指出需要查看哪些表。
+        第二阶段：(Generator) Python 使用探针抓取真实数据，大模型根据真实的底层表单内容创造出带有模糊性、探索性的 User Query。
+        
+        Args:
+            app_name (str): 目标进行任务生成的单体 App
+            task (Task, optional): 待拷贝继承元信息的种子任务
+            
+        Returns:
+            List[Task]: 生成出的最终任务列表
         """
         generated_tasks = []
-
-        # [Fix] 统一输入为列表处理
-        api_dict_list = api_data if isinstance(api_data, list) else [api_data]
-
-        for api_dict in api_dict_list:
-            # 1. 空值校验
-            if not api_dict:
-                logger.warning("[Intra-Gen] Encountered empty api_dict, skipping.")
-                continue
-
-            target_app = api_dict.get("app_name", "UnknownApp")
-            raw_api_list = api_dict.get("apis_name_list", [])
-            
-            # 2. 获取增强的上下文信息
-            all_apps_info, target_app_apis_info, anchor_apis_detailed_info = self._get_enhanced_context(
-                target_app, raw_api_list
-            )
-
-            logger.debug(f"[Intra-Gen] Preparing prompt for App: {target_app}")
-
-            # 3. Prompt 格式化 (使用增强信息)
-            try:
-                # 兼容处理：检查 prompt 模板是否支持新变量，如果只是旧模板则回退
-                if "{ALL_APPS_DESC}" in INTRA_DOMAIN_PURPOSE_PROMPT:
-                    prompt = INTRA_DOMAIN_PURPOSE_PROMPT.format(
-                        APP_NAME=target_app,
-                        ALL_APPS_DESC=all_apps_info,
-                        TARGET_APP_API_DESCS=target_app_apis_info,
-                        ANCHOR_API_DETAILS=anchor_apis_detailed_info
-                    )
-                else:
-                    # # Fallback old format
-                    # api_list_str = str(raw_api_list)
-                    # prompt = INTRA_DOMAIN_PURPOSE_PROMPT.replace("{APP_NAME}", target_app).replace("{API_LIST}", api_list_str)
-                    prompt = INTRA_DOMAIN_PURPOSE_PROMPT.format(
-                        APP_NAME=target_app,
-                        ALL_APPS_DESC=all_apps_info,
-                        TARGET_APP_API_DESCS=target_app_apis_info,
-                        ANCHOR_API_DETAILS=anchor_apis_detailed_info
-                    )
-
-            except Exception as e:
-                logger.error(f"[Intra-Gen] Prompt formatting critical error: {e}")
-                continue
-
-            # 4. 调用 LLM
-            try:
-                response = self._chat_with_retry(messages=[{"role": "user", "content": prompt}])
-            except Exception as e:
-                logger.error(f"[Intra-Gen] Chat API call failed for {target_app}: {e}")
-                continue
-
-            if not response: 
-                logger.warning(f"[Intra-Gen] No response from LLM for {target_app}")
-                continue
-
-            # 5. 解析结果 (现在返回的是 List[dict])
-            parsed_scenarios = parse_intra_purpose_from_response(response.content)
-
-            if not parsed_scenarios:
-                logger.warning(f"[Intra-Gen] Failed to parse JSON for app {target_app}")
-                continue
-            
-            # 6. 为每个场景生成独立的 Task 对象
-            for scenario in parsed_scenarios:
-                # 使用 deepcopy 避免修改原始模板，如果没有模板则新建
-                new_task = copy.deepcopy(task) if task else Task()
-                
-                new_task.query = scenario["user_query"]
-                new_task.metadata = {
-                    "phase": "intra", 
-                    "target_app": target_app,
-                    "app1_apis": list(raw_api_list),
-                    "origin_query": scenario["user_query"],
-                    "target_api": scenario["target_api"],
-                    "prompt": prompt,
-                }
-                generated_tasks.append(new_task)
-                
-            logger.info(f"[Intra-Gen] Generated {len(parsed_scenarios)} tasks for App: {target_app}")
-
-        return generated_tasks
-
-    def generate_all_valid_cross_tasks(self, task: Task = None) -> List[Task]:
-        """
-        [New Method] 自动生成所有在 VALID_CROSS_COMBINATIONS 中的跨域任务。
-        不需要传入 API dict，自动从 self.api_knowledge 读取。
-        """
-        all_generated_tasks = []
-        logger.info(f"[Cross-Gen] Starting batch generation for {len(self.VALID_CROSS_COMBINATIONS)} valid combinations.")
-
-        for source_name, target_name in self.VALID_CROSS_COMBINATIONS:
-            # 从知识库中获取 APP 详情
-            source_data = self.api_knowledge.get(source_name)
-            target_data = self.api_knowledge.get(target_name)
-
-            if not source_data or not target_data:
-                logger.debug(f"[Cross-Gen] Skipping {source_name}->{target_name}: definition not found in knowledge base.")
-                continue
-
-            # 构造 api_dict
-            api_dict1 = {
-                "app_name": source_name,
-                "apis_name_list": list(source_data.get("apis", {}).keys())
-            }
-            api_dict2 = {
-                "app_name": target_name,
-                "apis_name_list": list(target_data.get("apis", {}).keys())
-            }
-
-            # 调用生成逻辑
-            tasks = self.generate_cross_task(api_dict1, api_dict2, task)
-            all_generated_tasks.extend(tasks)
-
-        logger.info(f"[Cross-Gen] Batch generation complete. Total tasks: {len(all_generated_tasks)}")
-        return all_generated_tasks
-
-    def generate_cross_task(self, api_dict1: dict, api_dict2: dict, task: Task = None) -> List[Task]:
-        """
-        生成跨域探索任务：选择两个 App，合成跨应用场景。
+        app_data = self.api_knowledge.get(app_name, {})
+        all_apis = list(app_data.get("apis", {}).keys())
         
-        [Updated] 增加了白名单检查，确保只生成符合预期的组合。
-        [Updated] 使用 _get_enhanced_context 提供全面信息。
-        """
-        generated_tasks = []
-
-        # 基础校验
-        if not api_dict1 or not api_dict2:
-            logger.error("[Cross-Gen] One of the api_dicts is None.")
+        # [修复] 防御机制：由于生成规则是要将 2 到 3 个 API 拼成一组，如果该 App 的 API 数量不到 2 个，直接拦截放弃避免越界
+        if len(all_apis) < 2: 
             return []
 
-        app1_name = api_dict1.get("app_name", "App1")
-        app2_name = api_dict2.get("app_name", "App2")
+        # [新增] 在所有操作开始前，提前分配并锁定一个实体沙盒 ID，保证生成和执行都在同一个次元
+        real_sandbox_id = self.get_next_sandbox_id()
+
+        # 第一阶段前置：随机产生 3 组各不相同的候选 API 组合
+        candidate_groups = []
+        for _ in range(3):
+            api_count = random.choice([2, 3])
+            candidate_groups.append(random.sample(all_apis, min(api_count, len(all_apis))))
+
+        groups_str = "\n".join([f"Group {i+1}: {g}" for i, g in enumerate(candidate_groups)])
+        # 获取该 App 的描述和概况提供给大模型
+        all_apps_info, target_app_apis_info, _ = self._get_enhanced_context(app_name, [])
+
+        # --- Stage 1: 呼叫大模型评委 (Selector) ---
+        db_schema_overview = get_intra_schema([app_name]) # [新增] 获取动态 Schema
+
+        selector_prompt = INTRA_DOMAIN_SELECTOR_PROMPT.format(
+            CANDIDATE_COUNT=3,
+            APP_NAME=app_name,
+            ALL_APPS_DESC=all_apps_info,
+            TARGET_APP_API_DESCS=target_app_apis_info,
+            CANDIDATE_GROUPS_STR=groups_str,
+            DB_SCHEMA_OVERVIEW=db_schema_overview # [新增] 填补坑位
+        )
         
-        # 1. [新增] 严格校验 APP 组合是否在白名单中
-        current_pair = [app1_name, app2_name]
-        if current_pair not in self.VALID_CROSS_COMBINATIONS:
-            logger.warning(f"[Cross-Gen] Skipping invalid combination: {app1_name} -> {app2_name}")
-            return []
+        sel_response = self._chat_with_retry(messages=[{"role": "user", "content": selector_prompt}])
+        if not sel_response: return []
         
-        # 获取 Anchor API 列表
-        raw_api_list1 = api_dict1.get("apis_name_list", [])
-        raw_api_list2 = api_dict2.get("apis_name_list", [])
+        # 解析评委选定的 API 组合和明确点名需要的数据库表名
+        selection_data = parse_intra_selector(sel_response.content)
+        if not selection_data or "selected_apis" not in selection_data: return []
 
-        # 2. 获取增强上下文信息
-        # 获取全局信息（只需要获取一次）
-        all_apps_info, app1_apis_info, app1_anchor_details = self._get_enhanced_context(app1_name, raw_api_list1)
-        _, app2_apis_info, app2_anchor_details = self._get_enhanced_context(app2_name, raw_api_list2)
+        selected_apis = selection_data["selected_apis"]
+        required_tables = selection_data.get("required_tables", [])
 
-        # 3. Prompt 格式化
-        try:
-             if "{ALL_APPS_DESC}" in CROSS_DOMAIN_PURPOSE_PROMPT:
-                prompt = CROSS_DOMAIN_PURPOSE_PROMPT.format(
-                    ALL_APPS_DESC=all_apps_info,
-                    APP_NAME1=app1_name,
-                    APP1_API_DESCS=app1_apis_info,
-                    APP1_ANCHOR_DETAILS=app1_anchor_details,
-                    APP_NAME2=app2_name,
-                    APP2_API_DESCS=app2_apis_info,
-                    APP2_ANCHOR_DETAILS=app2_anchor_details
-                )
-             else:
-                # Fallback old format
-                # apis1_str = ",".join(raw_api_list1)
-                # apis2_str = ",".join(raw_api_list2)
-                # prompt = CROSS_DOMAIN_PURPOSE_PROMPT \
-                #     .replace("{APP_NAME1}", app1_name) \
-                #     .replace("{API_LIST1}", apis1_str) \
-                #     .replace("{APP_NAME2}", app2_name) \
-                #     .replace("{API_LIST2}", apis2_str)
-                prompt = CROSS_DOMAIN_PURPOSE_PROMPT.format(
-                    ALL_APPS_DESC=all_apps_info,
-                    APP_NAME1=app1_name,
-                    APP1_API_DESCS=app1_apis_info,
-                    APP1_ANCHOR_DETAILS=app1_anchor_details,
-                    APP_NAME2=app2_name,
-                    APP2_API_DESCS=app2_apis_info,
-                    APP2_ANCHOR_DETAILS=app2_anchor_details
-                )
-
-        except Exception as e:
-            logger.error(f"[Cross-Gen] Prompt formatting error: {e}")
-            return []
-
-        # 4. 调用 LLM
-        try:
-            response = self._chat_with_retry(messages=[{"role": "user", "content": prompt}])
-        except Exception as e:
-            logger.error(f"[Cross-Gen] Chat API call failed: {e}")
-            return []
-
-        if not response: 
-            return []
+        # --- 中转层：深入底层沙盒打捞该任务对应的真实数据 ---
+        # [修改] 传入前面分配好的沙盒 ID 获取该沙盒在此刻的真实物化视图
+        db_content = self._fetch_real_table_data(real_sandbox_id, {app_name: required_tables})
         
-        # 5. 解析结果 (返回 List[dict])
-        try:
-            parsed_scenarios = parse_cross_purpose_from_response(response.content)
-        except Exception as e:
-            logger.error(f"[Cross-Gen] JSON parse logic error: {e}")
-            return []
+        # 获取该组被选定 API 的极其详细的参数规格说明
+        _, _, anchor_apis_detailed_info = self._get_enhanced_context(app_name, selected_apis)
 
-        if not parsed_scenarios:
-            logger.warning(f"[Cross-Gen] No valid scenarios parsed for {app1_name} <-> {app2_name}")
-            return []
+        # --- Stage 2: 呼叫大模型生成器 (Generator) ---
+        # 利用真数据和大纲，要求大模型不把话说明白，创造出一个 "Exploratory" (探索性) 的指令
+        generator_prompt = INTRA_DOMAIN_GENERATOR_PROMPT.format(
+            APP_NAME=app_name,
+            SELECTED_APIS=json.dumps(selected_apis),
+            ALL_APIS_BRIEF=target_app_apis_info,
+            ANCHOR_API_DETAILS=anchor_apis_detailed_info,
+            DB_CONTENT=db_content
+        )
 
-        # 6. 构建 Task 列表
+        gen_response = self._chat_with_retry(messages=[{"role": "user", "content": generator_prompt}])
+        if not gen_response: return []
+
+        parsed_scenarios = parse_intra_generator(gen_response.content)
+        
+        # 收尾：组装符合系统流转格式的 Task 数据集对象
         for scenario in parsed_scenarios:
             new_task = copy.deepcopy(task) if task else Task()
-            
-            new_task.query = scenario["user_query"]
+            new_task.query = scenario.get("user_query", "")
+            # 将核心上下文塞入 metadata，尤其是锁定的沙盒 ID (env_sandbox_id)
             new_task.metadata = {
-                "phase": "extra", # 注意：跨域通常叫 cross 或 inter
-                "app1": app1_name,
-                "app2": app2_name,
-                "app1_apis": list(raw_api_list1),
-                "app2_apis": list(raw_api_list2),
-                "origin_query": scenario["user_query"],
-                "source_api" : scenario["source_info_api"],
-                "target_api": scenario["target_action_api"],
-                "logic_pattern": scenario.get("logic_pattern", "Unknown"),
-                "prompt": prompt,
+                "phase": "intra",
+                "env_sandbox_id": real_sandbox_id, # [新增] 向 explore() 方法透传唯一的环境令牌
+                "target_app": app_name,
+                "target_api": scenario.get("target_api", ""),
+                "selected_apis_context": selected_apis,
+                "required_tables": required_tables,
+                "origin_query": new_task.query
             }
             generated_tasks.append(new_task)
 
-        logger.info(f"[Cross-Gen] Generated {len(generated_tasks)} tasks for {app1_name} <-> {app2_name}")
+        return generated_tasks
+
+    def generate_cross_task(self, target_apps: List[str], task: Task = None) -> List[Task]:
+        """
+        两阶段数据生成：跨领域 (Cross-domain)
+        逻辑核心与 Intra 基本一致，难点在于如何按照特定的统计概率模型来分配来自 2-3 个 App 里的共计 2-5 个 API，从而产生高价值的“跨域信息串联”任务（例如从 Venmo 扣款后在 Todoist 里划掉任务）。
+        
+        Args:
+            target_apps (List[str]): 参与串联的 App 名称列表
+            task (Task, optional): 待拷贝继承元信息的种子任务
+            
+        Returns:
+            List[Task]: 生成出的最终任务列表
+        """
+        ordered_apps = self._get_valid_app_chain(target_apps)
+        if not ordered_apps:
+            logger.debug(f"[Cross-Gen] 拦截并丢弃不合理的跨域组合/顺序: {target_apps}")
+            return []
+            
+        # 覆写为具有合理逻辑顺序的 APP 列表 (传给后续 Prompt 组装时，大模型会按照这个顺序列举)
+        target_apps = ordered_apps 
+
+        generated_tasks = []
+        
+        # 按照需求设定的特定权重 [40%, 30%, 20%, 10%] 随机抽选本次任务将要使用的 API 总数
+        total_apis = random.choices([2, 3, 4, 5], weights=[0.4, 0.3, 0.2, 0.1])[0]
+        # 安全保障：强制 API 总数不能少于牵扯到的 App 总数，否则会导致分配黑洞
+        total_apis = max(total_apis, len(target_apps))
+        # 需求定义：2-3个API提供3组候选，更多则提供5组候选
+        num_candidates = 3 if total_apis in [2, 3] else 5
+
+        # 提前分配沙盒 ID 建立环境绑定
+        real_sandbox_id = self.get_next_sandbox_id()
+
+        candidate_groups = []
+        apps_info_lines = []
+        
+        # 把每个牵涉到的 App 的介绍信息全部揉合在一起
+        for app in target_apps:
+            all_apps_info, app_apis_info, _ = self._get_enhanced_context(app, [])
+            apps_info_lines.append(f"--- APP: {app} ---\n{app_apis_info}")
+
+        # 循环产生多组候选组合给后续的大模型评委过目
+        for _ in range(num_candidates):
+            current_group = {}
+            # 基础分配：每个受害（划掉）涉及的 App 必须至少有一个 API 参与
+            remaining = total_apis - len(target_apps)
+            allocations = {app: 1 for app in target_apps}
+            
+            # 边界保护：理论上前面被 max 限制后不会走到这个 if
+            if remaining < 0: 
+                allocations = {app: (1 if i < total_apis else 0) for i, app in enumerate(target_apps)}
+            else:
+                # 剩余名额随机分赃
+                for _ in range(remaining):
+                    allocations[random.choice(target_apps)] += 1
+
+            # 真正去知识库里采摘对应数量的 API 标识符
+            for app, count in allocations.items():
+                if count == 0: continue
+                all_apis = list(self.api_knowledge.get(app, {}).get("apis", {}).keys())
+                current_group[app] = random.sample(all_apis, min(count, len(all_apis)))
+            candidate_groups.append(current_group)
+
+        groups_str = "\n".join([f"Group {i+1}: {json.dumps(g)}" for i, g in enumerate(candidate_groups)])
+        apps_info_str = "\n\n".join(apps_info_lines)
+
+        # --- Stage 1: 呼叫大模型评委 ---
+        db_schema_overview = get_cross_schema(target_apps) # [新增]
+
+        selector_prompt = CROSS_DOMAIN_SELECTOR_PROMPT.format(
+            CANDIDATE_COUNT=num_candidates,
+            APP_COUNT=len(target_apps),
+            APPS_INFO_STR=apps_info_str,
+            CANDIDATE_GROUPS_STR=groups_str,
+            DB_SCHEMA_OVERVIEW=db_schema_overview # [新增]
+        )
+
+        sel_response = self._chat_with_retry(messages=[{"role": "user", "content": selector_prompt}])
+        if not sel_response: return []
+
+        # 获取评委选中的唯一跨域组合，并获悉两个 App 各自需要翻阅什么表
+        selection_data = parse_cross_selector(sel_response.content)
+        if not selection_data or "selected_apis" not in selection_data: return []
+
+        selected_apis = selection_data["selected_apis"]
+        required_tables = selection_data.get("required_tables", {})
+
+        # --- 中转层：深入底层沙盒打捞跨域的真实数据 ---
+        # [修改] 传递沙盒令牌，探针会自动去不同 App 的 SQLModel 里提取真数据并拼接
+        db_content = self._fetch_real_table_data(real_sandbox_id, required_tables)
+        
+        # 将多个 App 被选中的核心 API 文档揉在一起
+        anchor_details_combined = []
+        for app, apis in selected_apis.items():
+            _, _, anchor_detail = self._get_enhanced_context(app, apis)
+            anchor_details_combined.append(f"[{app} Details]\n{anchor_detail}")
+        
+        all_apis_brief_combined = []
+        for app in target_apps:
+            _, app_apis_info, _ = self._get_enhanced_context(app, [])
+            all_apis_brief_combined.append(f"[{app} APIs]\n{app_apis_info}")
+        
+        # --- Stage 2: 呼叫大模型生成器 ---
+        # 强制要求大模型写出隐晦的“跨域搜索联动行动”指令
+        generator_prompt = CROSS_DOMAIN_GENERATOR_PROMPT.format(
+            APPS_NAMES=", ".join(target_apps),
+            SELECTED_APIS_JSON=json.dumps(selected_apis),
+            ALL_APIS_BRIEF="\n".join(all_apis_brief_combined),
+            ANCHOR_API_DETAILS="\n".join(anchor_details_combined),
+            DB_CONTENT=db_content
+        )
+
+        gen_response = self._chat_with_retry(messages=[{"role": "user", "content": generator_prompt}])
+        if not gen_response: return []
+
+        parsed_scenarios = parse_cross_generator(gen_response.content)
+
+        # 收尾：组装 Task 并植入环境追踪芯片 (env_sandbox_id)
+        for scenario in parsed_scenarios:
+            new_task = copy.deepcopy(task) if task else Task()
+            new_task.query = scenario.get("user_query", "")
+            new_task.metadata = {
+                "phase": "extra",
+                "env_sandbox_id": real_sandbox_id, # [新增] 锁定执行环境
+                "target_apps": target_apps,
+                "source_api": scenario.get("source_info_api", ""),
+                "target_api": scenario.get("target_action_api", ""),
+                "logic_pattern": scenario.get("logic_pattern", ""),
+                "selected_apis_context": selected_apis,
+                "required_tables": required_tables,
+                "origin_query": new_task.query
+            }
+            generated_tasks.append(new_task)
+
         return generated_tasks
 
     # ================= 阶段总结逻辑 (Summarize) =================
 
     def summarize_intra(self, task: Task, trajectory: Trajectory) -> List[TaskObjective]:
         """
-        单域探索总结：检查是否调用目标 API，如果调用则使用 LLM 归纳任务意图。
-        """ 
+        单域探索反思与提取：让大模型审核刚刚跑完的轨迹流水账，归纳意图并将之包装为 RL 训练标准结构。
+        
+        Args:
+            task (Task): 任务描述体
+            trajectory (Trajectory): Agent 执行返回的过程步骤和反馈
+            
+        Returns:
+            List[TaskObjective]: 标准化提取出的带置信度和原始信息的强化学习训练目标列表。
+        """
         client = self._summarize_client
         llm_fn = self._get_llm_chat_fn(client)
         
-        # 数据脱敏
+        # [安全脱敏] 将前几个步骤里面可能包含人类直接 Prompt 指令的地方进行 MASK，防止模型作弊
         masked_trajectory = copy.deepcopy(trajectory)
         if len(masked_trajectory.steps) > 2:
             if masked_trajectory.steps[1].get('role') == 'user':
@@ -735,7 +886,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             if masked_trajectory.steps[2].get('role') == 'user':
                 masked_trajectory.steps[2]['content'] = '[MASKED]'
 
-        # 生成 Prompt
+        # 调取并组装总结反思专用的系统和用户 Prompt
         system_prompt, user_prompt = get_task_summarize_prompt(
             [masked_trajectory], old_objectives=task.query, profile=self._env_profile
         )
@@ -745,7 +896,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             {"role": "user", "content": user_prompt}
         ]
         
-        # 调用 LLM
+        # 呼叫大模型分析这段流水账，吐出精简干净的提炼数据
         try:
             llm_response = llm_fn(messages=messages)
             llm_output = llm_response["content"]
@@ -753,14 +904,14 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             logger.error(f"[Summarize Intra] LLM call failed: {e}")
             return []
         
-        # 解析结果
-        # parse_tasks_from_response 会负责将 LLM 生成的新 Query 和新 Code (action_sequence) 填入 task.query 和 task.ground_truth
+        # 拷贝母板并打上合成的标签
         task_copy = task.copy()
         task_copy.evaluator = 'synthetic'
         
+        # 通过解析器将 LLM 输出的 JSON 剥离重组为完整的任务对象
         tasks = parse_tasks_from_response(task_copy, llm_output)
 
-        # 获取 Reward 信息
+        # 提取环境裁定官给出的分数和评语
         reward_info = None
         if trajectory.reward:
             reward_info = {
@@ -768,34 +919,34 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                 "reason": getattr(trajectory.reward, "reason", "No reason provided")
             }
 
-        # [关键] 注入元数据
+        # 挂载极其重要的追溯元数据
         for task_obj in tasks:
             if task_obj.task.metadata is None:
                 task_obj.task.metadata = {}
             
-            # 1. 设置原始 Query (Schema 字段已更新为 origin_query)
             task_obj.task.origin_query = task.query
-            
-            # 2. 保存分析过程 (Debug 核心)
             task_obj.task.metadata["summary_analysis_process"] = llm_output
-            
-            # 3. 保存 Reward 信息
             task_obj.task.metadata["execution_reward"] = reward_info
-            
-            # 4. 链路追踪 ID
             task_obj.task.metadata["source_data_id"] = task.metadata.get("data_id")
-            task_obj.task.metadata["generation_type"] = "evolved" # 标记这是演化出来的任务
+            task_obj.task.metadata["generation_type"] = "evolved"
 
         return tasks
 
     def summarize_cross(self, task: Task, trajectory: Trajectory) -> List[TaskObjective]:
         """
-        跨域探索总结：验证是否跨两个 App 进行了交互，如果是，则归纳任务。
+        跨域探索反思与提取：机制与 summarize_intra 基本一致，专门处理多 App 串联行动。
+        
+        Args:
+            task (Task): 任务描述体
+            trajectory (Trajectory): 跨越不同 App 生成的轨迹步骤
+            
+        Returns:
+            List[TaskObjective]: 打包的 RL 训练目标
         """
         client = self._summarize_client
         llm_fn = self._get_llm_chat_fn(client)
         
-        # 数据脱敏
+        # 数据脱敏防作弊
         masked_trajectory = copy.deepcopy(trajectory)
         if len(masked_trajectory.steps) > 2:
             if masked_trajectory.steps[1].get('role') == 'user':
@@ -803,7 +954,6 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             if masked_trajectory.steps[2].get('role') == 'user':
                 masked_trajectory.steps[2]['content'] = '[MASKED]'
         
-        # 生成 Prompt
         system_prompt, user_prompt = get_task_summarize_prompt(
             [masked_trajectory], old_objectives=task.query, profile=self._env_profile
         )
@@ -813,7 +963,6 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             {"role": "user", "content": user_prompt}
         ]
         
-        # 调用 LLM
         try:
             llm_response = llm_fn(messages=messages)
             llm_output = llm_response["content"]
@@ -821,7 +970,6 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             logger.error(f"[Summarize Cross] LLM call failed: {e}")
             return []
             
-        # 解析结果
         task_copy = task.copy()
         task_copy.evaluator = 'synthetic'
         
@@ -838,9 +986,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             if task_obj.task.metadata is None:
                 task_obj.task.metadata = {}
             
-            # 设置原始 Query (Schema 字段已更新为 origin_query)
             task_obj.task.origin_query = task.query
-            
             task_obj.task.metadata["summary_analysis_process"] = llm_output
             task_obj.task.metadata["execution_reward"] = reward_info
             task_obj.task.metadata["source_data_id"] = task.metadata.get("data_id")
@@ -850,11 +996,18 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
 
     def verify_direct_gt(self, task: Task, trajectory: Trajectory) -> Optional[TaskObjective]:
         """
-        针对原始 Query，评估 Trajectory 是否构成了有效的 GT。
-        如果有效，返回包含 refined_code 的 TaskObjective。
+        针对原始指令进行直接验证模式。
+        即判断 Agent 盲跑产生的轨迹是否直接构成了解决该 Query 的标准 Ground Truth (真值参考)。
+        如果大模型认定符合，则提炼轨迹将其净化成 Ground Truth 保存。
+        
+        Args:
+            task (Task): 原始查询任务
+            trajectory (Trajectory): 环境执行反馈的整条操作链
+            
+        Returns:
+            Optional[TaskObjective]: 成功验证则返回包含标准代码 (refined_code) 的目标对象，不符合逻辑则返回 None 遗弃。
         """
-        # 1. 如果环境 Reward 极低，大概率不用浪费 LLM Token，直接过滤
-        # 但为了稳健性（防止环境 Reward 误判），可以选择保留或设定一个较低的硬阈值
+        # 第一层铁门限：如果底层环境已经给该轨迹打了极低的分（说明代码语法错或全乱来），就无需再花钱请 LLM 看了
         if trajectory.reward and trajectory.reward.outcome < 0.3:
             logger.info(f"[Verify] Skipping task {task.task_id} due to very low reward {trajectory.reward.outcome}")
             return None
@@ -862,7 +1015,6 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         client = self._summarize_client
         llm_fn = self._get_llm_chat_fn(client)
 
-        # 2. 构造 Prompt
         system_prompt, user_prompt = get_direct_verify_prompt(
             task, trajectory, self._env_profile
         )
@@ -872,7 +1024,6 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             {"role": "user", "content": user_prompt}
         ]
 
-        # 3. 调用 LLM
         try:
             llm_response = llm_fn(messages=messages)
             llm_output = llm_response["content"]
@@ -880,34 +1031,30 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             logger.error(f"[Verify] LLM call failed: {e}")
             return None
 
-        # 4. 解析结果
+        # 解析大模型是否给该过程盖章“合格”
         result = parse_direct_verification(llm_output)
 
         if result.get("is_valid"):
-            # 构造新的 TaskObjective
             new_task = task.copy()
-            new_task.evaluator = 'synthetic' # 标记为合成/验证过的
+            new_task.evaluator = 'synthetic' 
             
-            # 使用 LLM 提炼过的干净代码作为 GT
+            # 植入净化后的标准代码，直接化身为该任务的 Ground Truth
             new_task.ground_truth = result.get("refined_code", "")
-            
-            # 设置原始 Query (Direct 模式下，original 就是当前的 query)
-            # Schema 字段已更新为 origin_query
             new_task.origin_query = task.query 
             
-            # 补充 Metadata
+            # 打标签保存
             if new_task.metadata is None: new_task.metadata = {}
             new_task.metadata["verification_reason"] = result.get("reason")
             new_task.metadata["verification_confidence"] = result.get("confidence")
             new_task.metadata["data_pair_type"] = "direct_verified"
             
-            # 设置高置信度 (基于 LLM 验证 + 环境执行)
             return TaskObjective(
                 task=new_task,
                 confidence=result.get("confidence", 0.9),
                 reward=trajectory.reward.outcome if trajectory.reward else 0.0
             )
         else:
+            # 验证失败，说明大模型认为这个轨迹属于瞎碰死耗子没逻辑，不要
             logger.info(f"[Verify] Task {task.task_id} rejected: {result.get('reason')}")
             return None
 
@@ -915,13 +1062,14 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
 
     def _chat_with_retry(self, messages: List[Dict], **kwargs) -> Optional[Any]:
         """
-        调用 LLM，处理重试并标准化返回格式
+        带退避指数休眠的重试封装的极简请求函数。
+        用以抵抗临时网络中断或并发限流导致的请求中断。
         """
         for i in range(self._max_llm_retries):
             try:
                 response = self.llm_client.chat(messages=messages, **kwargs)
                 
-                # 兼容性处理：DashScopeClient 可能返回字符串，OpenAIClient 返回对象
+                # 做一层对 DashScope (产出文本) 与 OpenAI (产出对象) 的抽象适配
                 if isinstance(response, str):
                     if response.strip():
                         return SimpleNamespace(content=response)
@@ -932,11 +1080,13 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                 logger.warning(f"LLM call failed: {e}. Retry {i+1}...")
             
             if i < self._max_llm_retries - 1:
+                # 每次重试等待倍增 (2, 4, 8, 16秒)
                 time.sleep(2 ** i)
                 
         return None
 
     def _load_sandbox_task_ids(self, path: str) -> List[str]:
+        """从预处理的文件中导入系统中所有合格的沙盒环境标识 ID"""
         if not os.path.exists(path):
             return ["train_001"]
         try:
@@ -947,14 +1097,15 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             return ["train_001"]
 
     def _check_api_called(self, trajectory: Trajectory, api_name: str) -> bool:
+        """纯工具人函数：暴力遍历轨迹日志，检查特定 API 是否被 Agent 召唤过"""
         if not trajectory or not trajectory.steps: return False
         for step in trajectory.steps:
             if step.get('role') == "tool" and not step.error:
-                # 模糊匹配，因为 tool_name 可能包含路径或类名
                 if api_name and api_name in step.tool_name: return True
         return False
 
     def _check_app_usage(self, trajectory: Trajectory, app_name: str) -> bool:
+        """纯工具人函数：检查整条轨迹日志内是否有涉及到指定的 App"""
         if not trajectory or not trajectory.steps: return False
         app_apis = self.api_knowledge.get(app_name, {}).get("apis", {}).keys()
         for step in trajectory.steps:
@@ -965,6 +1116,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         return False
 
     def _load_json(self, path: str) -> Dict:
+        """极简 JSON 文件安全读取器"""
         if os.path.exists(path):
             try:
                 with open(path, 'r', encoding='utf-8') as f:
@@ -973,7 +1125,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         return {}
 
     def _save_intra_memory(self, app_name: str):
-        # 注意：外部已加锁
+        """将某个已被有效探索过的单体 App 持久化记录，避免重复无意义劳作"""
         os.makedirs(os.path.dirname(self.intra_memory_path), exist_ok=True)
         current_data = self._load_json(self.intra_memory_path)
         current_apps = set(current_data.get("explored_apps", []))
@@ -982,12 +1134,11 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             json.dump({"explored_apps": list(current_apps)}, f, indent=2)
 
     def _save_cross_memory(self, metadata: Dict):
-        # 注意：外部已加锁
+        """记录跨域探索成功的组合日志"""
         os.makedirs(os.path.dirname(self.cross_memory_path), exist_ok=True)
         current_data = self._load_json(self.cross_memory_path)
         if "logs" not in current_data: current_data["logs"] = []
         
-        # 简化保存的信息，避免文件过大
         log_entry = {
             "synthesized_user_query": metadata.get("synthesized_user_query"),
             "info_app": metadata.get("info_app"),
@@ -1001,7 +1152,8 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
 
     def _get_llm_chat_fn(self, llm_client: LlmClient, sampling_params: Optional[dict] = None) -> Callable:
         """
-        辅助函数：封装 LLM 客户端调用，生成符合 AgentFlow 要求的 callable
+        核心适配器：将通用的 LLM Client 调用包装为符合 AgentFlow 期待的高阶函数形式。
+        闭包机制在此锁住了客户端实例和独属配置。
         """
         def llm_chat(
             messages: list[dict[str, str]],
@@ -1017,6 +1169,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             input_messages = copy.deepcopy(messages)
             res = None
             
+            # 再套一层强行护驾：拦截 Agent 循环时可能突发的断网抽风
             for i in range(self._max_llm_retries):
                 try:
                     res = llm_client.chat(
@@ -1028,8 +1181,8 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
                     logger.warning(f"llm_chat retry {i} error: {e}")
                     time.sleep(2**i)
 
+            # 当一切手段耗尽，使用温和的安全词退场以免主进程连环报错
             if res is None or res == "":
-                # Fallback empty response to prevent crash
                 res = "I apologize, but I encountered an error generating a response."
 
             return {
