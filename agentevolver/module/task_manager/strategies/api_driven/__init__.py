@@ -20,8 +20,6 @@ from agentevolver.schema.task import Task, TaskObjective
 from agentevolver.schema.trajectory import Trajectory
 from agentevolver.utils.utils import extract_json_from_str
 from agentevolver.utils.debug_utils import debug_log
-from agentevolver.module.task_manager.strategies.api_driven.prompts.intra_domain import parse_intra_purpose_from_response
-from agentevolver.module.task_manager.strategies.api_driven.prompts.cross_domain import parse_cross_purpose_from_response
 from agentevolver.module.task_manager.rewards.integrated_reward import IntegratedRewardCalculator
 # 环境与执行模块
 from agentevolver.module.env_manager.env_worker import EnvWorker, TrajExpConfig
