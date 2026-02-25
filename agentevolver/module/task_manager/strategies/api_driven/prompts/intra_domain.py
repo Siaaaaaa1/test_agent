@@ -17,7 +17,7 @@ APP_SCHEMA_MAP = {
     "supervisor": "## supervisor (Global/System Settings)\n- `AccountPassword`: The user's login passwords for all the apps mentioned above.\n- `Supervisor`, `Address`, `PaymentCard`: The user's primary identity, global addresses, and default bank cards."
 }
 
-def get_dynamic_schema_overview(app_names: list) -> str:
+def get_intra_schema(app_names: list) -> str:
     """根据传入的 app_names 列表，动态拼装仅包含这些 App 的 Schema 字符串"""
     schemas = []
     for app in app_names:
