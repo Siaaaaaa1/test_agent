@@ -74,6 +74,16 @@ class TaskRunner:
 
         trust_remote_code = config.data.get("trust_remote_code", False)
         tokenizer = hf_tokenizer(local_path, trust_remote_code=trust_remote_code)
+        
+        # =========================================================
+        # [紧急修复] 强制锁定 Tokenizer 为右侧填充 (Right Padding)
+        # 防止 PPO/GRPO 训练时 Advantage 矩阵与真实 Token 发生致命错位
+        # =========================================================
+        tokenizer.padding_side = "right"
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        # =========================================================
+
         # Used for multimodal LLM, could be None
         processor = hf_processor(local_path, trust_remote_code=trust_remote_code, use_fast=True)
 
