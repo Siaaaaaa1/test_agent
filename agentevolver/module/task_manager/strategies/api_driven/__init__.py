@@ -51,7 +51,7 @@ from agentevolver.module.task_manager.strategies.api_driven.prompts.prompt_summa
 )
 
 # AppWorld 依赖注入
-from appworld.environment import AppWorld
+# from appworld.environment import AppWorld
 
 UNIVERSAL_INFO_PROVIDERS = {"notes", "gmail", "simple_messages", "calendar", "contacts"}
 
@@ -556,75 +556,37 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
     # ================= 任务生成 (Generation) =================
     def _fetch_real_table_data(self, sandbox_id: str, app_tables: Dict[str, List[str]]) -> str:
         """
-        核心数据桥梁探针：根据大模型选择的表名，动态探测并提取底层 SQLite 的真实状态快照。
-        
-        Args:
-            sandbox_id (str): 目标沙盒环境对应的 ID (如 'train_001')
-            app_tables (Dict[str, List[str]]): LLM 选拔器输出的要求查询的表结构 (如 {"amazon": ["orders"]})
-            
-        Returns:
-            str: 包含真实数据且经过字段清洗和截断处理后的 JSON 字符串
+        [修改版] 核心数据桥梁探针：通过 API 请求远端 AppWorld 服务，
+        动态探测并提取底层 SQLite 的真实状态快照。
         """
+        import requests
+        
         fetched_data = {}
         try:
-            # 唤起对应的真实环境上下文以挂载底层数据库
-            with AppWorld(task_id=sandbox_id) as world:
-                for app_name, table_names in app_tables.items():
-                    # 检查环境的 ORM models 是否存在该应用
-                    table_names = table_names[:2]
-
-                    if not hasattr(world.models, app_name):
-                        logger.warning(f"[Data Fetch] 环境中不存在 App: {app_name}")
-                        continue
-                    
-                    app_models = getattr(world.models, app_name)
-                    app_data = {}
-                    
-                    for table_name in table_names:
-                        # --- 模糊匹配逻辑：大模型容易造出单复数、大小写不一的表名，在此处做容错映射 ---
-                        table_lower = table_name.lower()
-                        # 粗暴去 's' 匹配单数形式的 ORM Class Name
-                        singular_name = table_lower[:-1] if table_lower.endswith('s') else table_lower
-                        
-                        matched_cls = None
-                        # 遍历该 App 命名空间下的所有类进行碰撞
-                        for attr_name in dir(app_models):
-                            attr_lower = attr_name.lower()
-                            if attr_lower == table_lower or attr_lower == singular_name:
-                                matched_cls = getattr(app_models, attr_name)
-                                break
-                        
-                        # 如果确实是继承自底层 SQLModel 且有 .all() 接口的表模型
-                        if matched_cls and hasattr(matched_cls, "all") and callable(matched_cls.all):
-                            try:
-                                records = matched_cls.all()
-                                if not records:
-                                    continue
-                                
-                                parsed_records = []
-                                # 【限制策略】每张表最多取前 2 条记录，防止塞入 Prompt 时导致 Context Window 爆炸
-                                for r in records[:2]:  
-                                    record_dict = {}
-                                    # 将 ORM 对象解包为字典
-                                    for k, v in r.__dict__.items():
-                                        # 数据脱敏：过滤掉系统内部前缀变量、密码和认证 Token 等大模型不需要的纯噪音
-                                        if k.startswith("_") or "password" in k.lower() or "token" in k.lower():
-                                            continue
-                                        # 文本截断：保留核心语义即可，拒绝几千字的邮件正文喧宾夺主
-                                        if isinstance(v, str) and len(v) > 60:
-                                            v = v[:57] + "..."
-                                        record_dict[k] = v
-                                    parsed_records.append(record_dict)
-                                    
-                                app_data[table_name] = parsed_records
-                            except Exception as e:
-                                logger.warning(f"[Data Fetch] 提取表数据失败 {app_name}.{table_name}: {e}")
-                                
-                    if app_data:
-                        fetched_data[app_name] = app_data
-                        
+            # 获取远端环境服务的 URL (默认 8080 端口)
+            env_url = self.config.get("env_service", {}).get("env_url", "http://localhost:8080")
+            # 构造请求目标，假设我们在远端服务新增了一个专用的端点
+            target_endpoint = f"{env_url}/fetch_db_data"
+            
+            # 向远端发送打捞请求
+            payload = {
+                "sandbox_id": sandbox_id,
+                "app_tables": app_tables
+            }
+            
+            response = requests.post(target_endpoint, json=payload, timeout=15.0)
+            
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("success"):
+                    fetched_data = result.get("data", {})
+                else:
+                    logger.warning(f"[Data Fetch] 远端服务返回错误: {result.get('error')}")
+            else:
+                logger.warning(f"[Data Fetch] API 请求失败，状态码: {response.status_code}")
+                
         except Exception as e:
-            logger.error(f"[Data Fetch] 无法加载 AppWorld 沙盒 {sandbox_id}: {e}")
+            logger.error(f"[Data Fetch] 无法连接到 AppWorld 远端服务打捞数据: {e}")
             
         # 返回 JSON 供 Prompt 直接内嵌使用
         return json.dumps(fetched_data, indent=2, ensure_ascii=False) if fetched_data else "{}"

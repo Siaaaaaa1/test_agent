@@ -119,6 +119,10 @@ class ServiceRequest(BaseModel):
     messages: Dict[str, Any] = {}
     params: Dict[str, Any] = {}
 
+# ======== 新增：为数据库探针专门设计的请求体 ========
+class FetchDBRequest(BaseModel):
+    sandbox_id: str
+    app_tables: Dict[str, List[str]]
 
 class EnvService:
     """
@@ -786,6 +790,77 @@ async def handle_release(request: ServiceRequest):
         tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
         raise HTTPException(status_code=500, detail=tb) from e
 
+@app.post("/fetch_db_data")
+async def handle_fetch_db_data(request: FetchDBRequest):
+    """
+    供主训练进程远程调用的接口：动态打捞沙盒底层的真实 SQLite 数据。
+    """
+    try:
+        # 此时服务运行在 appworld conda 环境中，可以直接安全导入
+        from appworld.environment import AppWorld
+        
+        fetched_data = {}
+        
+        # 挂载指定的沙盒数据库快照
+        with AppWorld(task_id=request.sandbox_id) as world:
+            for app_name, table_names in request.app_tables.items():
+                table_names = table_names[:2]
+
+                if not hasattr(world.models, app_name):
+                    print(f"⚠️ [Data Fetch] 环境中不存在 App: {app_name}")
+                    continue
+                
+                app_models = getattr(world.models, app_name)
+                app_data = {}
+                
+                for table_name in table_names:
+                    # 模糊匹配表名（处理单复数、大小写差异）
+                    table_lower = table_name.lower()
+                    singular_name = table_lower[:-1] if table_lower.endswith('s') else table_lower
+                    
+                    matched_cls = None
+                    for attr_name in dir(app_models):
+                        attr_lower = attr_name.lower()
+                        if attr_lower == table_lower or attr_lower == singular_name:
+                            matched_cls = getattr(app_models, attr_name)
+                            break
+                    
+                    if matched_cls and hasattr(matched_cls, "all") and callable(matched_cls.all):
+                        try:
+                            records = matched_cls.all()
+                            if not records:
+                                continue
+                            
+                            parsed_records = []
+                            # 限制最多取2条，防止大模型 Context 爆炸
+                            for r in records[:2]:  
+                                record_dict = {}
+                                for k, v in r.__dict__.items():
+                                    # 脱敏：过滤掉私密凭证或系统字段
+                                    if k.startswith("_") or "password" in k.lower() or "token" in k.lower():
+                                        continue
+                                    # 截断过长的文本
+                                    if isinstance(v, str) and len(v) > 60:
+                                        v = v[:57] + "..."
+                                    record_dict[k] = v
+                                parsed_records.append(record_dict)
+                                
+                            app_data[table_name] = parsed_records
+                        except Exception as e:
+                            print(f"⚠️ [Data Fetch] 提取表数据失败 {app_name}.{table_name}: {e}")
+                            
+                if app_data:
+                    fetched_data[app_name] = app_data
+                    
+        return {"success": True, "data": fetched_data}
+        
+    except ImportError:
+        raise HTTPException(status_code=500, detail="The 'appworld' module is missing in the EnvService conda environment.")
+    except Exception as e:
+        import traceback
+        tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+        print(f"❌ [Data Fetch] 无法加载 AppWorld 沙盒 {request.sandbox_id}: {e}")
+        raise HTTPException(status_code=500, detail=tb) from e
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the environment service")
