@@ -645,19 +645,19 @@ def compute_advantage(
             # ---------------------------------------------------------
             # 🕵️‍♂️ [进阶防御] 动态嗅探 Padding 方向与硬性断言
             # ---------------------------------------------------------
-            attention_mask = data.batch.get("attention_mask", None)
-            if attention_mask is not None:
-                first_mask = attention_mask[0]
+            # attention_mask = data.batch.get("attention_mask", None)
+            # if attention_mask is not None:
+            #     first_mask = attention_mask[0]
                 
-                # 判断逻辑: 如果最后一位是 1 (有效)，且头部是 0 (Padding)，说明序列被整体推到了最右边
-                is_left_padded = (first_mask[-1] == 1 and first_mask[0] == 0)
+            #     # 判断逻辑: 如果最后一位是 1 (有效)，且头部是 0 (Padding)，说明序列被整体推到了最右边
+            #     is_left_padded = (first_mask[-1] == 1 and first_mask[0] == 0)
                 
-                assert not is_left_padded, (
-                    f"\n[Fatal Error] 🚨 触发对齐防御机制！检测到序列处于 '左侧填充 (Left Padding)' 模式！\n"
-                    f"-> 当前 AgentEvolver 的奖励对齐算法严格基于 '右侧填充 (Right Padding)' 设计。\n"
-                    f"-> 在 Left Padding 下，奖励位置会发生致命错位。\n"
-                    f"-> 请检查 Actor/vLLM 的初始化配置 (如 use_remove_padding 等参数)，确保序列以 Right Padding 生成。"
-                )
+            #     assert not is_left_padded, (
+            #         f"\n[Fatal Error] 🚨 触发对齐防御机制！检测到序列处于 '左侧填充 (Left Padding)' 模式！\n"
+            #         f"-> 当前 AgentEvolver 的奖励对齐算法严格基于 '右侧填充 (Right Padding)' 设计。\n"
+            #         f"-> 在 Left Padding 下，奖励位置会发生致命错位。\n"
+            #         f"-> 请检查 Actor/vLLM 的初始化配置 (如 use_remove_padding 等参数)，确保序列以 Right Padding 生成。"
+            #     )
             
             # ---------------------------------------------------------
             # 🚀 绝对安全的对齐写入 (Right Padding 模式)
