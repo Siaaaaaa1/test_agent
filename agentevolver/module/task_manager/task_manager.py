@@ -380,178 +380,253 @@ class ApiDrivenPipeline:
 
     def run(self) -> List[TaskObjective]:
         """
-        执行完整的 API-Driven 流水线主调度函数。
-
-        执行顺序：
-        1. 同领域 (Intra-Domain) 任务生成与质量过滤。
-        2. 跨领域 (Cross-Domain) 任务配对生成与质量过滤。
-        3. 对同领域可用任务执行环境探索与反馈提取。
-        4. 对跨领域可用任务执行环境探索与反馈提取。
-        5. 合并并进行全局后置过滤，返回最终数据集。
-
-        Returns:
-            List[TaskObjective]: 最终经过所有流程和过滤策略筛选出的合格任务目标集。
+        执行 API-Driven 流水线。包含中间级拦截和最终产物聚合。
         """
+        target_files = [
+            self.intra_direct_path, 
+            self.cross_direct_path,
+            self.intra_evolved_path, 
+            self.cross_evolved_path
+        ]
         
-        # === PART 1: INTRA-DOMAIN ===
-        logger.info("=== Starting PART 1: Intra-Domain Generation & Filtering ===")
-        
-        valid_apps_intra = [app for app in sorted(self.active_apps_set) if self.api_knowledge.get(app, {}).get("apis")]
-        random.shuffle(valid_apps_intra)
-        
-        intra_task_pool = (list(copy.copy(self.tasks)) * int(self.a + 1))[:int(len(self.tasks) * self.a)]
-        if self.debug_mode: intra_task_pool = intra_task_pool[:1]
-        target_len_intra = len(intra_task_pool)
+        # 检查四个底层产物文件是否全部齐全
+        all_files_exist = all(os.path.exists(p) for p in target_files)
 
-        generated_intra_tasks = self._load_intermediate_tasks(self.intra_gen_path) or []
-        current_count = len(generated_intra_tasks)
-        
-        if current_count < target_len_intra and valid_apps_intra:
-            with ThreadPoolExecutor(max_workers=1 if self.debug_mode else self.manager._num_exploration_threads) as pool:
-                futures = []
-                for idx in range(current_count, target_len_intra):
-                    # 需求一：随机抽取 1个 目标 App
-                    target_app = valid_apps_intra[idx % len(valid_apps_intra)]
-                    futures.append(pool.submit(self._worker_generate_intra, idx, target_app, intra_task_pool[idx]))
-                
-                for f in tqdm(as_completed(futures), total=len(futures), desc="Intra Gen", disable=not self.show_progress):
-                    res = f.result()
-                    if res: 
-                        res_list = res if isinstance(res, list) else [res]
-                        self._thread_safe_append(self.intra_gen_path, res_list)
-                        with self.mem_lock: generated_intra_tasks.extend(res_list)
-        
-        # 加载已过滤缓存
-        filtered_intra_tasks = self._load_intermediate_tasks(self.intra_filtered_path) or []
-        # 简单的缓存复用逻辑：如果现有过滤结果占比超过生成的 50%，认为无需再次过滤（复用缓存即可）
-        if len(generated_intra_tasks) > 0 and (len(filtered_intra_tasks) / len(generated_intra_tasks) > 0.5):
-            logger.info(f"Reusing cached filtered intra tasks: {len(filtered_intra_tasks)}/{len(generated_intra_tasks)}")
+        if all_files_exist:
+            logger.info("⚡ [中间级拦截] 检测到四个底层探索产物文件已全部齐备，跳过耗时的生成与环境探索阶段！")
         else:
-            # 增量过滤：找出生成结果中未进行过滤验证的差集
-            filtered_ids = {t.metadata["data_id"] for t in filtered_intra_tasks if t.metadata and "data_id" in t.metadata}
-            pending = [t for t in generated_intra_tasks if t.metadata.get("data_id") not in filtered_ids]
-            if pending:
-                # 调用 LLM 前置预过滤清洗劣质问题
-                newly_filtered = self.manager._apply_filters_with_report(pending, self.manager.api_llm_pre_filter, "Intra-Pre-Filter")
-                self._thread_safe_append(self.intra_filtered_path, newly_filtered)
-                with self.mem_lock: filtered_intra_tasks.extend(newly_filtered)
+            logger.info("⚠️ [正常流程] 底层探索产物不全或不存在，开始执行完整的生成与探索...")
+            
+            # === PART 1: INTRA-DOMAIN ===
+            logger.info("=== Starting PART 1: Intra-Domain Generation & Filtering ===")
+            valid_apps_intra = [app for app in sorted(self.active_apps_set) if self.api_knowledge.get(app, {}).get("apis")]
+            random.shuffle(valid_apps_intra)
+            
+            intra_task_pool = (list(copy.copy(self.tasks)) * int(self.a + 1))[:int(len(self.tasks) * self.a)]
+            if self.debug_mode: intra_task_pool = intra_task_pool[:1]
+            target_len_intra = len(intra_task_pool)
 
-        # === PART 2: CROSS-DOMAIN ===
-        logger.info("=== Starting PART 2: Cross-Domain Generation & Filtering ===")
-        valid_apps_cross = [app for app in sorted(self.active_apps_set) if self.api_knowledge.get(app, {}).get("apis")]
-        valid_apps_set = set(valid_apps_cross)
-        valid_candidate_tasks = [t for t in self.tasks if getattr(t, 'app', None) in valid_apps_set or getattr(t, 'app_name', None) in valid_apps_set] or self.tasks
-        
-        target_valid_count = 1 if self.debug_mode else int(len(self.tasks) * self.b)
-        generated_cross_tasks = self._load_intermediate_tasks(self.cross_gen_path) or []
-        filtered_cross_tasks = self._load_intermediate_tasks(self.cross_filtered_path) or []
-        current_valid_count = len(filtered_cross_tasks)
-        global_gen_idx = len(generated_cross_tasks)
-        loop_idx = 0
-
-        while current_valid_count < target_valid_count and loop_idx < 10:
-            loop_idx += 1
-            needed = target_valid_count - current_valid_count
-            batch_size = max(int(needed * 2.0), self.manager._num_exploration_threads * 2) if not self.debug_mode else 1
+            generated_intra_tasks = self._load_intermediate_tasks(self.intra_gen_path) or []
+            current_count = len(generated_intra_tasks)
             
-            newly_generated = []
-            with ThreadPoolExecutor(max_workers=1 if self.debug_mode else self.manager._num_exploration_threads) as pool:
-                futures = []
-                for i in range(batch_size):
-                    # 需求二：概率分布：2个 App (80% 概率)；3个 App (20% 概率)
-                    app_count = random.choices([2, 3], weights=[0.8, 0.2])[0]
-                    app_count = min(app_count, len(valid_apps_cross)) # 防御性降级
-                    
-                    target_apps = random.sample(valid_apps_cross, app_count)
-                    seed_task = valid_candidate_tasks[i % len(valid_candidate_tasks)]
-                    
-                    futures.append(pool.submit(self._worker_generate_cross, global_gen_idx + i, target_apps, seed_task))
-                
-                for f in tqdm(as_completed(futures), total=len(futures), desc=f"Cross Gen R{loop_idx}", disable=not self.show_progress):
-                    res = f.result()
-                    if res: 
-                        res_list = res if isinstance(res, list) else [res]
-                        self._thread_safe_append(self.cross_gen_path, res_list)
-                        with self.mem_lock: newly_generated.extend(res_list)
-            
-            global_gen_idx += batch_size
-            with self.mem_lock: generated_cross_tasks.extend(newly_generated)
-            
-            if not newly_generated: continue
-            
-            # 对本轮新生成的数据立刻应用过滤并归档计算有效存活量
-            newly_filtered = self.manager._apply_filters_with_report(newly_generated, self.manager.api_llm_pre_filter, f"Cross-Filter-R{loop_idx}")
-            if newly_filtered:
-                self._thread_safe_append(self.cross_filtered_path, newly_filtered)
-                with self.mem_lock: filtered_cross_tasks.extend(newly_filtered)
-            current_valid_count = len(filtered_cross_tasks)
-
-        # === PART 3: INTRA-DOMAIN EXPLORE ===
-        logger.info("=== Starting PART 3: Intra-Domain Exploration ===")
-        intra_res = []
-        explored_ids_intra = set()
-        # 加载断点中已完成环境交互探索的记录
-        if os.path.exists(self.intra_final_path):
-            with open(self.intra_final_path, 'r', encoding='utf-8') as f:
-                for line in f:
-                    if not line.strip(): continue
-                    data = json.loads(line)
-                    intra_res.append(data)
-                    try: explored_ids_intra.add(data.get("task", {}).get("metadata", {}).get("data_id"))
-                    except: pass
-        
-        # 同样采取简化的缓存跳过判断（大于50%已探索则不继续消耗算力）
-        if len(filtered_intra_tasks) > 0 and (len(intra_res) / len(filtered_intra_tasks) > 0.5):
-            pass
-        else:
-            # 挑出未探索的差集并抛入线程池探索
-            pending_explore_intra = [t for t in filtered_intra_tasks if t.metadata.get("data_id") not in explored_ids_intra]
-            if pending_explore_intra:
+            if current_count < target_len_intra and valid_apps_intra:
                 with ThreadPoolExecutor(max_workers=1 if self.debug_mode else self.manager._num_exploration_threads) as pool:
-                    futures = {pool.submit(self._worker_explore_intra, t): i for i, t in enumerate(pending_explore_intra)}
-                    for future in tqdm(as_completed(futures), total=len(futures), desc="Intra Explore", disable=not self.show_progress):
-                        # 应用环境反馈层面的一些基础规则过滤器（实时 Filter）
-                        filtered_objs = self.manager._apply_filters_with_report(future.result(), self.manager._realtime_filters, "Intra-Worker")
-                        if filtered_objs:
-                            self._thread_safe_append(self.intra_final_path, filtered_objs)
-                            with self.mem_lock: intra_res.extend(filtered_objs)
-
-        # === PART 4: CROSS-DOMAIN EXPLORE ===
-        logger.info("=== Starting PART 4: Cross-Domain Exploration ===")
-        cross_res = []
-        explored_ids_cross = set()
-        if os.path.exists(self.cross_final_path):
-            with open(self.cross_final_path, 'r', encoding='utf-8') as f:
-                for line in f:
-                    if not line.strip(): continue
-                    data = json.loads(line)
-                    cross_res.append(data)
-                    try: explored_ids_cross.add(data.get("task", {}).get("metadata", {}).get("data_id"))
-                    except: pass
-
-        if len(filtered_cross_tasks) > 0 and (len(cross_res) / len(filtered_cross_tasks) > 0.5):
-            pass
-        else:
-            pending_explore_cross = [t for t in filtered_cross_tasks if t.metadata.get("data_id") not in explored_ids_cross]
-            if pending_explore_cross:
-                with ThreadPoolExecutor(max_workers=1 if self.debug_mode else self.manager._num_exploration_threads) as pool:
-                    futures = {pool.submit(self._worker_explore_cross, t): i for i, t in enumerate(pending_explore_cross)}
-                    for future in tqdm(as_completed(futures), total=len(futures), desc="Cross Explore", disable=not self.show_progress):
-                        filtered_objs = self.manager._apply_filters_with_report(future.result(), self.manager._realtime_filters, "Cross-Worker")
-                        if filtered_objs:
-                            self._thread_safe_append(self.cross_final_path, filtered_objs)
-                            with self.mem_lock: cross_res.extend(filtered_objs)
-
-        # === Final Merge ===
-        # 将各域合法探索产物统一打包并最终清洗
-        total_results = []
-        for item in intra_res + cross_res:
-            if isinstance(item, TaskObjective): total_results.append(item)
+                    futures = []
+                    for idx in range(current_count, target_len_intra):
+                        target_app = valid_apps_intra[idx % len(valid_apps_intra)]
+                        futures.append(pool.submit(self._worker_generate_intra, idx, target_app, intra_task_pool[idx]))
+                    
+                    for f in tqdm(as_completed(futures), total=len(futures), desc="Intra Gen", disable=not self.show_progress):
+                        res = f.result()
+                        if res: 
+                            res_list = res if isinstance(res, list) else [res]
+                            self._thread_safe_append(self.intra_gen_path, res_list)
+                            with self.mem_lock: generated_intra_tasks.extend(res_list)
+            
+            filtered_intra_tasks = self._load_intermediate_tasks(self.intra_filtered_path) or []
+            if len(generated_intra_tasks) > 0 and (len(filtered_intra_tasks) / len(generated_intra_tasks) > 0.5):
+                logger.info(f"Reusing cached filtered intra tasks: {len(filtered_intra_tasks)}/{len(generated_intra_tasks)}")
             else:
-                try: total_results.append(TaskObjective.parse_obj(item))
-                except: pass
-        # 应用全局后置处理器（通常涉及高昂的 LLM 打分等强规则过滤）
-        return self.manager._apply_post_filter(total_results)
+                filtered_ids = {t.metadata["data_id"] for t in filtered_intra_tasks if t.metadata and "data_id" in t.metadata}
+                pending = [t for t in generated_intra_tasks if t.metadata.get("data_id") not in filtered_ids]
+                if pending:
+                    newly_filtered = self.manager._apply_filters_with_report(pending, self.manager.api_llm_pre_filter, "Intra-Pre-Filter")
+                    self._thread_safe_append(self.intra_filtered_path, newly_filtered)
+                    with self.mem_lock: filtered_intra_tasks.extend(newly_filtered)
+
+            # === PART 2: CROSS-DOMAIN ===
+            logger.info("=== Starting PART 2: Cross-Domain Generation & Filtering ===")
+            valid_apps_cross = [app for app in sorted(self.active_apps_set) if self.api_knowledge.get(app, {}).get("apis")]
+            valid_apps_set = set(valid_apps_cross)
+            valid_candidate_tasks = [t for t in self.tasks if getattr(t, 'app', None) in valid_apps_set or getattr(t, 'app_name', None) in valid_apps_set] or self.tasks
+            
+            target_valid_count = 1 if self.debug_mode else int(len(self.tasks) * self.b)
+            generated_cross_tasks = self._load_intermediate_tasks(self.cross_gen_path) or []
+            filtered_cross_tasks = self._load_intermediate_tasks(self.cross_filtered_path) or []
+            current_valid_count = len(filtered_cross_tasks)
+            global_gen_idx = len(generated_cross_tasks)
+            loop_idx = 0
+
+            while current_valid_count < target_valid_count and loop_idx < 10:
+                loop_idx += 1
+                needed = target_valid_count - current_valid_count
+                batch_size = max(int(needed * 2.0), self.manager._num_exploration_threads * 2) if not self.debug_mode else 1
+                
+                newly_generated = []
+                with ThreadPoolExecutor(max_workers=1 if self.debug_mode else self.manager._num_exploration_threads) as pool:
+                    futures = []
+                    for i in range(batch_size):
+                        app_count = random.choices([2, 3], weights=[0.8, 0.2])[0]
+                        app_count = min(app_count, len(valid_apps_cross))
+                        target_apps = random.sample(valid_apps_cross, app_count)
+                        seed_task = valid_candidate_tasks[i % len(valid_candidate_tasks)]
+                        futures.append(pool.submit(self._worker_generate_cross, global_gen_idx + i, target_apps, seed_task))
+                    
+                    for f in tqdm(as_completed(futures), total=len(futures), desc=f"Cross Gen R{loop_idx}", disable=not self.show_progress):
+                        res = f.result()
+                        if res: 
+                            res_list = res if isinstance(res, list) else [res]
+                            self._thread_safe_append(self.cross_gen_path, res_list)
+                            with self.mem_lock: newly_generated.extend(res_list)
+                
+                global_gen_idx += batch_size
+                with self.mem_lock: generated_cross_tasks.extend(newly_generated)
+                
+                if not newly_generated: continue
+                
+                newly_filtered = self.manager._apply_filters_with_report(newly_generated, self.manager.api_llm_pre_filter, f"Cross-Filter-R{loop_idx}")
+                if newly_filtered:
+                    self._thread_safe_append(self.cross_filtered_path, newly_filtered)
+                    with self.mem_lock: filtered_cross_tasks.extend(newly_filtered)
+                current_valid_count = len(filtered_cross_tasks)
+
+            # === PART 3: INTRA-DOMAIN EXPLORE ===
+            logger.info("=== Starting PART 3: Intra-Domain Exploration ===")
+            intra_res = []
+            explored_ids_intra = set()
+            if os.path.exists(self.intra_final_path):
+                with open(self.intra_final_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        if not line.strip(): continue
+                        data = json.loads(line)
+                        intra_res.append(data)
+                        try: explored_ids_intra.add(data.get("task", {}).get("metadata", {}).get("data_id"))
+                        except: pass
+            
+            if len(filtered_intra_tasks) > 0 and (len(intra_res) / len(filtered_intra_tasks) > 0.5):
+                pass
+            else:
+                pending_explore_intra = [t for t in filtered_intra_tasks if t.metadata.get("data_id") not in explored_ids_intra]
+                if pending_explore_intra:
+                    with ThreadPoolExecutor(max_workers=1 if self.debug_mode else self.manager._num_exploration_threads) as pool:
+                        futures = {pool.submit(self._worker_explore_intra, t): i for i, t in enumerate(pending_explore_intra)}
+                        for future in tqdm(as_completed(futures), total=len(futures), desc="Intra Explore", disable=not self.show_progress):
+                            filtered_objs = self.manager._apply_filters_with_report(future.result(), self.manager._realtime_filters, "Intra-Worker")
+                            if filtered_objs:
+                                self._thread_safe_append(self.intra_final_path, filtered_objs)
+                                with self.mem_lock: intra_res.extend(filtered_objs)
+
+            # === PART 4: CROSS-DOMAIN EXPLORE ===
+            logger.info("=== Starting PART 4: Cross-Domain Exploration ===")
+            cross_res = []
+            explored_ids_cross = set()
+            if os.path.exists(self.cross_final_path):
+                with open(self.cross_final_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        if not line.strip(): continue
+                        data = json.loads(line)
+                        cross_res.append(data)
+                        try: explored_ids_cross.add(data.get("task", {}).get("metadata", {}).get("data_id"))
+                        except: pass
+
+            if len(filtered_cross_tasks) > 0 and (len(cross_res) / len(filtered_cross_tasks) > 0.5):
+                pass
+            else:
+                pending_explore_cross = [t for t in filtered_cross_tasks if t.metadata.get("data_id") not in explored_ids_cross]
+                if pending_explore_cross:
+                    with ThreadPoolExecutor(max_workers=1 if self.debug_mode else self.manager._num_exploration_threads) as pool:
+                        futures = {pool.submit(self._worker_explore_cross, t): i for i, t in enumerate(pending_explore_cross)}
+                        for future in tqdm(as_completed(futures), total=len(futures), desc="Cross Explore", disable=not self.show_progress):
+                            filtered_objs = self.manager._apply_filters_with_report(future.result(), self.manager._realtime_filters, "Cross-Worker")
+                            if filtered_objs:
+                                self._thread_safe_append(self.cross_final_path, filtered_objs)
+                                with self.mem_lock: cross_res.extend(filtered_objs)
+
+        # === Final Merge & Post Filter (支持断点续传) ===
+        # 无论是跳过生成进来的，还是刚刚生成完的，最终都会在这里把四个文件合起来过 Post Filter
+        logger.info("=== Starting Final Merge & Filtering (Direct & Evolved, 支持断点续传) ===")
+        total_results = []
+        
+        for path in target_files:
+            if os.path.exists(path):
+                count = 0
+                logger.info(f"📦 正在提取底层产物: {path}")
+                with open(path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        if not line.strip(): continue
+                        try:
+                            data = json.loads(line)
+                            total_results.append(TaskObjective.parse_obj(data))
+                            count += 1
+                        except Exception as e:
+                            pass
+                logger.info(f" -> 提取了 {count} 条数据。")
+
+        logger.info(f"🔍 数据聚合完成，共 {len(total_results)} 条。送入 Post Filter (LLM 裁判)...")
+        
+        # ---------------------------------------------------------
+        # [新增] 断点续传核心机制 (缓存文件自动挂载在 GEN_OUTPUT_DIR 下)
+        # ---------------------------------------------------------
+        passed_cache_path = self.resume_file + ".post_filter_passed.jsonl"
+        processed_ids_path = self.resume_file + ".post_filter_processed.json"
+        
+        # 1. 加载已经处理过的 ID（包括被拒绝和通过的），防止重复请求大模型
+        processed_ids = set()
+        if os.path.exists(processed_ids_path):
+            try:
+                with open(processed_ids_path, 'r', encoding='utf-8') as f:
+                    processed_ids = set(json.load(f))
+            except Exception: pass
+            
+        # 2. 加载之前已经跑通过滤器的幸存者数据
+        final_survivors = []
+        if os.path.exists(passed_cache_path):
+            with open(passed_cache_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    if line.strip():
+                        final_survivors.append(TaskObjective.parse_obj(json.loads(line)))
+                        
+        # 3. 筛选出还没有被处理过的数据
+        pending_results = []
+        for obj in total_results:
+            # 优先使用 data_id 保证唯一性，兜底使用 task_id
+            uid = obj.task.metadata.get("data_id") if (obj.task.metadata and "data_id" in obj.task.metadata) else obj.task.task_id
+            if uid not in processed_ids:
+                pending_results.append((uid, obj))
+
+        if pending_results:
+            logger.info(f"🚀 发现 {len(pending_results)} 条待过滤数据 (已跳过 {len(processed_ids)} 条历史记录)，开始分批送入 LLM 裁判...")
+            
+            # 分批处理以随时保存状态 (每 10 条保存一次)
+            batch_size = 10 
+            for i in tqdm(range(0, len(pending_results), batch_size), desc="Post Filtering Batches"):
+                batch_tuples = pending_results[i : i + batch_size]
+                batch_objs = [item[1] for item in batch_tuples]
+                batch_uids = [item[0] for item in batch_tuples]
+                
+                # 调用 LLM 过滤当前批次
+                batch_survivors = self.manager._apply_post_filter(batch_objs)
+                
+                if batch_survivors:
+                    final_survivors.extend(batch_survivors)
+                    # 线程安全地追加写入通过的数据
+                    self._thread_safe_append(passed_cache_path, batch_survivors)
+                
+                # 记录所有已被处理的 UID（无论死活，防止重试）
+                processed_ids.update(batch_uids)
+                with open(processed_ids_path, 'w', encoding='utf-8') as f:
+                    json.dump(list(processed_ids), f)
+        else:
+            logger.info("✅ 所有聚合数据均已在历史中过滤完毕，直接使用缓存的过滤结果。")
+
+        # ---------------------------------------------------------
+        # 最终写入 tasks_explored.train.json
+        # ---------------------------------------------------------
+        gen_output_dir = os.environ.get("GEN_OUTPUT_DIR", "")
+        if gen_output_dir:
+            output_file = os.path.join(gen_output_dir, "tasks_explored.train.json")
+        else:
+            output_file = "tasks_explored.train.json"
+            
+        logger.info(f"💾 Post Filter 全部完成！最终剩余 {len(final_survivors)} 条优质数据。正在写入 {output_file} ...")
+        try:
+            with open(output_file, 'w', encoding='utf-8') as f:
+                json.dump([obj.dict() for obj in final_survivors], f, ensure_ascii=False, indent=2)
+            logger.info(f"🎉 黄金训练集已成功保存至：{output_file}！下次启动将直接短路读取。")
+        except Exception as e:
+            logger.error(f"❌ 写入 {output_file} 失败: {e}")
+
+        return final_survivors
 
 
 # ================= TaskManager 类 =================
@@ -739,17 +814,54 @@ class TaskManager(object):
 
     def generate_task(self, tasks: Sequence[Task], *, show_progress=False, resume_file: Optional[str] = None) -> list[TaskObjective]:
         """
-        总入口：基于已配置的策略对输入种子任务进行衍生。
-        （利用 Facade 模式对外提供一致接口，内部依据具体策略路由）。
+        总入口：最高级拦截。如果有 tasks_explored.train.json，直接全量读取并跳过所有生成。
         """
+        # ==================== [最高级拦截] ====================
+        # 1. 获取环境变量 GEN_OUTPUT_DIR
+        gen_output_dir = os.environ.get("GEN_OUTPUT_DIR", "")
+        
+        # 2. 智能拼接路径（如果环境变量有值就拼接，没有就直接用当前目录下的文件名）
+        if gen_output_dir:
+            target_file = os.path.join(gen_output_dir, "tasks_explored.train.json")
+        else:
+            target_file = "tasks_explored.train.json"
+        
+        if os.path.exists(target_file):
+            # 防重入：如果 Dataset 是流式的，第二次以后调用直接返回空，结束这一个 epoch
+            if getattr(self, "_already_loaded_target_file", False):
+                return []
+                
+            logger.info(f"⚡ [最高级拦截] 检测到最终数据集 {target_file}，无视策略，直接全量加载！")
+            self._already_loaded_target_file = True
+            
+            total_results = []
+            try:
+                with open(target_file, 'r', encoding='utf-8') as f:
+                    content = f.read().strip()
+                    if content.startswith('['): 
+                        data_list = json.loads(content)
+                        for item in data_list:
+                            total_results.append(TaskObjective.parse_obj(item))
+                    else:
+                        for line in content.split('\n'):
+                            if line.strip():
+                                total_results.append(TaskObjective.parse_obj(json.loads(line)))
+                
+                logger.info(f"✅ 成功从 {target_file} 一次性加载了 {len(total_results)} 条数据！")
+                return total_results 
+            except Exception as e:
+                logger.error(f"❌ 读取或解析 {target_file} 失败: {e}")
+                raise
+
+        # ========================================================
+        # 如果没有最终文件，才进入具体的策略生成管线
         strategy_type = "api_driven" if isinstance(self._exploration_strategy, ApiDrivenExploreStrategy) else "random"
         if strategy_type == "api_driven":
-            # [优化] 使用重构后的专门管线处理
             pipeline = ApiDrivenPipeline(self, tasks, show_progress, resume_file)
             return pipeline.run()
         else:
             return self._generate_task_random(tasks, show_progress=show_progress, resume_file=resume_file)
-
+        
     def _generate_task_random(self, tasks: Sequence[Task], *, show_progress=False, resume_file: Optional[str] = None) -> list[TaskObjective]:
         """
         早期版本的纯随机策略生成管线，保留用于降级与兼容测试。
@@ -979,26 +1091,35 @@ class AutoReloadDataset(IterableDataset):
     def reload(self):
         """
         触发拉取/生成下一批次所需训练数据的逻辑挂载点。
-        
-        注意这里的增量策略：通过 manager.generate_task 试图填满容量槽（BS * N），
-        如果中途数据因过滤耗尽，会执行 While 回旋重试直至配额达标。
         """
         delta = []
-        # 按需从上游生成器中提取 bs 个任务单元作为扩充源
         for task in self._tasks:
             delta.append(task)
             if len(delta) == self._bs:
                 break
 
-        # [修复] 解开注释：先执行一次初始化生成赋值给 ls，避免下方 while 中抛出 UnboundLocalError
         ls = self._manager.generate_task(delta)
-        # 如果过滤率过高导致生成量未达目标，则强行自旋重试
-        while len(ls) < self._bs * self._manager._n:
-            logger.debug("failed to generate enough tasks, retrying")
-            ls = self._manager.generate_task(delta)
+        
+        # [防卡死逻辑] 限制重试次数，避免本地文件读完后陷入死循环
+        retry_count = 0
+        max_retries = 3 
+        
+        while len(ls) < self._bs * self._manager._n and retry_count < max_retries:
+            logger.debug(f"数据不足期望量，正在尝试重新获取... ({retry_count}/{max_retries})")
+            new_ls = self._manager.generate_task(delta)
+            
+            # 如果管线返回为空（说明读文件完毕），立即跳出
+            if not new_ls:
+                break
+                
+            ls.extend(new_ls)
+            retry_count += 1
+
+        if not ls:
+            return 0 # 彻底没有数据可拿了，通知迭代器结束
 
         # 追加装填到底层消耗队列表中
-        self._dataset.append_dataset(to_rl_dataset(ls, self._tokenizer, self._config,self._processor))
+        self._dataset.append_dataset(to_rl_dataset(ls, self._tokenizer, self._config, self._processor))
         return self._dataset.num_rest_data
 
     def __iter__(self):
