@@ -208,13 +208,19 @@ class LlmFilter(TaskPostFilter):
             llm_output = self._get_llm_chat_fn()(messages)["content"]
             gt = parse_tasks_from_response(llm_output)
             if gt is not None:
-                task.task.old_ground_truth = getattr(task.task, 'ground_truth', None)
-                task.ground_truth = gt
-                task.task.ground_truth = gt
+                # ✅ 直接使用 Schema 中预留的 origin_ground_truth 字段来备份
+                # 如果当前任务尚未设置过 origin_ground_truth，就把被覆盖前的 ground_truth 存进去
+                if task.task.origin_ground_truth is None:
+                    task.task.origin_ground_truth = task.task.ground_truth
+                
+                # ✅ 更新为新的 GT
+                task.ground_truth = gt 
+                # (注意: task.ground_truth 会触发 setter，自动修改 task.task.ground_truth，不需要写两遍)
+                
         except Exception as e:
             logger.error(f"Failed to rewrite GT: {e}")
         
-        return task        
+        return task
         
     def _get_llm_chat_fn(self, sampling_params: Optional[dict] = None) -> Callable:
         def llm_chat(
