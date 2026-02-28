@@ -20,7 +20,7 @@ else
     GRAD_VAL=1.0 
 fi
 
-# 4. 解析 KL 开关
+# 4. 解析 KL 开关 (这里根据文件名动态决定 $KL_BOOL)
 if [[ $SCRIPT_NAME == *"KLFALSE"* ]]; then KL_BOOL="False"; else KL_BOOL="True"; fi
 
 # 5. 解析 Entropy Coefficient (支持科学计数法，例如 ENTRO1e-3)
@@ -32,7 +32,7 @@ else
 fi
 
 echo "🧪 Auto-Config from Filename: $SCRIPT_NAME"
-echo ">> REWARD_MODE: $REWARD_MODE | LOSS_AGG: $LOSS_AGG | GRAD_NORM: $GRAD_VAL | KL_IN_REWARD: $KL_BOOL | ENTRO: $ENTRO_VAL"
+echo ">> REWARD_MODE: $REWARD_MODE | LOSS_AGG: $LOSS_AGG | GRAD_NORM: $GRAD_VAL | KL_LOSS: $KL_BOOL | ENTRO: $ENTRO_VAL"
 
 # ---- 1. 强力清理 ----
 echo "🧹 Nuking previous processes..."
@@ -43,7 +43,7 @@ rm -rf /tmp/ray/* 2>/dev/null
 find /mnt/cephfs/haowengao/test_agent/env_service/environments/appworld/experiments/outputs -type d -depth -exec rmdir {} + 2>/dev/null
 
 sleep 2
-export GEN_OUTPUT_DIR="/mnt/cephfs/haowengao/test_agent/GEN_NEW_DATA"
+export GEN_OUTPUT_DIR="/mnt/cephfs/haowengao/test_agent/GEN_DATA_0225"
 mkdir -p "$GEN_OUTPUT_DIR"
 
 # ---- 2. 环境变量 ----
@@ -54,6 +54,7 @@ export NO_PROXY=$no_proxy
 export PYTHONUNBUFFERED=1
 export VLLM_ENFORCE_EAGER=True
 export VLLM_ATTENTION_BACKEND=FLASH_ATTN 
+export DEBUG_ARG="kl_control" 
 
 # ---- 3. 启动 Ray Head ----
 echo "🚀 Starting Local Ray Head..."
@@ -101,7 +102,7 @@ python3 -m agentevolver.main_ppo \
     seed=1 \
     debug_log=True \
     algorithm.adv_estimator=grpo \
-    algorithm.use_kl_in_reward=$KL_BOOL \
+    algorithm.use_kl_in_reward=False \
     algorithm.process_reward_mode=$REWARD_MODE \
     data.train_batch_size=32 \
     data.truncation='right' \
@@ -119,7 +120,8 @@ python3 -m agentevolver.main_ppo \
     actor_rollout_ref.actor.grad_clip=$GRAD_VAL \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.actor.ppo_mini_batch_size=8 \
-    actor_rollout_ref.actor.use_kl_loss=False \
+    actor_rollout_ref.actor.use_kl_loss=$KL_BOOL \
+    actor_rollout_ref.actor.kl_loss_coef=0.02 \
     actor_rollout_ref.actor.off_cliprange_high=0.6 \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
@@ -148,7 +150,7 @@ python3 -m agentevolver.main_ppo \
     trainer.critic_warmup=0 \
     trainer.logger="['console','wandb']" \
     trainer.project_name="AgentEvolver" \
-    trainer.experiment_name="appworld_${REWARD_MODE}_${LOSS_AGG}_GRAD${GRAD_VAL}_ENTRO${ENTRO_VAL}" \
+    trainer.experiment_name="appworld_${REWARD_MODE}_${LOSS_AGG}_GRAD${GRAD_VAL}_ENTRO${ENTRO_VAL}_KL${KL_BOOL}" \
     trainer.save_freq=5 \
     trainer.test_freq=5 \
     trainer.total_epochs=40 \
