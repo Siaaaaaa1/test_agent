@@ -1,31 +1,32 @@
 #!/bin/bash
 
 # ============================================================
-# 🔬 消融实验自动解析器 (增强版：支持科学计数法)
-# 文件名示例: sparse_seq-mean-token-sum_GRAD1_KLTRUE_ENTRO1e-3_v1.sh
+# 🔬 消融实验自动解析器 (增强版：支持科学计数法与大小写不敏感)
 # ============================================================
 SCRIPT_NAME=$(basename "$0")
+# 将文件名转换为全大写，彻底消除大小写敏感隐患
+SCRIPT_NAME_UPPER=$(echo "$SCRIPT_NAME" | tr 'a-z' 'A-Z')
 
 # 1. 解析 Reward Mode (sparse/dense)
-if [[ $SCRIPT_NAME == *"dense"* ]]; then REWARD_MODE="dense"; else REWARD_MODE="sparse"; fi
+if [[ $SCRIPT_NAME_UPPER == *"DENSE"* ]]; then REWARD_MODE="dense"; else REWARD_MODE="sparse"; fi
 
 # 2. 解析 Loss Aggregation Mode
-if [[ $SCRIPT_NAME == *"seq-mean-token-sum"* ]]; then LOSS_AGG="seq-mean-token-sum"; else LOSS_AGG="token-mean"; fi
+if [[ $SCRIPT_NAME_UPPER == *"SEQ-MEAN-TOKEN-SUM"* ]]; then LOSS_AGG="seq-mean-token-sum"; else LOSS_AGG="token-mean"; fi
 
 # 3. 解析 Gradient Norm (支持小数，例如 GRAD0.5)
-if [[ $SCRIPT_NAME == *"GRAD"* ]]; then 
-    RAW_GRAD=$(echo $SCRIPT_NAME | grep -oP 'GRAD\K[0-9.eE+-]+')
+if [[ $SCRIPT_NAME_UPPER == *"GRAD"* ]]; then 
+    RAW_GRAD=$(echo "$SCRIPT_NAME" | grep -i -oP 'GRAD\K[0-9.eE+-]+')
     GRAD_VAL=$(printf "%.10f" "$RAW_GRAD" | sed 's/\.\?0*$//') # 转换科学计数法并去除末尾0
 else 
     GRAD_VAL=1.0 
 fi
 
-# 4. 解析 KL 开关 (这里根据文件名动态决定 $KL_BOOL)
-if [[ $SCRIPT_NAME == *"KLFALSE"* ]]; then KL_BOOL="False"; else KL_BOOL="True"; fi
+# 4. 解析 KL 开关
+if [[ $SCRIPT_NAME_UPPER == *"KLFALSE"* ]]; then KL_BOOL="False"; else KL_BOOL="True"; fi
 
-# 5. 解析 Entropy Coefficient (支持科学计数法，例如 ENTRO1e-3)
-if [[ $SCRIPT_NAME == *"ENTRO"* ]]; then 
-    RAW_ENTRO=$(echo $SCRIPT_NAME | grep -oP 'ENTRO\K[0-9.eE+-]+')
+# 5. 解析 Entropy Coefficient (支持科学计数法)
+if [[ $SCRIPT_NAME_UPPER == *"ENTRO"* ]]; then 
+    RAW_ENTRO=$(echo "$SCRIPT_NAME" | grep -i -oP 'ENTRO\K[0-9.eE+-]+')
     ENTRO_VAL=$(printf "%.10f" "$RAW_ENTRO" | sed 's/\.\?0*$//')
 else 
     ENTRO_VAL=0.001 
@@ -130,10 +131,10 @@ python3 -m agentevolver.main_ppo \
     actor_rollout_ref.actor.entropy_coeff=$ENTRO_VAL \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.mode=async \
-    actor_rollout_ref.rollout.n=8 \
-    actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
+    actor_rollout_ref.rollout.n=4 \
+    actor_rollout_ref.rollout.tensor_model_parallel_size=2 \
     actor_rollout_ref.rollout.temperature=0.6 \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.5 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
     actor_rollout_ref.rollout.max_model_len=32768 \
     actor_rollout_ref.rollout.prompt_length=28672 \
     actor_rollout_ref.rollout.response_length=4096 \
