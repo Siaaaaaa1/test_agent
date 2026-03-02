@@ -151,7 +151,7 @@ python3 -m agentevolver.main_ppo \
     trainer.critic_warmup=0 \
     trainer.logger="['console','wandb']" \
     trainer.project_name="AgentEvolver" \
-    trainer.experiment_name="appworld_${REWARD_MODE}_${LOSS_AGG}_GRAD${GRAD_VAL}_ENTRO${ENTRO_VAL}_KL${KL_BOOL}" \
+    trainer.experiment_name="appworld_${REWARD_MODE}_${LOSS_AGG}_GRAD${GRAD_VAL}_ENTRO${ENTRO_VAL}_KL${KL_BOOL}_new_data" \
     trainer.save_freq=5 \
     trainer.test_freq=5 \
     trainer.total_epochs=40 \
@@ -161,7 +161,7 @@ python3 -m agentevolver.main_ppo \
     attribution_driven_credit_assignment.enable=false \
     attribution_driven_credit_assignment.enable_hindsight=false \
     task_manager.n=32 \
-    task_manager.mixture.synthetic_data_ratio=2.0 \
+    task_manager.mixture.synthetic_data_ratio=10.0 \
     task_manager.mixture.use_original_tasks=False \
     task_manager.train_data_path=$GEN_OUTPUT_DIR/tasks_explored.train.json \
     task_manager.val_data_path=$GEN_OUTPUT_DIR/tasks_explored.val.json \
