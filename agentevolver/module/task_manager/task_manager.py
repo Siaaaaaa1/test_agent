@@ -38,6 +38,7 @@ from agentevolver.schema.trajectory import Trajectory
 from verl.utils.dataset.rl_dataset import RLHFDataset
 from agentevolver.utils.debug_utils import debug_log
 from agentevolver.module.task_manager.filters.api_llm_pre_filter import LlmQualityPreFilter
+import uuid
 
 # 全局 IO 锁，用于在多线程环境下安全地追加写入文件
 io_lock = threading.Lock()

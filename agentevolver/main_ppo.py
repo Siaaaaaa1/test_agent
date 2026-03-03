@@ -1,6 +1,3 @@
-# Copyright 2024 Bytedance Ltd. and/or its affiliates
-# Modifications copyright 2025 Alibaba Tongyi EconML Lab. and/or its affiliates
-# ... (版权声明省略)
 """
 注意：我们没有将此 main 函数与 ray_trainer 合并，因为 ray_trainer 可能会被其他 main 入口使用。
 此脚本是运行 PPO 训练的主要入口。
@@ -71,9 +68,15 @@ if "kl_control" in os.environ.get("DEBUG_ARG",""):
         # 计算每个样本非 padding 部分的长度
         lengths = (res != 0).int().sum(dim=-1)
         # 获取指数衰减的权重向量 (Vectorized Exponential Decay Weights)
-        weights = ut.get_batched_exponential_decay_weights_vectorized(lengths.tolist())
-        # 将权重应用到 KL 结果上
-        res = res * weights.unsqueeze(-1)
+        raw_weights = ut.get_batched_exponential_decay_weights_vectorized(lengths.tolist())
+        
+        # --- 核心改进：均值归一化 (Mean Normalization) ---
+        # 确保应用权重后，该样本的总 KL 惩罚量级不会因为衰减而消失
+        # 这防止了梯度在不同 Token 位置上的“暴涨暴跌”
+        weight_means = raw_weights.sum(dim=-1, keepdim=True) / lengths.unsqueeze(-1).float()
+        normalized_weights = raw_weights / (weight_means + 1e-8)
+        
+        res = res * normalized_weights.unsqueeze(-1)
         return res
     
     # 替换 verl 核心算法中的函数
