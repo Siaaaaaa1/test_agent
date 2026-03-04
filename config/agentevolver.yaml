@@ -9,7 +9,7 @@
 algorithm:
   adv_estimator: grpo
   use_kl_in_reward: false
-  outcome_strategy: "discount_first" ## "strict_consistency"  # 全对全错即丢弃，"discount_first"      # 强制引入效率方差
+  outcome_strategy: "normalize_then_decay" ## "strict_consistency"  # 全对全错即丢弃，"discount_first"      # 强制引入效率方差
   process_reward_mode: "dense" # 或 "sparse"
   norm_adv_by_std_in_grpo: True
   gamma: 0.99

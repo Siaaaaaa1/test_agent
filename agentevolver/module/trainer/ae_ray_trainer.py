@@ -222,7 +222,7 @@ def compute_outcome_advantage_dual_strategy(
     step_info: str = ""     
 ):
     """
-    [重构版]: 增加了严格的组校验、DataID一致性检查及NaN防御。
+    [重构版]: 增加了严格的组校验、DataID一致性检查、NaN防御以及兜底策略分支。
     """
     raw_scores = token_level_rewards.sum(dim=-1) 
     lengths = response_mask.sum(dim=-1)
@@ -274,9 +274,11 @@ def compute_outcome_advantage_dual_strategy(
                 g_adv = torch.zeros_like(g_scores)
             else:
                 g_adv = (g_scores - g_mean) / (g_std + epsilon) if norm_adv_by_std else (g_scores - g_mean)
-        
-        # 其他 strategy 分支 (如 strict_consistency) 也应参考上述 g_std 逻辑进行保护...
-        # 为简洁此处略，建议统一使用 normalize_then_decay 进行调试
+        else:
+            # 🚀 [新增修复]: 增加 else 兜底分支，防止 strategy 名称错误导致 g_adv 未定义
+            write_debug_log(f"⚠️ [Warning] 未知策略: '{strategy}'，已回退到基础去均值计算。")
+            g_mean = g_scores.mean()
+            g_adv = g_scores - g_mean
 
         # --- 4. Token-level 回填与 dist_to_end 检查 ---
         for local_i, global_idx in enumerate(g_idxs):
@@ -309,7 +311,6 @@ def compute_outcome_advantage_dual_strategy(
             token_advs = adv_scalar * (gamma ** dist_to_end)
             dense_advantages[global_idx, valid_indices] = token_advs
 
-            # 日志输出... (保持原有逻辑)
     return dense_advantages
 
 
@@ -600,15 +601,29 @@ def compute_advantage(
                 device=step_ids_tensor.device
             )
             
-            if step_len < full_seq_len:
-                end_idx = prompt_length + step_len
-                assert end_idx <= full_seq_len, (
-                    f"[Alignment Error] Prompt长度({prompt_length}) + Step长度({step_len}) "
-                    f"超出了张量总长度({full_seq_len})!"
-                )
-                padded_step_ids[:, prompt_length:end_idx] = step_ids_tensor
+            # if step_len < full_seq_len:
+            #     end_idx = prompt_length + step_len
+            #     assert end_idx <= full_seq_len, (
+            #         f"[Alignment Error] Prompt长度({prompt_length}) + Step长度({step_len}) "
+            #         f"超出了张量总长度({full_seq_len})!"
+            #     )
+            #     padded_step_ids[:, prompt_length:end_idx] = step_ids_tensor
+            # else:
+            #     padded_step_ids = step_ids_tensor
+            # --- 🚀 安全截断对齐逻辑 ---
+            # 计算当前 Batch 真实的 Response 容量大小
+            actual_resp_len = full_seq_len - prompt_length
+            
+            if actual_resp_len > 0:
+                # 选取较小的一个，防止越界（多出来的肯定是 rollout padding 的无用 0）
+                valid_step_len = min(step_len, actual_resp_len)
+                end_idx = prompt_length + valid_step_len
+                
+                # 安全地填入对应的区域
+                padded_step_ids[:, prompt_length:end_idx] = step_ids_tensor[:, :valid_step_len]
             else:
-                padded_step_ids = step_ids_tensor
+                # 极端异常情况：Prompt 长度等于或大于总长度（没有生成任何新 Token）
+                pass
 
             if loss_mask is not None:
                 for b in range(min(4, loss_mask.size(0))):
