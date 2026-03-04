@@ -106,13 +106,13 @@ python3 -m agentevolver.main_ppo \
     algorithm.use_kl_in_reward=False \
     algorithm.process_reward_mode=$REWARD_MODE \
     data.train_batch_size=32 \
-    data.truncation='right' \
+    data.truncation='error' \
     data.return_raw_chat=True \
     data.filter_overlong_prompts=True \
     data.train_files=null \
     data.val_files=null \
-    data.max_prompt_length=28672 \
-    data.max_response_length=4096 \
+    data.max_prompt_length=4096 \
+    data.max_response_length=28672 \
     data.val_batch_size=32 \
     actor_rollout_ref.model.path="./models/Qwen2.5-7B-Instruct" \
     actor_rollout_ref.model.use_remove_padding=True \
@@ -131,7 +131,7 @@ python3 -m agentevolver.main_ppo \
     actor_rollout_ref.actor.entropy_coeff=$ENTRO_VAL \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.mode=async \
-    actor_rollout_ref.rollout.n=4 \
+    actor_rollout_ref.rollout.n=8 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=2 \
     actor_rollout_ref.rollout.temperature=0.6 \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
