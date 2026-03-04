@@ -210,6 +210,16 @@ class TaskRunner:
     """
     def run(self, config):
         # 打印并解析配置
+        # ==========================================================
+        # 🚀 [核弹级拦截] 极致极简版：只要 Message，其他统统滚蛋！
+        import sys
+        from loguru import logger
+        
+        logger.remove() # 清空所有自带格式
+        # format 只留下 {message}，连时间、级别、文件名统统不要！
+        logger.add(sys.stderr, format="<level>{message}</level>")
+        # ==========================================================
+        
         from pprint import pprint
         from omegaconf import OmegaConf
         from verl.utils.fs import copy_to_local

@@ -908,6 +908,8 @@ if __name__ == "__main__":
     print(f"🌍 [DEBUG] Starting FastAPI server on {args.portal}:{args.port}", flush=True)
 
     if args.debug:
-        uvicorn.run(app, host=args.portal, port=args.port)
+        # 加入 access_log=False
+        uvicorn.run(app, host=args.portal, port=args.port, access_log=False)
     else:
-        uvicorn.run(app, host=args.portal, port=args.port, log_level="error")
+        # 加入 access_log=False
+        uvicorn.run(app, host=args.portal, port=args.port, log_level="error", access_log=False)

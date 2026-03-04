@@ -157,10 +157,10 @@ class APIProcessRewardCalculator(RewardCalculator):
         
         self.total_process_reward = 0.0 
 
-        log_reward("-" * 40)
-        log_reward(f"Init RewardCalculator [Semantic API + Repetition + 4-Quadrant ErrorCheck].")
-        log_reward(f"Efficiency: lambda={self.efficiency_lambda}, api_weight={self.api_cost_weight}")
-        log_reward("-" * 40)
+        # log_reward("-" * 40)
+        # log_reward(f"Init RewardCalculator [Semantic API + Repetition + 4-Quadrant ErrorCheck].")
+        # log_reward(f"Efficiency: lambda={self.efficiency_lambda}, api_weight={self.api_cost_weight}")
+        # log_reward("-" * 40)
 
     # ---------------- 辅助：单步规则检测 (Rule-Based Check) ----------------
     
