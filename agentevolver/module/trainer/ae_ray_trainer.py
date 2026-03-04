@@ -30,6 +30,7 @@ from collections import defaultdict
 from concurrent.futures.thread import ThreadPoolExecutor
 from typing import List, Optional, Any
 
+from collections import Counter
 import numpy as np
 import ray
 import torch
@@ -522,6 +523,8 @@ def align_dense_rewards_to_model(reward_tensor, loss_mask):
                     aligned_tensor[b, i] += rew
     return aligned_tensor
 
+
+
 def compute_advantage(
     data: DataProto, 
     adv_estimator, 
@@ -676,59 +679,91 @@ def compute_advantage(
             component_name="Efficiency Reward" 
         )
 
+        # ---------------------------------------------------------
         # 进行奖励叠加汇总 (融合门控系数)
         api_gate = 1.0
-        final_advantages = (w_outcome * adv_out) + (w_efficiency * adv_eff) + \
-                           (w_api * adv_api * api_gate) + (w_rep * adv_rep)
+        pre_norm_advantages = (w_outcome * adv_out) + (w_efficiency * adv_eff) + \
+                              (w_api * adv_api * api_gate) + (w_rep * adv_rep)
 
+        # 🚀 [新增修复] Batch 级别 Advantage 全局归一化
+        # 只对有效 Token (loss_mask == 1) 进行统计，防 Padding 干扰
+        final_advantages = pre_norm_advantages.clone()
+        valid_mask = loss_mask.bool()
+        valid_advs = pre_norm_advantages[valid_mask]
+        
+        pre_norm_mean, pre_norm_std = 0.0, 0.0
+        if valid_advs.numel() > 1:
+            pre_norm_mean = valid_advs.mean().item()
+            pre_norm_std = valid_advs.std().item()
+            
+            # 对有效 Token 进行标准化 (均值 0，方差 1)
+            normalized_valid_advs = (valid_advs - pre_norm_mean) / (pre_norm_std + 1e-8)
+            final_advantages[valid_mask] = normalized_valid_advs
+        elif valid_advs.numel() == 1:
+            pre_norm_mean = valid_advs.mean().item()
+            final_advantages[valid_mask] = 0.0 # 若只有一个有效Token，优势归零
+        # ---------------------------------------------------------
+
+        # 赋值回 data.batch (采用归一化后的 final_advantages)
         data.batch["advantages"] = final_advantages
         data.batch["returns"] = outcome_tensor + \
                                 data.batch.get("api_reward_tensor", 0) + \
                                 data.batch.get("rep_reward_tensor", 0)
 
-        # 打印对齐检验表格日志
+        # 日志打印部分
         try:
             do_table_print = True
             if do_table_print and full_input_ids_tensor is not None and tokenizer is not None:
                 api_rew = data.batch.get("api_reward_tensor")
                 rep_rew = data.batch.get("rep_reward_tensor")
                 
-                for b in range(min(4, final_advantages.shape[0])): 
-                    nz_indices = []
-                    if api_rew is not None:
-                        nz_indices.extend(torch.nonzero(api_rew[b]).squeeze(-1).tolist())
-                    if rep_rew is not None:
-                        nz_indices.extend(torch.nonzero(rep_rew[b]).squeeze(-1).tolist())
+                # --- 宏观组信息与 Advantage 统计 ---
+                post_norm_advs = final_advantages[valid_mask]
+                post_norm_mean = post_norm_advs.mean().item() if post_norm_advs.numel() > 0 else 0.0
+                post_norm_std = post_norm_advs.std().item() if post_norm_advs.numel() > 1 else 0.0
+                
+                group_sizes = list(Counter(uid_index).values())
+                avg_group_size = sum(group_sizes) / len(group_sizes) if group_sizes else 0
+                
+                write_debug_log(f"\n=========================================================")
+                write_debug_log(f"📊 [Step {global_steps} Batch Stats] PRE-Norm Adv  -> Mean: {pre_norm_mean:.4f}, Std: {pre_norm_std:.4f}")
+                write_debug_log(f"📊 [Step {global_steps} Batch Stats] POST-Norm Adv -> Mean: {post_norm_mean:.4f}, Std: {post_norm_std:.4f}")
+                write_debug_log(f"👥 [Group Stats] Total Groups: {len(group_sizes)}, Avg Group Size: {avg_group_size:.1f}")
+                write_debug_log(f"=========================================================")
+
+                # --- 随机采样 2 个样本，打印整个有效序列的 Token 级奖励 ---
+                bsz = final_advantages.shape[0]
+                sample_indices = random.sample(range(bsz), min(2, bsz))
+                
+                for b in sample_indices:
+                    valid_idx = torch.nonzero(loss_mask[b]).squeeze(-1)
+                    if valid_idx.numel() == 0:
+                        continue
+                        
+                    start_idx = valid_idx[0].item()
+                    end_idx = valid_idx[-1].item() + 1
                     
-                    if not nz_indices:
-                        valid_idx = torch.nonzero(loss_mask[b]).squeeze(-1)
-                        if valid_idx.numel() > 0:
-                            nz_indices.append(valid_idx[-1].item())
-                    
-                    if not nz_indices: continue
-                    
-                    target_idx = nz_indices[0] if isinstance(nz_indices, list) else nz_indices
-                    start_idx = max(0, target_idx - 8)
-                    end_idx = min(full_input_ids_tensor.size(1), target_idx + 9)
-                    
-                    log_str = f"\n👑 === [Alignment Verification Table] Step {global_steps} | Trajectory {b} === 👑\n"
-                    log_str += f"{'Idx':<5} | {'Token_Text':<18} | {'StepID':<6} | {'API_Rew':<8} | {'Rep_Rew':<8} | {'Out_Adv':<8} | {'Final_Adv':<9}\n"
-                    log_str += "-"*80 + "\n"
+                    log_str = f"\n👑 === [Token-Level Detail] Step {global_steps} | Sampled Trajectory {b} === 👑\n"
+                    log_str += f"{'Idx':<5} | {'Token_Text':<18} | {'StepID':<6} | {'API_Rew':<8} | {'Rep_Rew':<8} | {'Out_Adv':<8} | {'Pre_Adv':<9} | {'Post_Adv':<9}\n"
+                    log_str += "-"*95 + "\n"
                     
                     for i in range(start_idx, end_idx):
                         tid = full_input_ids_tensor[b, i].item()
                         ttext = repr(tokenizer.decode([tid])) if tid >= 0 else f"<unk_{tid}>"
                         sid = padded_step_ids[b, i].item() if padded_step_ids is not None else 0
+                        
                         api_val = api_rew[b, i].item() if api_rew is not None else 0.0
                         rep_val = rep_rew[b, i].item() if rep_rew is not None else 0.0
-                        out_val = adv_out[b, i].item()
-                        fadv_val = final_advantages[b, i].item()
+                        out_val = adv_out[b, i].item() if 'adv_out' in locals() else 0.0
                         
-                        flag = ">> " if i == target_idx else "   "
-                        if api_val != 0 or rep_val != 0:
-                            flag = "🚀 " 
-                            
-                        log_str += f"{flag}{i:<4} | {ttext:<18} | {sid:<6} | {api_val:>8.4f} | {rep_val:>8.4f} | {out_val:>8.4f} | {fadv_val:>9.4f}\n"
+                        # 提取归一化前和归一化后的 Advantage
+                        pre_adv_val = pre_norm_advantages[b, i].item()
+                        post_adv_val = final_advantages[b, i].item()
+                        
+                        # 只打印有数值波动或关键步骤的 Token，避免日志过长
+                        if api_val != 0 or rep_val != 0 or abs(pre_adv_val) > 0.01 or abs(post_adv_val) > 0.01 or (i % 20 == 0):
+                            flag = "🚀 " if (api_val != 0 or rep_val != 0) else "   "
+                            log_str += f"{flag}{i:<4} | {ttext:<18} | {sid:<6} | {api_val:>8.4f} | {rep_val:>8.4f} | {out_val:>8.4f} | {pre_adv_val:>9.4f} | {post_adv_val:>9.4f}\n"
                     
                     write_debug_log(log_str)
         except Exception as e:

@@ -76,7 +76,7 @@ if "kl_control" in os.environ.get("DEBUG_ARG",""):
         weight_means = raw_weights.sum(dim=-1, keepdim=True) / lengths.unsqueeze(-1).float()
         normalized_weights = raw_weights / (weight_means + 1e-8)
         
-        res = res * normalized_weights.unsqueeze(-1)
+        res = res * normalized_weights
         return res
     
     # 替换 verl 核心算法中的函数
