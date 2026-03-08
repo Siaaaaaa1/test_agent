@@ -1850,29 +1850,30 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                             except Exception as e:
                                 print(f"[Warning] Hindsight logic encountered an error: {e}")
 
-                        # ==================== 启动 ADCA GRPO 调整 (如果开启) ====================
-                        if getattr(attribution_cfg, 'enable', False):
-                            batch, adca_metrics = apply_adca_grpo(
-                                batch=batch,
-                                attribution_cfg=attribution_cfg,
-                                tokenizer=self.tokenizer,
-                                global_steps=self.global_steps,
-                                epoch=epoch,
-                                i=i,
-                                llm_client=self.llm_client,
-                            )
-                            metrics.update(adca_metrics)
+                        # # ==================== 启动 ADCA GRPO 调整 (如果开启) ====================
+                        # if getattr(attribution_cfg, 'enable', False):
+                        #     batch, adca_metrics = apply_adca_grpo(
+                        #         batch=batch,
+                        #         attribution_cfg=attribution_cfg,
+                        #         tokenizer=self.tokenizer,
+                        #         global_steps=self.global_steps,
+                        #         epoch=epoch,
+                        #         i=i,
+                        #         llm_client=self.llm_client,
+                        #     )
+                        #     metrics.update(adca_metrics)
                         
-                        if os.environ.get("DEBUG_ARG","").find("synth_decay")!=-1:
-                            if epoch==0 and i==0:
-                                print("DEBUG: change ratio of synthetic data from 1 to 0.5")
-                            assert 'extras' in batch.non_tensor_batch
-                            if 'extras' in batch.non_tensor_batch:
-                                for i in range(len(batch.non_tensor_batch['extras'])):
-                                    assert 'evaluator' in batch.non_tensor_batch['extras'][i]
-                                    evaluator = batch.non_tensor_batch['extras'][i]['evaluator']
-                                    if evaluator != 'env':
-                                        batch.batch["advantages"][i] *= 0.5
+                        ## 动态改变合成数据和原始数据的比例
+                        # if os.environ.get("DEBUG_ARG","").find("synth_decay")!=-1:
+                        #     if epoch==0 and i==0:
+                        #         print("DEBUG: change ratio of synthetic data from 1 to 0.5")
+                        #     assert 'extras' in batch.non_tensor_batch
+                        #     if 'extras' in batch.non_tensor_batch:
+                        #         for i in range(len(batch.non_tensor_batch['extras'])):
+                        #             assert 'evaluator' in batch.non_tensor_batch['extras'][i]
+                        #             evaluator = batch.non_tensor_batch['extras'][i]['evaluator']
+                        #             if evaluator != 'env':
+                        #                 batch.batch["advantages"][i] *= 0.5
 
                     # ==================== 开始模型更新 ====================
                     if self.use_critic:
@@ -1997,11 +1998,12 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                     pprint(f"Final validation metrics: {last_val_metrics}")
                     progress_bar.close()
                     return
-
-            if os.environ.get("DEBUG_ARG",'').find("ratio_decay")!=-1:
-                from agentevolver.module.task_manager.data_mixture import UnifiedMixtureStrategy
-                print("DEBUG: change ratio of synthetic data from 1 to 0.5")
-                assert isinstance(self.train_dataset._mixture_strategy,UnifiedMixtureStrategy)
-                self.train_dataset._mixture_strategy._synthetic_ratio-=1/5
-            if self.hindsight_manager is not None:
-                self.train_dataset.update_hindsight_data()
+                
+            ## 动态改变合成数据和原始数据的比例
+            # if os.environ.get("DEBUG_ARG",'').find("ratio_decay")!=-1:
+            #     from agentevolver.module.task_manager.data_mixture import UnifiedMixtureStrategy
+            #     print("DEBUG: change ratio of synthetic data from 1 to 0.5")
+            #     assert isinstance(self.train_dataset._mixture_strategy,UnifiedMixtureStrategy)
+            #     self.train_dataset._mixture_strategy._synthetic_ratio-=1/5
+            # if self.hindsight_manager is not None:
+            #     self.train_dataset.update_hindsight_data()

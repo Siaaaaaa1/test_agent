@@ -23,65 +23,65 @@ from agentevolver.module.adv_processor.hindsight import HindsightManager  # [新
 from verl.trainer.ppo.reward import load_reward_manager
 from verl.trainer.ppo import core_algos
 
-# =============================================================================
-# 1. Monkey Patching: KL 散度计算逻辑修改
-# =============================================================================
-# 如果环境变量 DEBUG_ARG 中包含 "kl_control"，则替换 verl 库中的 kl_penalty 函数。
-# 目的：在计算 PPO 的 KL 惩罚时，引入与序列长度相关的权重，对长序列生成的偏离给予更大的惩罚。
-if "kl_control" in os.environ.get("DEBUG_ARG",""):
-    print("monkeypatching kl loss (正在对 KL 损失函数打补丁)")
+# # =============================================================================
+# # 1. Monkey Patching: KL 散度计算逻辑修改
+# # =============================================================================
+# # 如果环境变量 DEBUG_ARG 中包含 "kl_control"，则替换 verl 库中的 kl_penalty 函数。
+# # 目的：在计算 PPO 的 KL 惩罚时，引入与序列长度相关的权重，对长序列生成的偏离给予更大的惩罚。
+# if "kl_control" in os.environ.get("DEBUG_ARG",""):
+#     print("monkeypatching kl loss (正在对 KL 损失函数打补丁)")
     
-    def kl_penalty(logprob: torch.FloatTensor, ref_logprob: torch.FloatTensor, kl_penalty) -> torch.FloatTensor:
-        """
-        计算 logprob 和 ref_logprob 之间的 KL 散度或相关惩罚项。
+#     def kl_penalty(logprob: torch.FloatTensor, ref_logprob: torch.FloatTensor, kl_penalty) -> torch.FloatTensor:
+#         """
+#         计算 logprob 和 ref_logprob 之间的 KL 散度或相关惩罚项。
         
-        参数:
-            logprob: 当前策略的对数概率
-            ref_logprob: 参考策略（Ref Model）的对数概率
-            kl_penalty: 惩罚类型 ('kl', 'abs', 'mse', 'low_var_kl' 等)
-        """
-        # 根据配置选择基础的计算公式
-        if kl_penalty in ("kl", "k1"):
-            res = logprob - ref_logprob
-        elif kl_penalty == "abs":
-            res = (logprob - ref_logprob).abs()
-        elif kl_penalty in ("mse", "k2"):
-            res = 0.5 * (logprob - ref_logprob).square()
-        elif kl_penalty in ("low_var_kl", "k3"):
-            # 低方差 KL 近似：http://joschu.net/blog/kl-approx.html
-            kl = ref_logprob - logprob
-            # 数值稳定性处理
-            kl = torch.clamp(kl, min=-20, max=20)
-            ratio = torch.exp(kl)
-            kld = (ratio - kl - 1).contiguous()
-            res = torch.clamp(kld, min=-10, max=10)
-        elif kl_penalty == "full":
-            raise NotImplementedError
-        else:
-            raise NotImplementedError
+#         参数:
+#             logprob: 当前策略的对数概率
+#             ref_logprob: 参考策略（Ref Model）的对数概率
+#             kl_penalty: 惩罚类型 ('kl', 'abs', 'mse', 'low_var_kl' 等)
+#         """
+#         # 根据配置选择基础的计算公式
+#         if kl_penalty in ("kl", "k1"):
+#             res = logprob - ref_logprob
+#         elif kl_penalty == "abs":
+#             res = (logprob - ref_logprob).abs()
+#         elif kl_penalty in ("mse", "k2"):
+#             res = 0.5 * (logprob - ref_logprob).square()
+#         elif kl_penalty in ("low_var_kl", "k3"):
+#             # 低方差 KL 近似：http://joschu.net/blog/kl-approx.html
+#             kl = ref_logprob - logprob
+#             # 数值稳定性处理
+#             kl = torch.clamp(kl, min=-20, max=20)
+#             ratio = torch.exp(kl)
+#             kld = (ratio - kl - 1).contiguous()
+#             res = torch.clamp(kld, min=-10, max=10)
+#         elif kl_penalty == "full":
+#             raise NotImplementedError
+#         else:
+#             raise NotImplementedError
         
-        assert res.dim() == 2, f"kl_penalty should be 2-dim tensor, but got {res.dim()}-dim tensor"
+#         assert res.dim() == 2, f"kl_penalty should be 2-dim tensor, but got {res.dim()}-dim tensor"
         
-        # --- 核心修改部分 ---
-        # 根据生成的长度控制 KL 惩罚。越靠后的 token（frontier tokens）会有更高的惩罚权重。
-        import agentevolver.utils.utils as ut
-        # 计算每个样本非 padding 部分的长度
-        lengths = (res != 0).int().sum(dim=-1)
-        # 获取指数衰减的权重向量 (Vectorized Exponential Decay Weights)
-        raw_weights = ut.get_batched_exponential_decay_weights_vectorized(lengths.tolist())
+#         # --- 核心修改部分 ---
+#         # 根据生成的长度控制 KL 惩罚。越靠后的 token（frontier tokens）会有更高的惩罚权重。
+#         import agentevolver.utils.utils as ut
+#         # 计算每个样本非 padding 部分的长度
+#         lengths = (res != 0).int().sum(dim=-1)
+#         # 获取指数衰减的权重向量 (Vectorized Exponential Decay Weights)
+#         raw_weights = ut.get_batched_exponential_decay_weights_vectorized(lengths.tolist())
         
-        # --- 核心改进：均值归一化 (Mean Normalization) ---
-        # 确保应用权重后，该样本的总 KL 惩罚量级不会因为衰减而消失
-        # 这防止了梯度在不同 Token 位置上的“暴涨暴跌”
-        weight_means = raw_weights.sum(dim=-1, keepdim=True) / lengths.unsqueeze(-1).float()
-        normalized_weights = raw_weights / (weight_means + 1e-8)
+#         # --- 核心改进：均值归一化 (Mean Normalization) ---
+#         # 确保应用权重后，该样本的总 KL 惩罚量级不会因为衰减而消失
+#         # 这防止了梯度在不同 Token 位置上的“暴涨暴跌”
+#         weight_means = raw_weights.sum(dim=-1, keepdim=True) / lengths.unsqueeze(-1).float()
+#         normalized_weights = raw_weights / (weight_means + 1e-8)
         
-        res = res * normalized_weights
-        return res
+#         res = res * normalized_weights
+#         return res
     
-    # 替换 verl 核心算法中的函数
-    core_algos.kl_penalty = kl_penalty
-    print("patched (补丁应用完成)")
+#     # 替换 verl 核心算法中的函数
+#     core_algos.kl_penalty = kl_penalty
+#     print("patched (补丁应用完成)")
 
 
 def get_custom_reward_fn(config):
