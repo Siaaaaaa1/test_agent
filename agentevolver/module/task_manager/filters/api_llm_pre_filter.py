@@ -12,19 +12,19 @@ from agentevolver.schema.task import Task
 
 # 如果你有定义 TaskPreFilter 基类，请继承它，否则作为一个独立类即可
 class LlmQualityPreFilter:
-    def __init__(self, llm_client: LlmClient, num_threads: int = 10, **kwargs):
+    def __init__(self, llm_client: LlmClient, num_threads: int = 20, **kwargs):
         """
         初始化预过滤器。
         
         Args:
             llm_client (LlmClient): 用于判断任务质量的 LLM 客户端。
-            num_threads (int): 并发线程数。
+            num_threads (int): 并发线程数。修改为20。
         """
         self._llm_client = llm_client
         self._num_threads = num_threads
         
-        # 简单的重试配置
-        self._max_retries = 3
+        # 简单的重试配置 (网络问题重试5次)
+        self._max_retries = 5
 
     def filter(self, tasks: Sequence[Task]) -> List[Task]:
         """
@@ -76,7 +76,7 @@ class LlmQualityPreFilter:
         # 1. 构造 Prompt
         prompt = self._construct_prompt(query)
         
-        # 2. 调用 LLM (带重试)
+        # 2. 调用 LLM (带重试，路径评估仅使用默认的 qwen3.5-plus)
         response_content = self._chat_with_retry(prompt)
         
         if not response_content:
@@ -178,32 +178,6 @@ ACCEPT (Delegated Commands): Queries where the user sets a goal and lets the Age
 Example: "Help me find a desktop fan under $50.", "Update my username to 'Alex'."
 Is this a valid and usable query? Please think first, then reply with the result strictly in this format: <answer>True</answer> or <answer>False</answer>"""
 
-#         f"""You are a strict Data Quality Auditor for an advanced AI Agent dataset.
-# Your goal is to accept **ONLY** high-quality, intent-clear, and logically robust user commands, and **REJECT** vague, trivial, or queries containing unreasonable assumptions.
-
-# Task Query: "{query}"
-
-# ### Evaluation Criteria:
-#     The query contains key information needed to execute the task (e.g., category, usage, preferences) but **avoids including overly specific values that the user cannot verify (risking execution failure)**.
-#     * *Bad (Too Vague):* "Buy a fan."
-#     * *Bad (Overly Specific/Guessing):* "Buy a fan on Amazon that costs exactly $20.50." (User cannot predict exact pricing; high failure risk.)
-#     * *Bad (Presumed State):* "Update my account name to 'Jane Smith' only if the current name is 'J. Doe'." (User should not speculate on current state in the command; just order the rename directly.)
-#     * *Good (Clear Intent):* "Help me pick a highly-rated cooling fan suitable for a desktop on Amazon." (Delegates filtering to the Agent.)
-#     * *Good (Functional Constraint):* "Update my account name to 'Jane Smith'."
-
-# Is this a high-quality query?
-# Return strictly in this format: <answer>True</answer> or <answer>False</answer>
-# """
-        
-# ### Automatic FAIL Triggers (Immediate False):
-# 1.  **Hallucinated Constraints:** Contains internal IDs, hashes, or overly precise unnecessary values unknown to the user (e.g., "Buy item with ID 83920").
-# 2.  **Too Trivial:** Extremely simple parameter-less operations (e.g., "Click Confirm").
-# 3.  **Impossible Logic:** Asks the Agent to access physical world objects or private states outside its permissions.
-# 4.  **Refusals/Non-commands:** "I can't do that", "Hello", etc.
-
-# ### Decision Logic:
-# - If the query has clear intent, reasonable parameters, and is actionable by the Agent in an unknown environment -> True.
-# - If the query relies on the user guessing the environment state (e.g., guessing a specific price or specific stock count) or is too vague -> False.
         return [{"role": "user", "content": content}]
 
     def _parse_response(self, content: str) -> bool:
@@ -226,15 +200,17 @@ Is this a valid and usable query? Please think first, then reply with the result
 
     def _chat_with_retry(self, messages: list[dict]) -> Optional[str]:
         """
-        带重试机制的 LLM 调用
+        带重试机制的 LLM 调用。
+        网络问题最多重试5次。由于这是路径评估/质量过滤任务，
+        仅使用一次默认的 qwen3.5-plus 即可，不进行任务推理失败的模型降级切换。
         """
         for i in range(self._max_retries):
             try:
-                # 采样参数：temperature 设低一点，让判断更确定
+                # 调用 LLM，强制指定使用 qwen3.5-plus
                 response = self._llm_client.chat(
-                    messages=messages, 
+                    messages=messages,
+                    model="qwen3.5-plus"
                 )
-                # sampling_params={"temperature": 0.1, "max_completion_tokens": 1024}
                 
                 # 兼容不同 Client 返回格式 (dict 或 str 或 object)
                 if isinstance(response, dict):
@@ -245,7 +221,7 @@ Is this a valid and usable query? Please think first, then reply with the result
                     return response
                 
             except Exception as e:
-                logger.warning(f"[PreFilter] Retry {i+1} failed: {e}")
+                logger.warning(f"[PreFilter] Retry {i+1} failed due to network/API error: {e}")
                 time.sleep(2 ** i)
         
         return None

@@ -81,7 +81,7 @@ class AvgBinaryGTJudge(AvgJudge):
         for i in range(n):
             self.add_judge(
                 LlmAsJudgeBinaryRewardCalculatorWithGT(
-                    task, model_name="qwq-plus", use_mean_constraint=True
+                    task, model_name="qwen3.5-plus", use_mean_constraint=True
                 )
             )  # ⭐ Adds a judge with a binary reward calculator and a mean constraint
 

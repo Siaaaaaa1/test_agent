@@ -6,6 +6,7 @@ import os
 import uuid
 import logging
 import threading
+import re
 from typing import Callable, Optional, Sequence, List, Any, Dict, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -20,11 +21,12 @@ from agentevolver.module.env_manager.env_worker import EnvWorker
 from agentevolver.module.exp_manager.exp_manager import TrajExpConfig
 from agentevolver.module.task_manager.agent_flow import ModifiedAgentFlow
 from agentevolver.module.task_manager.base import LlmClient
+# [修改 1/4] 替换为 DashScopeClient
+from agentevolver.client.llm_client import DashScopeClient 
+
+# 奖励计算与总结相关
 from agentevolver.schema.task import Task, TaskObjective
 from agentevolver.schema.trajectory import Trajectory
-from agentevolver.client.llm_client_mix import Mix_DashScopeClient
-from typing import List
-# 奖励计算与总结相关
 from agentevolver.module.task_manager.rewards.integrated_reward_gt import IntegratedRewardCalculator_GT
 from agentevolver.module.task_manager.strategies.common.prompts.prompt_extract_refsol import (
     get_task_summarize_prompt,
@@ -39,7 +41,7 @@ std_logger = logging.getLogger(__name__)
 class LlmFilter(TaskPostFilter):
     def __init__(self, env_url: str, llm_client: LlmClient, num_threads: int, *, tokenizer, config):
         """
-        初始化 LlmFilter。强制重写为 Mix_DashScopeClient 以支持多模型回退。
+        初始化 LlmFilter。强制重写为 DashScopeClient 以支持 qwen 系列模型轮询。
         """
         self._env_client = EnvClient(env_url)
         self._num_threads = num_threads
@@ -48,18 +50,19 @@ class LlmFilter(TaskPostFilter):
         self._lock = threading.Lock()
         self._io_lock = threading.Lock()
 
-        # 1. 强制使用 Mix 客户端以驱动模型轮训
+        # [修改 2/4] 强制实例化刚才定义的 DashScopeClient
         try:
-            logger.info("🛡️ [LlmFilter] Forcing Mix_DashScopeClient for tier polling.")
-            self._llm_client = Mix_DashScopeClient(
-                model_name="HY-Qwen3-235B-A22B-Instruct-2507", 
+            logger.info("🛡️ [LlmFilter] Initializing DashScopeClient for tier polling.")
+            # 默认传入基础模型，后续在轮询中通过 kwargs 覆盖 model 参数
+            self._llm_client = DashScopeClient(
+                model_name="qwen3.5-plus", 
                 temperature=config.get("exploration_llm_temperature", 0.7)
             )
         except Exception as e:
-            logger.error(f"Failed to init MixClient: {e}. Using passed client.")
+            logger.error(f"Failed to init DashScopeClient: {e}. Using passed client.")
             self._llm_client = llm_client
 
-        # 2. 配置输出路径
+        # 配置输出路径
         self.output_dir = os.environ.get("GEN_OUTPUT_DIR", "./data/output/filter_logs")
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir, exist_ok=True)
@@ -90,7 +93,6 @@ class LlmFilter(TaskPostFilter):
 
     def _filter_with_threadpool(self, tasks: Sequence[TaskObjective]) -> list[TaskObjective]:
         """使用线程池并行处理，并实现实时保存"""
-        from tqdm import tqdm
         res = []
         
         progress = tqdm(total=len(tasks), desc="🚀 [Post-Filter] Tier Polling & Sorting")
@@ -118,26 +120,22 @@ class LlmFilter(TaskPostFilter):
         return res
 
     def _execute_strategy1(self, task: TaskObjective) -> TaskObjective | None:
-        """模型轮训核心逻辑：DeepSeek -> Qwen -> GPT-5-mini -> GPT-5"""
-        # "azure-gpt-5-mini",
-        # "azure-gpt-5"
-        candidate_models = [
-            "DeepSeek-V3-Online",
-            "HY-Qwen3-235B-A22B-Instruct-2507"
-        ]
-        random.shuffle(candidate_models)
-        for model_name in candidate_models:
+        """
+        [修改 3/4] 模型轮训核心逻辑：
+        优先使用性价比高且速度快的 qwen3.5-plus，
+        如果失败（报错或得分不达标），降级切换至能力更强的 qwen3-max。
+        """
+        candidate_models = ["qwen3.5-plus", "qwen3-max"]
+        
+        for attempt, model_name in enumerate(candidate_models):
             try:
-                logger.info(f"🔄 [Filter] Task {task.task.task_id} -> Trying {model_name}")
+                logger.info(f"🔄 [Filter] Task {task.task.task_id} -> Trying {model_name} (Attempt {attempt+1})")
                 
-                # 采样参数，驱动 MixClient 路由
-                sampling_params = {"model": model_name}
-                if model_name in ["DeepSeek-V3-Online", "HY-Qwen3-235B-A22B-Instruct-2507"]:
-                    sampling_params.update({
-                        "temperature": self._config.get("exploration_llm_temperature", 0.5),
-                        "top_p": 0.9,
-                        "top_k": 50
-                    })
+                # 采样参数，DashScopeClient 会自动接管 kwargs 中的 model
+                sampling_params = {
+                    "model": model_name,
+                    "temperature": self._config.get("exploration_llm_temperature", 0.7)
+                }
 
                 # 1. 实例化 GT 奖励类
                 reward_calculator = IntegratedRewardCalculator_GT(task=task.task)
@@ -183,10 +181,11 @@ class LlmFilter(TaskPostFilter):
                         task.task.metadata["filter_model"] = model_name
                         return self._rewrite_new_gt(task, traj)
                 
-                logger.warning(f"⏭️ [Filter] {model_name} failed for {task.task.task_id}. Falling back...")
+                logger.warning(f"⏭️ [Filter] {model_name} failed/low-score for {task.task.task_id}. Falling back to next tier...")
 
             except Exception as e:
                 logger.error(f"❌ [Filter] Exception with {model_name} on task {task.task.task_id}: {e}")
+                # 异常发生时，通过 for 循环自动回退到下一个模型
                 continue
 
         return None
@@ -196,7 +195,8 @@ class LlmFilter(TaskPostFilter):
         try:
             validator = TrajectoryEvaluator(self._llm_client)
             return validator.evaluate_trajectory_success(task, trajectory)
-        except:
+        except Exception as e:
+            logger.error(f"Validation failed: {e}")
             return False
 
     def _rewrite_new_gt(self, task: TaskObjective, trajectory: Trajectory) -> TaskObjective:
@@ -205,17 +205,17 @@ class LlmFilter(TaskPostFilter):
         messages = [{"role": "system", "content": sys_prompt}, {"role": "user", "content": user_prompt}]
         
         try:
-            llm_output = self._get_llm_chat_fn()(messages)["content"]
+            # 重写 GT 时，默认使用刚执行成功的模型即可，不需要额外传 params，
+            # 这里 _get_llm_chat_fn 无参调用会默认走初始化时的配置。
+            llm_output_dict = self._get_llm_chat_fn()(messages)
+            llm_output = llm_output_dict.get("content", "")
+            
             gt = parse_tasks_from_response(llm_output)
             if gt is not None:
-                # ✅ 直接使用 Schema 中预留的 origin_ground_truth 字段来备份
-                # 如果当前任务尚未设置过 origin_ground_truth，就把被覆盖前的 ground_truth 存进去
                 if task.task.origin_ground_truth is None:
                     task.task.origin_ground_truth = task.task.ground_truth
                 
-                # ✅ 更新为新的 GT
                 task.ground_truth = gt 
-                # (注意: task.ground_truth 会触发 setter，自动修改 task.task.ground_truth，不需要写两遍)
                 
         except Exception as e:
             logger.error(f"Failed to rewrite GT: {e}")
@@ -223,24 +223,36 @@ class LlmFilter(TaskPostFilter):
         return task
         
     def _get_llm_chat_fn(self, sampling_params: Optional[dict] = None) -> Callable:
+        """
+        完善了重试机制。如果在当前模型下遇到网络波动，会进行退避重试（最多3次），
+        如果 3 次网络级请求依然失败，会将异常抛出/返回错误，交由外层的轮询机制切模型。
+        """
         def llm_chat(
             messages: list[dict[str, str]],
             custom_sampling_params: Optional[dict] = None,
             request_id: Optional[str] = None,
+            **kwargs
         ) -> dict:
             updated_params = copy.deepcopy(sampling_params) if sampling_params else {}
             if custom_sampling_params:
                 updated_params.update(custom_sampling_params)
+            updated_params.update(kwargs)
 
             res = None
-            for i in range(3):
+            max_retries = 3
+            for i in range(max_retries):
                 try:
-                    res = self._llm_client.chat(messages=messages, sampling_params=updated_params)
-                    if res: break
+                    # 使用 kwargs 传递给 DashScopeClient.chat
+                    res = self._llm_client.chat(messages=messages, **updated_params)
+                    if res: 
+                        return {"role": "assistant", "content": res}
                 except Exception as e:
-                    time.sleep(2 ** i)
-
-            return {"role": "assistant", "content": res if res else "Error generating response"}
+                    logger.warning(f"LLM Chat Failed (Attempt {i+1}/{max_retries}): {e}")
+                    if i < max_retries - 1:
+                        time.sleep(2 ** i)
+            
+            return {"role": "assistant", "content": "Error generating response"}
+            
         return llm_chat
 
 class TrajectoryEvaluator:
@@ -253,7 +265,6 @@ class TrajectoryEvaluator:
     def evaluate_trajectory_success(self, task: TaskObjective, trajectory: Trajectory) -> bool:
         """Evaluate if trajectory completed the task successfully"""
         try:
-            # Create trajectory summary
             trajectory_summary = self._create_trajectory_summary(trajectory)
             
             final_observation: str | None = None
@@ -262,19 +273,27 @@ class TrajectoryEvaluator:
                     final_observation = step['content']
                     break
                 
-            # Generate evaluation prompt
             assert task.objective is not None, "synthetic task must have objective"
-            prompt = self.prompts.success_evaluation_prompt(
+            
+            # 拿到的是 Message 列表
+            prompt_messages = self.prompts.success_evaluation_prompt(
                 query=task.objective,
                 trajectory_summary=trajectory_summary,
                 final_observation=final_observation or "[no observation]"
             )
             
-            # Get LLM evaluation
-            response = self.client.chat(prompt, sampling_params={})
+            # [修改 4/4] 使用重试机制调用，并明确给评估器分配基础模型
+            response = None
+            for i in range(3):
+                try:
+                    response = self.client.chat(prompt_messages, model="qwen3.5-plus")
+                    if response:
+                        break
+                except Exception as e:
+                    logger.warning(f"Trajectory Eval LLM call failed (attempt {i+1}): {e}")
+                    time.sleep(1)
             
-            # Parse evaluation result
-            success = self._parse_evaluation_response(response)
+            success = self._parse_evaluation_response(response if response else "")
             
             logger.debug(f"Trajectory evaluation result: {success}")
             return success
@@ -284,75 +303,36 @@ class TrajectoryEvaluator:
             return False
     
     def _create_trajectory_summary(self, traj: Trajectory) -> str:
-        """
-        Creates a summary of the steps in a given trajectory, with each step's content truncated to 200 characters.
-
-        Args:
-            traj (Trajectory): The trajectory object containing the steps to be summarized.
-
-        Returns:
-            str: A string summary of the trajectory steps.
-        """
         summary_blocks = []
-        
         for i, step in enumerate(traj.steps):
             block = f"(Step {i + 1}) {step['role']}:\n"
-            block += f"{step['content'][:200]}...\n"  # ⭐ Truncate the content to 200 characters and append an ellipsis
+            block += f"{step['content'][:200]}...\n"  
             summary_blocks.append(block)
-        
         return "\n".join(summary_blocks)
     
     def _parse_evaluation_response(self, response: str) -> bool:
         """
-        Parses the evaluation response from an LLM to determine if the task was successful or not.
-
-        Args:
-            response (str): The response from the LLM.
-
-        Returns:
-            bool: True if the task is deemed successful, False otherwise.
+        [修改 4/4] 使用精准正则匹配，抛弃了原来容易被误导的词频统计法。
         """
         if not response:
             return False
         
-        response_lower = response.lower()
-        
-        # Look for explicit success/failure indicators
-        if 'success: true' in response_lower or 'successful: true' in response_lower:
+        # 严格匹配格式 "Success: true" 或 "Success: false"
+        match = re.search(r"Success:\s*(true|false)", response, re.IGNORECASE)
+        if match:
+            return match.group(1).lower() == "true"
+            
+        # 兜底逻辑：如果大模型没有按照格式输出，但在最后几句话明确给出了结论
+        if "success: true" in response.lower() or "successful: true" in response.lower():
             return True
-        elif 'success: false' in response_lower or 'successful: false' in response_lower:
-            return False
-        
-        # Look for keywords
-        success_keywords = ['success', 'completed', 'achieved', 'accomplished', 'solved']
-        failure_keywords = ['failed', 'incomplete', 'unsuccessful', 'not completed', 'not achieved']
-        
-        success_count = sum(1 for keyword in success_keywords if keyword in response_lower)
-        failure_count = sum(1 for keyword in failure_keywords if keyword in response_lower)
-        
-        # Default to success if more success keywords found
-        return success_count > failure_count  # ⭐ Determine success based on the count of success and failure keywords
+            
+        return False
     
-    
-
 class EvaluationPrompts:
     """Prompt templates for trajectory evaluation"""
     
     def success_evaluation_prompt(self, query: str, trajectory_summary: str,
                                 final_observation: str) -> list:
-        """
-        Generates a prompt for evaluating the success of a trajectory.
-
-        Args:
-            query (str): The task query.
-            trajectory_summary (str): The summary of the trajectory.
-            final_observation (str): The final observation of the trajectory.
-
-        Returns:
-            list: A list containing a single dictionary with the role and content for the prompt.
-        """
-
-# - Expected Outcome (Ground Truth API Call or Result): {ground_truth}
         messages = [
             {
             "role": "user",
@@ -388,8 +368,6 @@ class EvaluationPrompts:
         ]
         
         return messages
-
-
 
 def make_solver_tip_prompt(query: str, gt: str):
     return f"""You are an AI assistant helping to complete tasks in an interactive environment.

@@ -4,6 +4,7 @@ import time
 from typing import Any, Optional, cast
 from loguru import logger
 from agentevolver.client.env_client import EnvClient
+# [修改] 统一使用 DashScopeClient
 from agentevolver.client.llm_client import DashScopeClient
 from agentevolver.module.agent_flow.reward_calculator import GraderResult, RewardCalculator
 from agentevolver.schema.task import Task
@@ -97,16 +98,6 @@ Please note that the average score must be maintained around {mean_score:.4f} (+
 """
 
 def steps_to_msg(steps: list[dict[str, Any]]) -> str:
-    """
-    Converts a list of step dictionaries into a single coherent string message.
-
-    Args:
-        steps (list[dict[str, Any]]): A list of dictionaries, each representing a step in the agent's trajectory.
-
-    Returns:
-        str: A single string that concatenates all the steps into a coherent message.
-    """
-    # format the trajectory
     trajectory_text = ""
     assert steps[0]['role'] == 'assistant'
     for i, msg in enumerate(steps):
@@ -130,7 +121,7 @@ def steps_to_msg(steps: list[dict[str, Any]]) -> str:
 @grader_manager.reg("llm-binary-no-gt")
 class LlmAsJudgeBinaryRewardCalculatorNoGT(RewardCalculator):
     """
-    RewardCalculator that uses LLM as judge WITHOUT Reference Solution (Ground Truth).
+    RewardCalculator using DashScopeClient WITHOUT Ground Truth.
     """
     _running_judge_mean_fast = 0.3
     _running_judge_mean_slow = 0.3
@@ -139,11 +130,10 @@ class LlmAsJudgeBinaryRewardCalculatorNoGT(RewardCalculator):
     _alpha_slow=0.95
     _update_lock = threading.Lock()
 
-    def __init__(self, task: Task, model_name='qwen3-235b-a22b-instruct-2507', use_mean_constraint=True):
+    def __init__(self, task: Task, model_name='qwen3.5-plus', use_mean_constraint=True):
         super().__init__(task)
-
-        self._client = DashScopeClient(model_name=model_name)
-        self._client.max_tokens=32768
+        # [修改] 使用统一的 DashScopeClient
+        self._client = DashScopeClient(model_name=model_name, max_tokens=32768)
         self._use_mean_constraint = use_mean_constraint
 
     @classmethod
@@ -163,16 +153,9 @@ class LlmAsJudgeBinaryRewardCalculatorNoGT(RewardCalculator):
             return cls._running_judge_mean_slow
 
     def pack_message(self, trajectory: Trajectory):
-        """
-        Pack trajectory into a message.
-        MODIFIED: Does not require ground_truth and does not include reference_trajs in the prompt.
-        """
         messages = []
-
         assert len(trajectory.steps) >= 2 and trajectory.steps[1]['role'] == 'user', "trajectory must start with system message and then user message"
         task_query = trajectory.steps[1]['content']
-
-        # Removed assertion for self.task.ground_truth here.
 
         if self._use_mean_constraint:
             content = USER_PROMPT_WITH_MEAN_CONSTRAINT.format(
@@ -180,46 +163,28 @@ class LlmAsJudgeBinaryRewardCalculatorNoGT(RewardCalculator):
                 trajs=steps_to_msg(trajectory.steps[2:]),
                 running_mean=self.get_running_mean(),
                 mean_score=self.get_stable_mean()
-                # Removed reference_trajs argument
             )
         else:
             content = USER_PROMPT.format(
                 task=task_query,
                 trajs=steps_to_msg(trajectory.steps[2:])
-                # Removed reference_trajs argument
             )
-        messages.append(
-            {
-                "role": "user",
-                "content": content
-            }
-        )
+        messages.append({"role": "user", "content": content})
         return messages
 
     def calculate_reward(self, trajectory: Trajectory, env: EnvClient, instance_id: str) -> GraderResult:
-        x,res = cast(tuple[float,str], self._calculate_reward(trajectory, env, eject_llm_output=True))
-        return {
-            "score": x,
-            "reason": res
-        }
-
+        x, res = cast(tuple[float,str], self._calculate_reward(trajectory, env, eject_llm_output=True))
+        return {"score": x, "reason": res}
 
     def _calculate_reward(self, trajectory: Trajectory, env: EnvClient, *, eject_llm_output: bool = False):
-        """
-        Calculate the reward with WATCHDOG to detect hangs.
-        """
         task_id = self.task.task_id if self.task and hasattr(self.task, 'task_id') else "unknown_task"
         
         # --- [Watchdog Setup] ---
-        # 启动一个后台线程，如果 30秒 后主逻辑还没结束，就打印严重警告
-        # 这有助于确认是否是网络死锁
         watchdog_done_event = threading.Event()
-        
         def watchdog_monitor(tid):
-            time.sleep(30) # 30秒超时阈值
+            time.sleep(30) 
             if not watchdog_done_event.is_set():
-                logger.critical(f"[{tid}] 🚨 WATCHDOG ALERT: Judge LLM call has been stuck for 30s! This implies a NETWORK DEADLOCK or Client Hang.")
-                # 注意：我们很难从这里强制杀死 requests 线程，但至少我们知道了原因
+                logger.critical(f"[{tid}] 🚨 WATCHDOG ALERT: Judge LLM call stuck for 30s!")
         
         wd_thread = threading.Thread(target=watchdog_monitor, args=(task_id,), daemon=True)
         wd_thread.start()
@@ -227,66 +192,45 @@ class LlmAsJudgeBinaryRewardCalculatorNoGT(RewardCalculator):
 
         logger.info(f"[{task_id}] 🟢 Start calling Judge LLM (Streaming Mode)...")
         start_time = time.time()
-
         response = ""
         chunk_count = 0
         
         try:
-            # 尝试调用流式接口
-            # 注意：如果 DashScopeClient 底层 requests 没有设置 timeout，这里可能会永久卡死
+            # [修改] 使用统一客户端的流式重试接口
             stream_iterator = self._client.chat_stream_with_retry(messages=self.pack_message(trajectory), max_retries=8)
-            
             for chunk in stream_iterator:
                 response += chunk
                 chunk_count += 1
-                
-                # [LOG] 收到第一个 Token
                 if chunk_count == 1:
-                    first_token_time = time.time()
-                    logger.info(f"[{task_id}] ⚡ First token received after {first_token_time - start_time:.2f}s")
-                
-                # [LOG] 心跳
+                    logger.info(f"[{task_id}] ⚡ First token after {time.time() - start_time:.2f}s")
                 if chunk_count % 50 == 0:
                     logger.debug(f"[{task_id}] ... streaming (len: {len(response)})")
-        
         except Exception as e:
             logger.error(f"[{task_id}] ❌ Error during Judge LLM stream: {e}")
         finally:
-            # 无论成功失败，通知看门狗退出
             watchdog_done_event.set()
 
         total_time = time.time() - start_time
-        logger.info(f"[{task_id}] 🏁 Judge generation finished in {total_time:.2f}s. Total Length: {len(response)}")
-        
-        if response:
-            logger.info(f"[{task_id}] Judge Reasoning & Output:\n{response}")
+        logger.info(f"[{task_id}] 🏁 Judge generation finished in {total_time:.2f}s.")
         
         score = 0.0
         if response:
-            import re
             reward_match = re.search(r'<reward>([\d\.]+)</reward>', response.strip())
             if reward_match:
                 raw_score = float(reward_match.group(1))
                 score = max(0.0, min(100.0, raw_score)) / 100.0
-                logger.info(f"[{task_id}] ✅ Judge Result -> Raw: {raw_score}, Normalized: {score}")
+                logger.info(f"[{task_id}] ✅ Judge Result -> Raw: {raw_score}")
             else:
-                logger.warning(f"[{task_id}] ⚠️ Could not parse score from response. Snippet: {response[:200]}...")
-                try:
-                    fallback_matches = re.findall(r'\b(100|[1-9]?[0-9])\b', response)
-                    if fallback_matches:
-                        logger.warning(f"[{task_id}] (Fallback) Potential scores found: {fallback_matches}. Returning 0.0.")
-                except: pass
+                logger.warning(f"[{task_id}] ⚠️ Could not parse score from response.")
                 score = 0.0
         else:
             logger.error(f"[{task_id}] ❌ No response content accumulated.")
             score = 0.0
 
-        if not eject_llm_output:
-            return score
-        else:
-            return score, response
+        return (score, response) if eject_llm_output else score
 
 @grader_manager.reg("llm-binary-no-gt-no_constraint")
 class LlmAsJudgeBinaryRewardCalculatorNoGTNoConstraint(LlmAsJudgeBinaryRewardCalculatorNoGT):
-    def __init__(self, task: Task, model_name='qwen3-235b-a22b-instruct-2507'):
+    # [修改] 默认模型改为 qwen3.5-plus
+    def __init__(self, task: Task, model_name='qwen3.5-plus'):
         super().__init__(task, model_name, use_mean_constraint=False)

@@ -8,6 +8,7 @@ import os
 import hydra
 import ray
 from agentevolver.utils.utils import seed_everything
+
 # 引入 AgentEvolver 特有的模块
 from agentevolver.client.llm_client import DashScopeClient
 from agentevolver.module.task_manager.base import NaiveTaskObjectiveRetrieval
@@ -17,7 +18,6 @@ from agentevolver.module.task_manager.task_manager import TaskManager
 from agentevolver.module.task_manager.env_profiles import EnvProfile
 from agentevolver.module.trainer.ae_ray_trainer import AgentEvolverRayPPOTrainer
 from agentevolver.module.adv_processor.hindsight import HindsightManager  # [新增] 引入 HindsightManager
-
 
 # 引入 verl 库的相关模块
 from verl.trainer.ppo.reward import load_reward_manager
@@ -87,9 +87,6 @@ from verl.trainer.ppo import core_algos
 def get_custom_reward_fn(config):
     """
     动态加载自定义奖励函数。
-    
-    从配置文件中指定的路径加载 Python 文件，并提取指定的函数作为奖励函数。
-    这允许用户在不修改库代码的情况下注入自定义的 Reward 逻辑。
     """
     import importlib.util
     import sys
@@ -107,7 +104,7 @@ def get_custom_reward_fn(config):
     module = importlib.util.module_from_spec(spec)
     try:
         sys.modules["custom_module"] = module
-        spec.loader.exec_module(module)  # 执行模块以加载定义
+        spec.loader.exec_module(module)
     except Exception as e:
         raise RuntimeError(f"Error loading module from '{file_path}': {e}") from e
 
@@ -127,7 +124,6 @@ def get_custom_reward_fn(config):
     return wrapped_fn
 
 
-# 使用 Hydra 管理配置，配置文件位于 ../config 目录，默认使用 script_config.yaml
 @hydra.main(config_path="../config", config_name="script_config", version_base=None)
 def main(config):
     """
@@ -142,19 +138,12 @@ def run_ppo(config) -> None:
     """
     初始化 Ray 环境并启动训练任务。
     """
-    # 1. 初始化 Ray 集群
     if not ray.is_initialized():
-        
-        # 优先从 config 读取 address (Bash 脚本传入了 "auto")
         ray_address = getattr(config.ray_init, "address", "auto")
-        
-        # 注意：连接到现有的 'auto' 集群时，通常不需要指定 num_cpus，
-        # 除非你想限制当前 Driver 进程的资源使用。
         ray_num_cpus = getattr(config.ray_init, "num_cpus", None)
 
         print(f"🔌 [DEBUG] Connecting to Ray Cluster at: {ray_address}")
         
-        # 统一的 runtime_env 配置
         runtime_env_config = {
             "env_vars": {
                 "TOKENIZERS_PARALLELISM": "true", 
@@ -162,20 +151,16 @@ def run_ppo(config) -> None:
                 "VLLM_LOGGING_LEVEL": "WARN",
                 "VLLM_ALLOW_RUNTIME_LORA_UPDATING": "true",
                 "VLLM_USE_V1": "1", 
-                # 确保 WANDB key 存在
                 "WANDB_API_KEY": os.getenv("WANDB_API_KEY", "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"),
             }
         }
 
         try:
-            # 🔥 [关键修改] 统一逻辑：始终使用 config 中的地址 (即 'auto')
-            # 只有当连接失败时，才考虑由 Ray 自动处理或回退
             ray.init(
                 address=ray_address, 
                 runtime_env=runtime_env_config,
                 include_dashboard=False,
                 ignore_reinit_error=True,
-                # 如果是连接到 auto集群，num_cpus 通常被忽略或用于限制 driver，保留它无大碍，但 address 必须对
                 num_cpus=ray_num_cpus 
             )
             print("✅ [DEBUG] Ray initialized successfully!")
@@ -183,43 +168,28 @@ def run_ppo(config) -> None:
         except Exception as e:
             print(f"⚠️ [DEBUG] Failed to init Ray with address={ray_address}: {e}")
             print("🔄 [DEBUG] Fallback: Trying to init generic local Ray...")
-            # 只有显式连接失败了，才尝试无参数启动（本地模式）
             ray.init(
                 num_cpus=ray_num_cpus,
                 runtime_env=runtime_env_config,
                 ignore_reinit_error=True
             )
-        # "WANDB_BASE_URL": "https://api.wandb.ai"
 
-    # 2. 配置检查
     max_model_len: int = config.actor_rollout_ref.rollout.max_model_len
-    # 确保 prompt 长度 + response 长度 不超过模型的最大上下文长度
     assert config.data.max_prompt_length + config.data.max_response_length <= max_model_len, \
         f"max_prompt_length {config.data.max_prompt_length} + max_response_length {config.data.max_response_length} should be <= max_model_len {max_model_len}"
 
-    # 3. 启动 TaskRunner Actor
-    # 使用 Ray Actor 模式运行主任务，避免在 Head 节点上运行重型任务
+    # 启动 TaskRunner Actor
     runner = TaskRunner.remote()
     ray.get(runner.run.remote(config))
 
-# 定义 TaskRunner Actor，指定只需要 1 个 CPU
-@ray.remote(num_cpus=1)  # please make sure main_task is not scheduled on head
+
+# [调整] 取消 num_cpus=1 的限制，使 Actor 可以利用更多资源进行多线程任务
+@ray.remote
 class TaskRunner:
     """
     Ray Actor 类，负责具体的训练环境搭建和训练循环启动。
     """
     def run(self, config):
-        # 打印并解析配置
-        # ==========================================================
-        # 🚀 [核弹级拦截] 极致极简版：只要 Message，其他统统滚蛋！
-        import sys
-        from loguru import logger
-        
-        logger.remove() # 清空所有自带格式
-        # format 只留下 {message}，连时间、级别、文件名统统不要！
-        logger.add(sys.stderr, format="<level>{message}</level>")
-        # ==========================================================
-        
         from pprint import pprint
         from omegaconf import OmegaConf
         from verl.utils.fs import copy_to_local
@@ -231,17 +201,15 @@ class TaskRunner:
         OmegaConf.resolve(config)
 
         # 1. 模型下载/准备
-        # 将 HDFS 或对象存储上的模型 checkpoint 下载到本地
         local_path = copy_to_local(config.actor_rollout_ref.model.path, use_shm=config.actor_rollout_ref.model.get('use_shm', False))
 
         # 2. 初始化 Tokenizer 和 Processor
         from verl.utils import hf_processor, hf_tokenizer
         trust_remote_code = config.data.get("trust_remote_code", False)
         tokenizer = hf_tokenizer(local_path, trust_remote_code=trust_remote_code)
-        processor = hf_processor(local_path, use_fast=True)  # 用于多模态模型
+        processor = hf_processor(local_path, use_fast=True)
 
         # 3. vLLM 版本检查
-        # 如果使用 vLLM 作为 Rollout 引擎且启用了 LoRA，需要检查 vLLM 版本是否支持
         if config.actor_rollout_ref.rollout.name in ["vllm"]:
             from verl.utils.vllm_utils import is_version_ge
             if config.actor_rollout_ref.model.get('lora_rank', 0) > 0:
@@ -249,57 +217,45 @@ class TaskRunner:
                     raise NotImplementedError("PPO LoRA is not supported before vllm 0.7.3")
 
         # 4. 定义 Worker 类（Actor, Rollout, Reference）
-        # 根据分布式策略（FSDP/Megatron）选择对应的 Worker 类
         if config.actor_rollout_ref.actor.strategy in ["fsdp", "fsdp2"]:
             assert config.critic.strategy in ["fsdp", "fsdp2"]
             from verl.single_controller.ray import RayWorkerGroup
-            # 引入基本的 Worker
-            from verl.workers.fsdp_workers import (ActorRolloutRefWorker, AsyncActorRolloutRefWorker, CriticWorker)
+            from verl.workers.fsdp_workers import CriticWorker
             
-            ####################
             # AgentEvolver 特定修改 (ANNI)
-            # 使用自定义的 HET (Heterogeneous) Worker 类，支持异构计算或特定的任务逻辑
             from agentevolver.module.exp_manager.het_fsdp_worker import HETAsyncActorRolloutRefWorker, HETActorRolloutRefWorker
             
-            # 根据配置选择同步或异步 Rollout Worker
             actor_rollout_cls = HETAsyncActorRolloutRefWorker if config.actor_rollout_ref.rollout.mode == "async" else HETActorRolloutRefWorker
-            ####################
             ray_worker_group_cls = RayWorkerGroup
 
         elif config.actor_rollout_ref.actor.strategy == "megatron":
-            # Megatron 策略支持 (代码中似乎未针对 AgentEvolver 做特殊定制，沿用 verl 原生)
             assert config.actor_rollout_ref.actor.strategy == config.critic.strategy
             from verl.single_controller.ray.megatron import NVMegatronRayWorkerGroup
-            from verl.workers.megatron_workers import (ActorRolloutRefWorker, CriticWorker)
+            from verl.workers.megatron_workers import ActorRolloutRefWorker, CriticWorker
 
             actor_rollout_cls = ActorRolloutRefWorker
             ray_worker_group_cls = NVMegatronRayWorkerGroup
-
         else:
             raise NotImplementedError
 
-        # 5. 资源池映射 (Resource Pool Mapping)
-        # 定义每个角色 (Role) 对应哪个 Worker 类
+        # 5. 资源池映射
         from verl.trainer.ppo.ray_trainer import ResourcePoolManager, Role
 
         role_worker_mapping = {
-            Role.ActorRollout: ray.remote(actor_rollout_cls), # Actor 和 Rollout 通常共享模型权重
-            Role.Critic: ray.remote(CriticWorker),            # Critic 独立
+            Role.ActorRollout: ray.remote(actor_rollout_cls), 
+            Role.Critic: ray.remote(CriticWorker),            
         }
 
         global_pool_id = "global_pool"
-        # 定义资源规格：每个节点多少个 GPU
         resource_pool_spec = {
             global_pool_id: [config.trainer.n_gpus_per_node] * config.trainer.nnodes,
         }
-        # 将角色映射到资源池
         mapping = {
             Role.ActorRollout: global_pool_id,
             Role.Critic: global_pool_id,
         }
 
         # 6. 配置 Reward Model (RM)
-        # 如果启用了独立 Reward Model
         if config.reward_model.enable:
             if config.reward_model.strategy in ["fsdp", "fsdp2"]:
                 from verl.workers.fsdp_workers import RewardModelWorker
@@ -311,33 +267,29 @@ class TaskRunner:
             mapping[Role.RewardModel] = global_pool_id
 
         # 7. 配置 Reference Policy (Ref)
-        # 如果算法需要 KL 散度（通常 PPO 都需要），则需要 Reference Model
         if config.algorithm.use_kl_in_reward or config.actor_rollout_ref.actor.use_kl_loss:
-            role_worker_mapping[Role.RefPolicy] = ray.remote(ActorRolloutRefWorker)
+            from verl.workers.fsdp_workers import ActorRolloutRefWorker as DefaultActorRolloutRefWorker
+            role_worker_mapping[Role.RefPolicy] = ray.remote(DefaultActorRolloutRefWorker)
             mapping[Role.RefPolicy] = global_pool_id
 
         # 8. 加载奖励函数管理器
         reward_fn = load_reward_manager(config, tokenizer, num_examine=0, **config.reward_model.get("reward_kwargs", {}))
         val_reward_fn = load_reward_manager(config, tokenizer, num_examine=1, **config.reward_model.get("reward_kwargs", {}))
         
-        # 初始化资源池管理器
         resource_pool_manager = ResourcePoolManager(resource_pool_spec=resource_pool_spec, mapping=mapping)
-
         from verl.utils.dataset.rl_dataset import collate_fn
 
-        # 9. 初始化 TaskManager (核心组件)
-        # AgentEvolver 不使用静态数据集，而是使用 TaskManager 动态管理任务
+        # 9. 初始化 TaskManager
         llm_client = DashScopeClient(model_name=config.task_manager.llm_client)
         
-        # 训练集任务管理器
         train_task_manager = TaskManager(
             config=config,
-            exploration_strategy=config.task_manager.strategy, # 探索策略
-            env_profile=EnvProfile.load_from_json(config.task_manager.env_profile), # 环境配置
+            exploration_strategy=config.task_manager.strategy,
+            env_profile=EnvProfile.load_from_json(config.task_manager.env_profile),
             exploration_strategy_args=config.task_manager.strategy_args,
             llm_client=llm_client,
-            old_retrival=NaiveTaskObjectiveRetrieval(), # 任务检索器
-            mixture_strategy=UnifiedMixtureStrategy(    # 数据混合策略
+            old_retrival=NaiveTaskObjectiveRetrieval(),
+            mixture_strategy=UnifiedMixtureStrategy(
                 use_original=config.task_manager.mixture.use_original_tasks,
                 synthetic_ratio=config.task_manager.mixture.synthetic_data_ratio,
                 shuffle=config.task_manager.mixture.shuffle,
@@ -345,12 +297,11 @@ class TaskRunner:
             ),
             reward_config=config.task_manager.grader,
             tokenizer=tokenizer,
-            env_service_url=config.env_service.env_url, # 环境服务地址
+            env_service_url=config.env_service.env_url,
             num_explore_threads=config.task_manager.num_explore_threads,
             n=config.task_manager.n,
         )
         
-        # 验证集任务管理器 (通常只使用原始任务，不混合合成数据)
         val_task_manager = TaskManager(
             config=config,
             exploration_strategy=config.task_manager.strategy,
@@ -358,7 +309,7 @@ class TaskRunner:
             exploration_strategy_args=config.task_manager.strategy_args,
             llm_client=llm_client,
             old_retrival=NaiveTaskObjectiveRetrieval(),
-            mixture_strategy=OriginalOnlyStrategy(), # 仅使用原始数据
+            mixture_strategy=OriginalOnlyStrategy(),
             reward_config=config.task_manager.grader,
             tokenizer=tokenizer,
             env_service_url=config.env_service.env_url,
@@ -366,28 +317,23 @@ class TaskRunner:
             n=config.task_manager.n,
         )
 
-        # ==================== [NEW] Hindsight Manager Initialization ====================
-        # 在这里初始化 HindsightManager 并注入到 Trainer 中，解决 ae_ray_trainer.py 中的初始化问题
+        # 10. 初始化 Hindsight Manager
         hindsight_manager = None
         attribution_cfg = config.get("attribution", {})
         if attribution_cfg.get("enable_hindsight", False):
             print("[Main] Initializing HindsightManager for AgentEvolver...")
             try:
-                # 获取保存路径，默认为 tasks_explored 下
                 save_path = attribution_cfg.get("hindsight_save_path", "tasks_explored/hindsight_supplement.jsonl")
-                # 使用已有的 llm_client 和 tokenizer
                 hindsight_manager = HindsightManager(
                     llm_client=llm_client,
-                    tokenizer=tokenizer,
+                    tokenizer=tokenizer,  # [保留] 直接传入 tokenizer
                     saved_path=save_path,
                     num_threads=config.task_manager.get("num_explore_threads", 4)
                 )
             except Exception as e:
                 print(f"[Warning] Failed to initialize HindsightManager in main_ppo: {e}")
-        # ================================================================================
 
-        # 10. 初始化 Trainer 并开始训练
-        # 使用自定义的 AgentEvolverRayPPOTrainer
+        # 11. 初始化 Trainer 并开始训练
         trainer = AgentEvolverRayPPOTrainer(
             config=config,
             tokenizer=tokenizer,
@@ -397,24 +343,23 @@ class TaskRunner:
             ray_worker_group_cls=ray_worker_group_cls,
             reward_fn=reward_fn,
             val_reward_fn=val_reward_fn,
-            train_task_manager=train_task_manager, # 传入 TaskManager
+            train_task_manager=train_task_manager,
             val_task_manager=val_task_manager,
             collate_fn=collate_fn,
             device_name=config.trainer.device,
-            hindsight_manager=hindsight_manager,   # [新增] 传入 HindsightManager 实例
+            hindsight_manager=hindsight_manager,
         )
-        trainer.init_workers() # 初始化分布式 Worker
-        trainer.fit()          # 开始训练循环
+        trainer.init_workers()
+        trainer.fit()
+
 
 def create_rl_dataset(data_paths, data_config, tokenizer, processor):
     """
     创建强化学习数据集的辅助函数。
-    虽然 TaskRunner 中使用了 TaskManager，但此函数可能用于兼容性或测试。
     """
     from torch.utils.data import Dataset
     from verl.utils.dataset.rl_dataset import RLHFDataset
 
-    # 支持加载自定义数据集类
     if "custom_cls" in data_config and data_config.custom_cls.get("path", None) is not None:
         from verl.utils.import_utils import load_extern_type
         dataset_cls = load_extern_type(data_config.custom_cls.path, data_config.custom_cls.name)
@@ -434,7 +379,6 @@ def create_rl_dataset(data_paths, data_config, tokenizer, processor):
     return dataset
 
 if __name__ == "__main__":
-    import shutil
     # 以下注释代码用于调试或防止递归删除，当前被禁用
     # this will break ray's initialization
     # def _safe_guard(name:str):

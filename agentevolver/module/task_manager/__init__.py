@@ -25,10 +25,14 @@ def run_task_manager(config):
     from verl.utils.fs import copy_to_local
     from verl.utils.tokenizer import hf_tokenizer
     from agentevolver.client.env_client import EnvClient
+    
     print("loading model")
     local_path = copy_to_local(config.actor_rollout_ref.model.path, use_shm=config.actor_rollout_ref.model.get('use_shm', False))  # ⭐ Copy the model to a local path
     
-    llm_client = DashScopeClient(model_name=config.task_manager.llm_client)  # ⭐ Initialize the LLM client
+    # [调整 1] 安全获取配置中的 llm_client，如果没有配置则回退到默认的 qwen3.5-plus
+    llm_client_name = config.task_manager.get("llm_client", "qwen3.5-plus")
+    llm_client = DashScopeClient(model_name=llm_client_name)  # ⭐ Initialize the LLM client
+    
     tokenizer = hf_tokenizer(local_path, trust_remote_code=True)  # ⭐ Initialize the tokenizer
 
     print("initializing task manager")
@@ -43,7 +47,7 @@ def run_task_manager(config):
             use_original=False,
             synthetic_ratio=1.0,  # force synthetic_ratio to 1.0, as lazy generation is used
             shuffle=config.task_manager.mixture.shuffle,
-            seed=42,
+            seed=config.get("seed", 42),  # [调整 2] 从 config 获取随机种子，替代写死的 42
             ),
         reward_config=config.task_manager.grader,
         tokenizer=tokenizer,
@@ -51,6 +55,7 @@ def run_task_manager(config):
         num_explore_threads=config.task_manager.num_explore_threads,
         n=config.task_manager.n,
     )  # ⭐ Initialize the TaskManager
+    
     print("loading seed tasks")
     env_client = EnvClient(config.env_service.env_url)  # ⭐ Initialize the environment client
     seed_tasks = ta.load_tasks_from_environment(env_client, env_type=config.env_service.env_type, split="train")  # ⭐ Load seed tasks from the environment

@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 import json
 import os
 import time
-import threading  # [修改 1/4] 引入 threading 模块
+import threading
 from typing import Any, Optional, Protocol, Iterator, Generator, cast
 
 from loguru import logger
@@ -24,58 +24,47 @@ class LlmException(Exception):
 
 class DashScopeClient:
     """
-    Modified DashScopeClient to support internal Azure GPT-5 Mini Proxy.
-    Updated for emoji_agent_research context.
-    With Rate Limiting (40 RPM).
+    DashScopeClient updated to use Qwen models via OpenAI compatible API.
+    With Rate Limiting (100 RPM) and Concurrency Limiting (10).
     """
     
-    def __init__(self, api_key: Optional[str] = None, model_name: str = "azure-gpt-5", 
+    def __init__(self, api_key: Optional[str] = None, model_name: str = "qwen3.5-plus", 
                  temperature: float = 0.7, max_tokens: int = 2048):
         
         if load_dotenv:
             load_dotenv()
 
+        # 读取 DASHSCOPE_API_KEY
         self.api_key = api_key or os.getenv("DASHSCOPE_API_KEY") or os.getenv("OPENAI_API_KEY") or "dummy_key"
         
-        # [修改 2/4] 初始化并发控制信号量，限制为5个并发
-        self._semaphore = threading.BoundedSemaphore(5)
+        # 初始化并发控制信号量，限制为10个并发
+        self._semaphore = threading.BoundedSemaphore(10)
 
-        # ----------------------------------------------------------------------
-        # [修改 - 新增速率限制 1/3] 初始化速率限制相关的锁和存储
-        # ----------------------------------------------------------------------
+        # 初始化速率限制相关的锁和存储
         self._rate_limit_lock = threading.Lock()
         self._request_timestamps = [] # 用于存储请求发生的时间戳
-        self._max_rpm = 40            # 限制每分钟40次请求
+        self._max_rpm = 100            # 限制每分钟100次请求
 
-        # ----------------------------------------------------------------------
-        # Modification 1: Set default model to azure-gpt-5-mini
-        # ----------------------------------------------------------------------
-        self.model_name = "azure-gpt-5"
-        # if model_name:
-        #     self.model_name = model_name
-        # else:
-        #     self.model_name = "azure-gpt-5"
+        # 设置默认模型为 qwen3.5-plus
+        self.model_name = model_name
         
         self.temperature = temperature
         self.max_tokens = max_tokens
         
-        # ----------------------------------------------------------------------
-        # Modification 2: Base URL matches the provided curl command domain
-        # ----------------------------------------------------------------------
-        self.base_url = os.getenv("AZURE_PROXY_URL") or "http://ichatproxy.devops.weread.woa.com"
+        # 使用 DASHSCOPE_BASE_URL，如果没有配置则使用默认的阿里云百炼兼容地址
+        self.base_url = os.getenv("DASHSCOPE_BASE_URL") or "https://dashscope.aliyuncs.com/compatible-mode/v1"
         
+        # 配置标准的 Bearer Token 请求头
         self.headers = {
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}"
         }
         
-        logger.info(f"Initialized DashScopeClient (Proxy) with model: {self.model_name}, base_url: {self.base_url}")
+        logger.info(f"Initialized DashScopeClient with model: {self.model_name}, base_url: {self.base_url}")
     
-    # ----------------------------------------------------------------------
-    # [修改 - 新增速率限制 2/3] 实现速率限制检查逻辑
-    # ----------------------------------------------------------------------
     def _wait_for_rate_limit(self):
         """
-        Blocks until a request token is available ensuring max 40 requests per 60 seconds.
+        Blocks until a request token is available ensuring max 100 requests per 60 seconds.
         Uses a sliding window approach.
         """
         window_duration = 60.0  # 60 seconds
@@ -99,7 +88,7 @@ class DashScopeClient:
                 oldest_timestamp = self._request_timestamps[0]
                 wait_time = window_duration - (now - oldest_timestamp)
                 
-            # 在锁外等待，避免阻塞其他线程的检查（虽然逻辑上都会被卡住，但更安全）
+            # 在锁外等待，避免阻塞其他线程的检查
             if wait_time > 0:
                 # 稍微多睡一点点(0.01s)，确保下次检查时刚好过期
                 time.sleep(wait_time + 0.01)
@@ -132,24 +121,25 @@ class DashScopeClient:
     def chat_completion(self, messages: list[dict[str, str]], stream: bool = False, **kwargs) -> str | Generator[str, None, None]:
         """
         Sends a request to the chat completion API.
-        Modified to use the specific path and query parameters for the GPT-5 Proxy API.
         """
         base = self.base_url.rstrip('/')
         
-        # ----------------------------------------------------------------------
-        # Modification 3: Update path to /api/chat_completions and source to emoji_agent_research
-        # ----------------------------------------------------------------------
-        url = f"{base}/api/chat_completions?source=emoji_agent_research"
+        # 使用标准的 /chat/completions 路径
+        url = f"{base}/chat/completions"
         
         # Merge parameters
         params = {
             "model": self.model_name,
             "messages": messages,
-            # "temperature": self.temperature, # Optional: include if API supports it
-            # "max_tokens": self.max_tokens,   # Optional: include if API supports it
             "stream": stream,
             **kwargs
         }
+        
+        # 将类级别的温度和最大 token 传入 (如果没被 kwargs 覆盖)
+        if "temperature" not in params and self.temperature is not None:
+             params["temperature"] = self.temperature
+        if "max_tokens" not in params and self.max_tokens is not None:
+             params["max_tokens"] = self.max_tokens
         
         try:
             if stream:
@@ -171,17 +161,13 @@ class DashScopeClient:
         """
         Handles the non-streaming (normal) response.
         """
-        # ----------------------------------------------------------------------
-        # Modification 4: Explicitly bypass proxies for internal API calls (WOA)
-        # ----------------------------------------------------------------------
+        # 可以根据需要恢复代理，这里保持和原代码一致的 no_proxy
         no_proxy = {
             "http": None,
             "https": None
         }
 
-        # [修改 3/4] 使用信号量控制普通请求的并发
         with self._semaphore:
-            # [修改 - 新增速率限制 3/3] 在实际发送请求前，检查速率限制
             self._wait_for_rate_limit()
             
             response = requests.post(
@@ -200,9 +186,9 @@ class DashScopeClient:
                     raise LlmException("inappropriate content")
                 if "limit" in message:
                     raise LlmException("hit limit")
-            except LlmException as e:
+            except LlmException:
                 raise
-            except:
+            except Exception:
                 logger.error(f"API request failed: {response.status_code} {response.text}")
                 response.raise_for_status()
         
@@ -224,9 +210,7 @@ class DashScopeClient:
             "https": None
         }
 
-        # [修改 4/4] 使用信号量控制流式请求的并发
         with self._semaphore:
-            # [修改 - 新增速率限制 3/3] 在实际发送请求前，检查速率限制
             self._wait_for_rate_limit()
 
             response = requests.post(
@@ -246,9 +230,9 @@ class DashScopeClient:
                         raise LlmException("inappropriate content")
                     if "limit" in message:
                         raise LlmException("hit limit")
-                except LlmException as e:
+                except LlmException:
                     raise
-                except:
+                except Exception:
                     logger.error(f"API request failed: {response.status_code} {response.text}")
                     response.raise_for_status()
             
@@ -285,7 +269,7 @@ class DashScopeClient:
             
             except LlmException as e:
                 if e.typ == 'inappropriate content':
-                    logger.warning(f"llm return inappropriate content, which is blocked by the remote")
+                    logger.warning("llm return inappropriate content, which is blocked by the remote")
                     return "[inappropriate content]"
             except Exception as e:
                 logger.warning(f"Attempt {attempt + 1} failed: {e}")
@@ -312,7 +296,7 @@ class DashScopeClient:
                     return
             except LlmException as e:
                 if e.typ == 'inappropriate content':
-                    logger.warning(f"llm return inappropriate content, which is blocked by the remote")
+                    logger.warning("llm return inappropriate content, which is blocked by the remote")
                     yield "[inappropriate content]"
                     return
             except Exception as e:

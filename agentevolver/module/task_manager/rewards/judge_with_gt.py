@@ -67,7 +67,7 @@ class LlmAsJudgeRewardCalculatorWithGT(RewardCalculator):
     """
     A naive RewardCalculator that uses LLM as judge.
     """
-    def __init__(self, task:Task, model_name='qwq-plus'):
+    def __init__(self, task:Task, model_name='qwen3.5-plus'):
         super().__init__(task)
         self._client=DashScopeClient(model_name=model_name)
     
