@@ -71,6 +71,9 @@ from verl.trainer.ppo.reward import compute_reward, compute_reward_async
 from verl.utils.dataset.rl_dataset import RLHFDataset
 from verl.utils.metric import reduce_metrics
 
+# [NEW: Injection] 引入 SmartLogger
+from agentevolver.utils.smart_logger import SmartLogger
+
 # =============================================================================
 # [调试日志工具]
 # 用于在优势函数 (Advantage) 计算时捕获底层数据的具体分布，排查对齐问题。
@@ -298,7 +301,14 @@ def compute_outcome_advantage_dual_strategy(
                 
                 max_step = traj_step_ids.max()
                 
-                # [关键检查]: 如果轨迹很长但 max_step 却是 0，说明 step_ids 数据丢失
+                # [幽灵惩罚检测] 检查是否有 valid token 的 step_id 为 0，但整体 max_step > 0
+                zero_step_mask = (traj_step_ids == 0)
+                if max_step > 0 and zero_step_mask.any():
+                    zero_count = zero_step_mask.sum().item()
+                    alert_msg = f"🚨 [CRITICAL ALERT] 幽灵惩罚 (Ghost Penalty) 检测触发！Traj {global_idx} max_step 为 {max_step.item()}，但有 {zero_count} 个有效 Token 的 step_id 为 0。它们将被施加最大衰减！"
+                    write_debug_log(alert_msg)
+                    logger.error(alert_msg)
+
                 if max_step == 0 and num_valid > 1:
                     write_debug_log(f"⚠️ [Warning] Trajectory {global_idx} has {num_valid} tokens but max_step is 0. dist_to_end will be zero for all tokens!")
                 
@@ -601,15 +611,6 @@ def compute_advantage(
                 device=step_ids_tensor.device
             )
             
-            # if step_len < full_seq_len:
-            #     end_idx = prompt_length + step_len
-            #     assert end_idx <= full_seq_len, (
-            #         f"[Alignment Error] Prompt长度({prompt_length}) + Step长度({step_len}) "
-            #         f"超出了张量总长度({full_seq_len})!"
-            #     )
-            #     padded_step_ids[:, prompt_length:end_idx] = step_ids_tensor
-            # else:
-            #     padded_step_ids = step_ids_tensor
             # --- 🚀 安全截断对齐逻辑 ---
             # 计算当前 Batch 真实的 Response 容量大小
             actual_resp_len = full_seq_len - prompt_length
@@ -700,24 +701,54 @@ def compute_advantage(
         pre_norm_advantages = (w_outcome * adv_out) + (w_efficiency * adv_eff) + \
                               (w_api * adv_api * api_gate) + (w_rep * adv_rep)
 
-        # 🚀 [新增修复] Batch 级别 Advantage 全局归一化
-        # 只对有效 Token (loss_mask == 1) 进行统计，防 Padding 干扰
         final_advantages = pre_norm_advantages.clone()
         valid_mask = loss_mask.bool()
+
+        # 🚨 [关键修复] 移除破坏 GRPO 组内零和性质的 Batch 全局归一化！
+        # 直接使用截断 (Clipping) 和 NaN 托底来保证数值稳定性
         valid_advs = pre_norm_advantages[valid_mask]
-        
-        pre_norm_mean, pre_norm_std = 0.0, 0.0
-        if valid_advs.numel() > 1:
-            pre_norm_mean = valid_advs.mean().item()
-            pre_norm_std = valid_advs.std().item()
-            
-            # 对有效 Token 进行标准化 (均值 0，方差 1)
-            normalized_valid_advs = (valid_advs - pre_norm_mean) / (pre_norm_std + 1e-8)
-            final_advantages[valid_mask] = normalized_valid_advs
-        elif valid_advs.numel() == 1:
-            pre_norm_mean = valid_advs.mean().item()
-            final_advantages[valid_mask] = 0.0 # 若只有一个有效Token，优势归零
+        if valid_advs.numel() > 0:
+            # 安全托底防御
+            valid_advs = torch.nan_to_num(valid_advs, nan=0.0, posinf=5.0, neginf=-5.0)
+            # 限制最终 Advantage 绝对值，防止梯度爆炸（推荐裁切范围 -5.0 到 5.0）
+            valid_advs = torch.clamp(valid_advs, min=-5.0, max=5.0)
+            final_advantages[valid_mask] = valid_advs
         # ---------------------------------------------------------
+
+        # # ---------------------------------------------------------
+        # # BATCH归一化—————进行奖励叠加汇总 (融合门控系数)
+        # api_gate = 1.0
+        # pre_norm_advantages = (w_outcome * adv_out) + (w_efficiency * adv_eff) + \
+        #                       (w_api * adv_api * api_gate) + (w_rep * adv_rep)
+
+        # # 🚀 [新增修复] Batch 级别 Advantage 全局归一化
+        # # 只对有效 Token (loss_mask == 1) 进行统计，防 Padding 干扰
+        # final_advantages = pre_norm_advantages.clone()
+        # valid_mask = loss_mask.bool()
+        # valid_advs = pre_norm_advantages[valid_mask]
+        
+        # pre_norm_mean, pre_norm_std = 0.0, 0.0
+        # if valid_advs.numel() > 1:
+        #     pre_norm_mean = valid_advs.mean().item()
+        #     pre_norm_std = valid_advs.std().item()
+            
+        #     # 对有效 Token 进行标准化 (均值 0，方差 1)
+        #     normalized_valid_advs = (valid_advs - pre_norm_mean) / (pre_norm_std + 1e-8)
+            
+        #     # 🚨 [新增修复] NaN/Inf 防御与报警
+        #     if torch.isnan(normalized_valid_advs).any() or torch.isinf(normalized_valid_advs).any():
+        #         nan_cnt = torch.isnan(normalized_valid_advs).sum().item()
+        #         inf_cnt = torch.isinf(normalized_valid_advs).sum().item()
+        #         alert_msg = f"🚨 [CRITICAL ALERT] Advantage 归一化检测到脏数据！NaN 数量: {nan_cnt}, Inf 数量: {inf_cnt}。正在强制执行 nan_to_num 托底修复，请排查 Reward 计算逻辑！"
+        #         write_debug_log(alert_msg)
+        #         logger.error(alert_msg)
+        #         normalized_valid_advs = torch.nan_to_num(normalized_valid_advs, nan=0.0, posinf=5.0, neginf=-5.0)
+
+        #     final_advantages[valid_mask] = normalized_valid_advs
+        # elif valid_advs.numel() == 1:
+        #     pre_norm_mean = valid_advs.mean().item()
+        #     final_advantages[valid_mask] = 0.0 # 若只有一个有效Token，优势归零
+        # # ---------------------------------------------------------
 
         # 赋值回 data.batch (采用归一化后的 final_advantages)
         data.batch["advantages"] = final_advantages
@@ -856,6 +887,10 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
         self.ray_worker_group_cls = ray_worker_group_cls
         self.device_name = device_name
         self.validation_generations_logger = ValidationGenerationsLogger()
+        
+        # [NEW: Injection] 挂载 SmartLogger 用于捕获并防御各类训练崩溃风险
+        log_directory = os.environ.get("GEN_OUTPUT_DIR", "./log")
+        self.smart_logger = SmartLogger(log_dir=log_directory)
 
         self.ref_in_actor = config.actor_rollout_ref.model.get("lora_rank", 0) > 0
 
@@ -1566,9 +1601,6 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                 step_start_time = time.time()
                 main_log(f"Step {self.global_steps} (Epoch {epoch}.{i}): Started.")
 
-                if self.hindsight_manager is not None:
-                    self.train_dataset.update_hindsight_data()
-
                 metrics = {}
                 timing_raw = {}
                 batch: DataProto = DataProto.from_single_dict(batch_dict)
@@ -1850,31 +1882,6 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                             except Exception as e:
                                 print(f"[Warning] Hindsight logic encountered an error: {e}")
 
-                        # # ==================== 启动 ADCA GRPO 调整 (如果开启) ====================
-                        # if getattr(attribution_cfg, 'enable', False):
-                        #     batch, adca_metrics = apply_adca_grpo(
-                        #         batch=batch,
-                        #         attribution_cfg=attribution_cfg,
-                        #         tokenizer=self.tokenizer,
-                        #         global_steps=self.global_steps,
-                        #         epoch=epoch,
-                        #         i=i,
-                        #         llm_client=self.llm_client,
-                        #     )
-                        #     metrics.update(adca_metrics)
-                        
-                        ## 动态改变合成数据和原始数据的比例
-                        # if os.environ.get("DEBUG_ARG","").find("synth_decay")!=-1:
-                        #     if epoch==0 and i==0:
-                        #         print("DEBUG: change ratio of synthetic data from 1 to 0.5")
-                        #     assert 'extras' in batch.non_tensor_batch
-                        #     if 'extras' in batch.non_tensor_batch:
-                        #         for i in range(len(batch.non_tensor_batch['extras'])):
-                        #             assert 'evaluator' in batch.non_tensor_batch['extras'][i]
-                        #             evaluator = batch.non_tensor_batch['extras'][i]['evaluator']
-                        #             if evaluator != 'env':
-                        #                 batch.batch["advantages"][i] *= 0.5
-
                     # ==================== 开始模型更新 ====================
                     if self.use_critic:
                         with _timer("update_critic", timing_raw):
@@ -1988,6 +1995,16 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                             metrics[f"rollout/{k.split('/')[-1]}"] = np.mean(v_list)
                 
                 logger.log(data=metrics, step=self.global_steps)
+
+                # ==================== [NEW: Injection] 触发智能诊断与记录 ====================
+                self.smart_logger.log_step(
+                    step=self.global_steps,
+                    metrics=metrics,
+                    batch=batch,
+                    trajectories=trajectories,
+                    is_agent=True
+                )
+                # ==============================================================================
                 
                 step_cost = time.time() - step_start_time
                 main_log(f"Step {self.global_steps} Finished. Cost: {step_cost:.2f}s") 
@@ -1998,12 +2015,3 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                     pprint(f"Final validation metrics: {last_val_metrics}")
                     progress_bar.close()
                     return
-                
-            ## 动态改变合成数据和原始数据的比例
-            # if os.environ.get("DEBUG_ARG",'').find("ratio_decay")!=-1:
-            #     from agentevolver.module.task_manager.data_mixture import UnifiedMixtureStrategy
-            #     print("DEBUG: change ratio of synthetic data from 1 to 0.5")
-            #     assert isinstance(self.train_dataset._mixture_strategy,UnifiedMixtureStrategy)
-            #     self.train_dataset._mixture_strategy._synthetic_ratio-=1/5
-            # if self.hindsight_manager is not None:
-            #     self.train_dataset.update_hindsight_data()

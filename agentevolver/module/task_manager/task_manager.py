@@ -953,10 +953,10 @@ class TaskManager(object):
 
 class FullDataset(Dataset):
     """
-    静态 Pytorch 数据集封装：
-    用于一次性完整准备整个阶段的强化学习交互数据，通过 MixtureStrategy 调和原始分布与合成数据的比例。
+    静态数据集：一次性生成/加载所有合成任务，并与原始种子任务混合。
+    支持缓存到本地文件。
     """
-    def __init__(self, manager: TaskManager, mixture_strategy: MixtureStrategy, reward_config: RewardProps, cache_path: Optional[str] = None, *, tokenizer, config, processor):
+    def __init__(self, manager, mixture_strategy, reward_config, cache_path: Optional[str] = None, *, tokenizer, config, processor):
         self._manager = manager
         self._tasks = self._manager.seed_task_objectives
         self._mixture_strategy = mixture_strategy
@@ -970,10 +970,9 @@ class FullDataset(Dataset):
         self._objectives = []
         self._synthetic_objectives = []
 
-        # 如果混合策略判定需要依赖合成任务（如某些阶段主要学 Exploration）
+        # 如果策略需要合成数据，则加载缓存或生成新任务
         if self._mixture_strategy.need_synthetic:
             logger.info("正在准备合成任务数据...")
-            # 优先读文件，规避冗长的生成耗时
             if self._cache_path is not None and os.path.exists(self._cache_path):
                 self.load_from_file()
             else:
@@ -983,83 +982,95 @@ class FullDataset(Dataset):
         self._rebuild_dataset()
 
     def _rebuild_dataset(self):
-        """核心数据组装方法：按既定配方 (MixtureStrategy) 混合两者后转换为 RL 引擎特有格式。"""
+        """混合原始数据和合成数据，并转换为训练格式"""
         self._objectives = self._mixture_strategy.mix_data(self._synthetic_objectives, self._tasks)
+        
+        # --- 添加保护逻辑 ---
         if len(self._objectives) == 0:
             logger.error("【严重错误】没有可用的训练数据！可能是环境服务挂了，或者 Debug 模式下生成的任务全部被过滤了。")
             raise ValueError("Dataset is empty. Please check env_service status or disable debug_log.")
-        # 移交适配层转化为面向 Pytorch Dataloader 的 RlDataset
+        # -------------------
+
         self._dataset = to_rl_dataset(self._objectives, self._tokenizer, self._config, self._processor)
 
-    def update(self):
-        """提供给外部控制器的手动热更新接口。"""
-        if not self._synthetic_objectives:
-            logger.warning("No synthetic objectives available, did you call load_from_file() or reload() first?")
-        self._rebuild_dataset() 
-        logger.info("Dataset updated manually via update().")
-
-    def set_mixture_strategy(self, strategy: MixtureStrategy):
-        """动态替换数据混合策略（用于课程学习或分布偏移衰减）。"""
+    def set_mixture_strategy(self, strategy):
+        """
+        Sets the mixture strategy for the TaskManager and logs the update.
+        """
         self._mixture_strategy = strategy  
         logger.info(f"mixture strategy updated to: {type(strategy).__name__}")
 
     def save_to_file(self):
-        """将生成的合成任务物化到本地 JSONL 缓存。"""
+        """
+        Saves the JSON representation of each synthetic objective to a specified file.
+        """
         assert self._cache_path is not None
-        with open(self._cache_path, "w") as f:
+        with open(self._cache_path, "w", encoding="utf-8") as f:
             f.writelines([ob.json() + "\n" for ob in self._synthetic_objectives])  
-        logger.info(f"Saved {len(self._objectives)} objectives to {self._cache_path}")  
+        logger.info(f"Saved {len(self._synthetic_objectives)} objectives to {self._cache_path}")  
 
     def load_from_file(self):
-        """从本地缓存文件反推解析为内存里的 TaskObjective 列表。"""
+        """
+        Loads objectives from a specified file.
+        """
         if self._cache_path is None:
             logger.error("trying to load synthetic objectives from file, but cache_path is not set")
             return
         
         if os.path.exists(self._cache_path):
-            with open(self._cache_path, "r") as f:
+            # [修复] 使用按行迭代替代 readlines()，防 OOM
+            with open(self._cache_path, "r", encoding="utf-8") as f:
                 self._synthetic_objectives = []
-                # [优化 & 修复] 改为使用迭代器按行读取节省内存，同时消除了不必要的 json.loads 重复调用
                 for line in f:
-                    if not line.strip(): continue
+                    line = line.strip()
+                    if not line:
+                        continue
+                    
+                    # [修复] 只反序列化一次，提升性能
                     t = json.loads(line)
                     assert 'task' in t
-                    # 补充兜底的 query 判别标签
                     if 'open_query' not in t['task']:
-                        t['task']['open_query'] = True 
+                        t['task']['open_query'] = True # all synthetic data is open query
                     
-                    # 借助 Pydantic 强校验解析格式
                     tmp = TaskObjective.parse_obj(t)
                     if tmp.ground_truth is None:
-                        # [修复] 直接复用之前解析出的字典 t，省去 CPU 与 IO 开销
                         tmp.ground_truth = t.get('ground_truth')
                     self._synthetic_objectives.append(tmp)
         else:
             raise FileNotFoundError(f"failed to load synthetic objectives from file {self._cache_path}, file not found")
         
-        # 强校验必须带有参考答案以便作强化学习 Critic/Rewarder 纠偏
+        # check if all synthetic objectives have ground_truth
         for item in self._synthetic_objectives:
             assert item.ground_truth is not None
 
         logger.info("patching grader config to all synthetic data")
-        # 强制接管并打上对应模型打分器标签
         for item in self._synthetic_objectives:
-            item.task.evaluator=self._reward_config["synthetic_grader"]  
+            item.task.evaluator = self._reward_config["synthetic_grader"]  
 
 
     def reload_new_task(self):
-        """强制触发 TaskManager 走一轮完整的任务合成流以覆盖旧缓存。"""
+        """
+        Regenerates the synthetic objectives, updates their evaluators, and rebuilds the dataset.
+        """
         self._synthetic_objectives = self._manager.generate_task([x.task for x in self._tasks], show_progress=True)
         logger.info("patching grader config to all synthetic data")
         for item in self._synthetic_objectives:
-            item.task.evaluator=self._reward_config["synthetic_grader"]  
+            item.task.evaluator = self._reward_config["synthetic_grader"]  
+        
 
     def get_statistics(self) -> dict:
-        """获取当前组合的统计分布画像。"""
         if not self._objectives:
-            return {"total": 0, "synthetic": 0, "original": 0, "synthetic_ratio": 0.0, "strategy_info": str(self._mixture_strategy)}
+            return {
+                "total": 0,
+                "synthetic": 0,
+                "original": 0,
+                "synthetic_ratio": 0.0,
+                "strategy_info": str(self._mixture_strategy)
+            }
+
         synthetic_count = sum(1 for obj in self._objectives if obj.task.evaluator != "env")  
         original_count = len(self._objectives) - synthetic_count  
+
         return {
             "total": len(self._objectives),
             "synthetic": synthetic_count,
@@ -1069,11 +1080,14 @@ class FullDataset(Dataset):
         }
 
     def __getitem__(self, index):
-        if self._dataset is None: raise RuntimeError("Dataset not loaded.")  
+        if self._dataset is None:
+            raise RuntimeError("Dataset not loaded. Call reload() or load_from_file() first.") 
         return self._dataset[index]
 
     def __len__(self):
-        return 0 if self._dataset is None else len(self._dataset)
+        if self._dataset is None:
+            return 0
+        return len(self._dataset)
 
 class AutoReloadDataset(IterableDataset):
     """
@@ -1084,6 +1098,10 @@ class AutoReloadDataset(IterableDataset):
         self._manager = manager
         self._tasks = tasks
         self._bs = bs
+        
+        # 🚨 [关键修复] 强制转换为状态维持的迭代器，防止每次 reload 都从头取数据！
+        self._task_iter = iter(self._tasks)
+        
         self._tokenizer = tokenizer
         self._config = config
         self._processor = processor
@@ -1094,10 +1112,17 @@ class AutoReloadDataset(IterableDataset):
         触发拉取/生成下一批次所需训练数据的逻辑挂载点。
         """
         delta = []
-        for task in self._tasks:
-            delta.append(task)
-            if len(delta) == self._bs:
+        
+        # 🚨 [关键修复] 从迭代器中取出指定数量的数据，游标会自动向后移动
+        for _ in range(self._bs):
+            try:
+                delta.append(next(self._task_iter))
+            except StopIteration:
                 break
+                
+        # 如果迭代器已经耗尽（没有种子任务可以用来生成了），直接结束
+        if not delta:
+            return 0 
 
         ls = self._manager.generate_task(delta)
         
