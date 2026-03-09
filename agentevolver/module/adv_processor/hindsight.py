@@ -12,14 +12,14 @@ from loguru import logger
 # 假设项目中的基础 Schema 引用
 from agentevolver.schema.trajectory import Trajectory, Reward
 from agentevolver.schema.task import Task, TaskObjective
-# [修改] 引用新版 DashScopeClient
+# 引用新版 DashScopeClient
 from agentevolver.client.llm_client import DashScopeClient
 from agentevolver.module.task_manager.base import LlmClient
 from agentevolver.module.task_manager.env_profiles import EnvProfile
 from agentevolver.utils.step_parser import parse_response_ids_to_steps
 
 # =============================================================================
-# PART 1: Prompts & Parsing Logic (完全保留，未压缩)
+# PART 1: Prompts & Parsing Logic (已按要求更换所有例子)
 # =============================================================================
 
 AGENT_SUMMARIZE_SYSTEM_PROMPT = """# ROLE
@@ -79,17 +79,17 @@ For each identified task, output exactly one block in this format:
 # GOOD EXAMPLES
 <task>
 {
-  "query": "Do I have at least $150 in my Venmo account for this weekend's grocery shopping?",
+  "query": "Joseph paid for my grocery recently as my payment cards were not working at the time. Send them the owed money with a description note 'Grocery Bill' as per my phone text conversation, and then send them a phone text message, 'Done.'",
   "confidence": 1.0,
-  "action_sequence": "# step0\\nbalance = apis.venmo.get_balance()\\nif balance >= 150:\\n    print('Yes')\\nelse:\\n    print('No')"
+  "action_sequence": "supervisor_profile = apis.supervisor.show_profile()\\nsupervisor_passwords = {ap['account_name']: ap['password'] for ap in apis.supervisor.show_account_passwords()}\\nphone_token = apis.phone.login(username=supervisor_profile['phone_number'], password=supervisor_passwords['phone'])['access_token']\\nfriend_contact = next(item for p in range(10) for item in apis.phone.search_contacts(page_index=p, access_token=phone_token, query='Joseph') if item['first_name'] == 'Joseph')\\nyesterday_msgs = [item for p in range(10) for item in apis.phone.search_text_messages(page_index=p, access_token=phone_token, phone_number=friend_contact['phone_number']) if pendulum.parse(item['sent_at']) > DateTime.now().subtract(days=1).start_of('day')]\\npattern = re.compile(r'\\\\$(\\\\d*)')\\nfor msg in yesterday_msgs:\\n    matches = pattern.search(msg['message'])\\n    if matches: grocery_cost = int(matches[1])\\nvenmo_token = apis.venmo.login(username=supervisor_profile['email'], password=supervisor_passwords['venmo'])['access_token']\\napis.venmo.create_transaction(access_token=venmo_token, receiver_email=friend_contact['email'], amount=grocery_cost, description='Grocery Bill')\\napis.phone.send_text_message(access_token=phone_token, phone_number=friend_contact['phone_number'], message='Done.')\\napis.supervisor.complete_task(status='success')"
 }
 </task>
 
 <task>
 {
-  "query": "Find red women's heels under $100 that can be delivered by next Friday",
+  "query": "Send the following phone message to my roommates and friends, who do not have a venmo account, 'Make an account on venmo please.'",
   "confidence": 1.0,
-  "action_sequence": "# step0\\n[click('https://www.taobao.com')]\\n# step1\\n[search('red women heels price<100 delivery:2025-08-22')]"
+  "action_sequence": "supervisor_profile = apis.supervisor.show_profile()\\nsupervisor_passwords = {ap['account_name']: ap['password'] for ap in apis.supervisor.show_account_passwords()}\\nphone_token = apis.phone.login(username=supervisor_profile['phone_number'], password=supervisor_passwords['phone'])['access_token']\\ncontacts = []\\nfor rel in ['roommates', 'friends']:\\n    for p in range(10): contacts += apis.phone.search_contacts(page_index=p, access_token=phone_token, query=rel, relationship=rel)\\nvenmo_token = apis.venmo.login(username=supervisor_profile['email'], password=supervisor_passwords['venmo'])['access_token']\\nfor c in contacts:\\n    prof = apis.venmo.show_profile(email=c['email'], access_token=venmo_token)\\n    if 'message' in prof and 'Account for this email does not exist.' in prof['message']:\\n        apis.phone.send_text_message(phone_number=c['phone_number'], message='Make an account on venmo please.', access_token=phone_token)\\napis.supervisor.complete_task(status='success')"
 }
 </task>
 
@@ -183,7 +183,6 @@ def parse_tasks_from_response(base_task: Task, response: str) -> list[TaskObject
 # =============================================================================
 
 class TrajectoryEvaluator:
-    """Evaluate trajectory success using DashScopeClient (qwen3.5-plus)"""
     def __init__(self, client: DashScopeClient):
         self.client = client
 
@@ -209,17 +208,13 @@ class TrajectoryEvaluator:
     - Final Observation: {final_obs}
 
     # Evaluation Instructions
-    Carefully analyze the trajectory to determine if the task was truly completed. Specifically, consider:
-    1. **Logical Flow**: Was the sequence of steps logical without unreasonable skips?
-    2. **Final Result**: Did the final state achieve the expected outcome of the NEW Query?
-    3. **Consistency**: Does the trajectory actually perform what the query asks for?
+    Carefully analyze the trajectory to determine if the task was truly completed.
 
     # Format Your Response Strictly As:
 
     Success: [true/false]
-    Reason: [Concise and specific explanation]
+    Reason: [Concise explanation]
     """
-            # 强制使用 qwen3.5-plus，由于 evaluator 不需要高频重试，max_retries 设为 3
             response = self.client.chat_with_retry(
                 messages=[{"role": "user", "content": prompt}], 
                 model="qwen3.5-plus", 
@@ -231,7 +226,7 @@ class TrajectoryEvaluator:
             return match.group(1).lower() == "true" if match else False
             
         except Exception as e:
-            logger.error(f"Failed to evaluate trajectory: {e}")
+            logger.error(f"Evaluation failed: {e}")
             return False
     
     def _create_trajectory_summary(self, traj: Trajectory) -> str:
@@ -258,7 +253,7 @@ class HindsightManager:
         self.save_path = save_path
         self._num_threads = num_threads
         
-        # [强制注入限制] 确保 Hindsight 阶段也遵循 100 RPM / 20 并发
+        # 强制注入 100 RPM / 20 并发限制
         self._llm_client._max_rpm = 100
         self._llm_client._semaphore = threading.BoundedSemaphore(20)
         
@@ -267,7 +262,6 @@ class HindsightManager:
         self._validator = TrajectoryEvaluator(llm_client)
 
     def process_failed_batch(self, prompts, responses, scores, task_ids, threshold: float = 0.0):
-        """处理训练中的失败 Batch"""
         failed_tasks_data = []
         for i, score in enumerate(scores):
             if score <= threshold:
@@ -279,13 +273,12 @@ class HindsightManager:
 
         logger.info(f"[Hindsight] Processing {len(failed_tasks_data)} failed trajectories...")
         with ThreadPoolExecutor(max_workers=self._num_threads) as executor:
-            for traj, original_tid in failed_tasks_data:
-                executor.submit(self._execute_hindsight_strategy, traj, original_tid)
+            for traj, tid in failed_tasks_data:
+                executor.submit(self._execute_hindsight_strategy, traj, tid)
 
     def _execute_hindsight_strategy(self, traj: Trajectory, original_task_id: str):
-        """核心处理流程：反思轨迹 -> 生成新任务 -> 验证 -> 净化 -> 保存"""
         try:
-            # 1. 生成候选任务 (锁定 qwen3.5-plus)
+            # 1. 生成候选任务 (使用 qwen3.5-plus)
             sys_p, user_p = get_task_summarize_prompt(trajectories=[traj], old_objectives=[], profile=None)
             
             resp_dict = self._get_llm_chat_fn()(
@@ -299,22 +292,20 @@ class HindsightManager:
             
             valid_results = []
             for task_obj in candidate_tasks:
-                # 2. 验证新任务是否符合该轨迹 (由 Evaluator 内部锁定 qwen3.5-plus)
                 if self._validator.evaluate_trajectory_success(task_obj, traj):
                     
-                    # 3. 再次总结并重写净化 GT (符合 LLM_filter 逻辑)
-                    final_task_obj = self._rewrite_new_gt(task_obj, traj)
+                    # 3. 净化并重写 GT
+                    final_obj = self._rewrite_new_gt(task_obj, traj)
                     
-                    # 注入详细元数据
-                    unique_id = f"hind_{original_task_id}_{uuid.uuid4().hex[:6]}"
-                    final_task_obj.task.task_id = unique_id
-                    if final_task_obj.task.metadata is None: final_task_obj.task.metadata = {}
-                    final_task_obj.task.metadata.update({
+                    uid = f"hind_{original_task_id}_{uuid.uuid4().hex[:6]}"
+                    final_obj.task.task_id = uid
+                    if final_obj.task.metadata is None: final_obj.task.metadata = {}
+                    final_obj.task.metadata.update({
                         "source_task_id": original_task_id,
                         "generation_type": "hindsight_evolved",
                         "summary_analysis_process": resp_dict["content"]
                     })
-                    valid_results.append(final_task_obj)
+                    valid_results.append(final_obj)
 
             if valid_results:
                 self._save_tasks(valid_results)
@@ -323,24 +314,20 @@ class HindsightManager:
             logger.error(f"[Hindsight] Strategy failed for {original_task_id}: {e}")
 
     def _rewrite_new_gt(self, task: TaskObjective, trajectory: Trajectory) -> TaskObjective:
-        """再次调用 LLM 净化 Action Sequence"""
         sys_p, user_p = get_task_summarize_prompt([trajectory], [task], None)
         llm_out = self._get_llm_chat_fn()(
             [{"role": "system", "content": sys_p}, {"role": "user", "content": user_p}],
             model="qwen3.5-plus"
         )["content"]
         
-        # 从净化后的输出中提取第一个符合的 GT
         tasks_list = parse_tasks_from_response(task.task, llm_out)
         if tasks_list:
             task.ground_truth = tasks_list[0].ground_truth
         return task   
 
     def _get_llm_chat_fn(self, sampling_params: Optional[dict] = None) -> Callable:
-        """Helper wrap DashScopeClient"""
         def llm_chat(messages: list[dict], **kwargs) -> dict:
             params = {**(sampling_params or {}), **kwargs}
-            # 调用 client 的重试接口 (遵循 100 RPM)
             res = self._llm_client.chat_with_retry(messages=messages, **params)
             return {"role": "assistant", "content": res or ""}
         return llm_chat
@@ -354,7 +341,6 @@ class HindsightManager:
                 obs = s.get('observation_text', '').strip()
                 if act: steps.append({"role": "assistant", "content": act})
                 if obs: steps.append({"role": "user", "content": obs})
-            
             if not steps: return None
             return Trajectory(
                 data_id=data_id,
@@ -365,7 +351,6 @@ class HindsightManager:
         except: return None
 
     def _save_tasks(self, tasks: List[TaskObjective]):
-        """线程安全保存"""
         with self._lock:
             with open(self.save_path, "a", encoding="utf-8") as f:
                 for t in tasks:
@@ -378,3 +363,5 @@ class HindsightManager:
                         "timestamp": time.time()
                     }
                     f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+import uuid
