@@ -51,7 +51,7 @@ Use the following exact schema to accurately determine the `required_tables`.
 
 ### Output Format (JSON Only)
 Output valid JSON only.
-``json
+```json
 {{
     "selected_group_index": 1,
     "selected_apis": {{
@@ -64,7 +64,7 @@ Output valid JSON only.
         "app_2_name": ["table_2"]
     }}
 }}
-``
+```
 """
 
 def parse_cross_selector(response_text: str) -> dict:
@@ -73,7 +73,7 @@ def parse_cross_selector(response_text: str) -> dict:
     try:
         content = response_text.strip()
         json_str = ""
-        match = re.search(r'``(?:json)?\s*([\[\{].*?[\]\}])\s*``', content, re.DOTALL | re.IGNORECASE)
+        match = re.search(r'```(?:json)?\s*([\[\{].*?[\]\}])\s*```', content, re.DOTALL | re.IGNORECASE)
         if match:
             json_str = match.group(1)
         else:
@@ -130,7 +130,7 @@ Create a realistic, highly DIVERSE, and EXPLORATORY user command bridging multip
 Generate 1 realistic cross-app user scenario triggering the `Selected APIs` using the context of the `Real Database Content`. The query MUST require deep exploration and complex reasoning.
 
 ### Output Format (JSON Only)
-``json
+```json
 [
     {{
         "user_query": "The fuzzy, exploratory, and complex natural language instruction",
@@ -139,7 +139,7 @@ Generate 1 realistic cross-app user scenario triggering the `Selected APIs` usin
         "logic_pattern": "Pattern Name (e.g., Conditional Chaining, Aggregation, State Sync)"
     }}
 ]
-``
+```
 """
 
 def parse_cross_generator(response_text: str) -> list:
@@ -148,8 +148,8 @@ def parse_cross_generator(response_text: str) -> list:
     try:
         content = response_text.strip()
         json_str = ""
-        match_list = re.search(r'``(?:json)?\s*(\[.*?\])\s*``', content, re.DOTALL | re.IGNORECASE)
-        match_dict = re.search(r'``(?:json)?\s*(\{.*?\})\s*``', content, re.DOTALL | re.IGNORECASE)
+        match_list = re.search(r'```(?:json)?\s*(\[.*?\])\s*```', content, re.DOTALL | re.IGNORECASE)
+        match_dict = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', content, re.DOTALL | re.IGNORECASE)
         
         if match_list:
             json_str = match_list.group(1)

@@ -53,14 +53,14 @@ Use the following exact schema to accurately determine the `required_tables`.
 🚫 STRICT LIMIT: You MUST select a MAXIMUM of 2 tables per App. Prioritize the most crucial tables.
 
 ### Output Format (JSON Only)
-``json
+```json
 {{
     "selected_group_index": 1,
     "selected_apis": ["api_name_1", "api_name_2"],
     "reasoning": "Brief explanation of why this combination supports advanced/complex tasks.",
     "required_tables": ["table_name_1", "table_name_2"]
 }}
-``
+```
 """
 
 def parse_intra_selector(response_text: str) -> dict:
@@ -69,7 +69,7 @@ def parse_intra_selector(response_text: str) -> dict:
     try:
         content = response_text.strip()
         json_str = ""
-        match = re.search(r'``(?:json)?\s*([\[\{].*?[\]\}])\s*``', content, re.DOTALL | re.IGNORECASE)
+        match = re.search(r'```(?:json)?\s*([\[\{].*?[\]\}])\s*```', content, re.DOTALL | re.IGNORECASE)
         if match:
             json_str = match.group(1)
         else:
@@ -127,14 +127,14 @@ Create a realistic, highly DIVERSE, and EXPLORATORY user command within a specif
 Generate 1 realistic user scenario that naturally triggers the `Selected Target APIs` based on the context of the `Real Database Content`. The query MUST be exploratory and complex.
 
 ### Output Format (JSON Only)
-``json
+```json
 [
     {{
         "user_query": "The fuzzy, complex, exploratory natural language instruction",
         "target_api": "The exact call_name of the primary API to execute"
     }}
 ]
-``
+```
 """
 
 def parse_intra_generator(response_text: str) -> list:
@@ -143,7 +143,7 @@ def parse_intra_generator(response_text: str) -> list:
     try:
         content = response_text.strip()
         json_str = ""
-        match = re.search(r'``(?:json)?\s*(.*?)\s*``', content, re.DOTALL | re.IGNORECASE)
+        match = re.search(r'```(?:json)?\s*(.*?)\s*```', content, re.DOTALL | re.IGNORECASE)
         
         if match:
             json_str = match.group(1).strip()

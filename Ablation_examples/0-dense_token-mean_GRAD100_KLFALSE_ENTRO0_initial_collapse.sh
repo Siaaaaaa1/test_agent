@@ -92,7 +92,7 @@ log_file="log_single_mixed_${current_time}.log"
 unset CUDA_VISIBLE_DEVICES
 
 python3 -m agentevolver.main_ppo \
-    --config-path="$CONFIG_PATH" \
+    --config-path="$CONFIG_PATH" \去
     --config-name='script_config' \
     ray_init.address="auto" \
     env_service.env_url="http://localhost:8080" \
