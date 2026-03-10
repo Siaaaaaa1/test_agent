@@ -14,10 +14,12 @@ export PYTHONUNBUFFERED=1
 MASTER_ADDRESS=${MASTER_ADDRESS:-"127.0.0.1"} # 默认本机
 PORT=${PORT:-"8080"}                          # 默认8080端口
 
-# 3. 路径计算 (自动定位项目根目录)
+# 3. 路径计算 (自动定位项目根目录与工作区)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_SERVICE_DIR="$(dirname "$SCRIPT_DIR")"   # .../env_service
-PROJECT_ROOT="$(dirname "$ENV_SERVICE_DIR")" # .../test_agent
+PROJECT_ROOT="$(dirname "$ENV_SERVICE_DIR")" # 例如: /mnt/workspace/username/AgentEvolver
+WORKSPACE_DIR="$(dirname "$PROJECT_ROOT")"   # 动态获取工作区目录: /mnt/workspace/username
+
 APPWORLD_DIR="$ENV_SERVICE_DIR/environments/appworld"
 
 export APPWORLD_ROOT="$APPWORLD_DIR"
@@ -27,6 +29,7 @@ export PYTHONPATH="$PROJECT_ROOT:$APPWORLD_DIR:$PYTHONPATH"
 echo "========================================"
 echo "🚀 AppWorld Service Launcher"
 echo "📂 Project Root: $PROJECT_ROOT"
+echo "📂 Workspace: $WORKSPACE_DIR"
 echo "📂 AppWorld Root: $APPWORLD_ROOT"
 echo "🌐 Portal: $MASTER_ADDRESS:$PORT"
 echo "========================================"
@@ -35,8 +38,12 @@ echo "========================================"
 if [[ "$CONDA_DEFAULT_ENV" != "appworld" ]]; then
     echo "⚡ Activating 'appworld' conda environment..."
     
-    # 尝试寻找确切的 conda 路径 (兼顾 anaconda 和 miniconda)
-    if command -v conda &> /dev/null; then
+    # 动态寻找确切的 conda 路径 (优先检查当前项目所在的工作区目录)
+    if [ -f "$WORKSPACE_DIR/miniconda3/etc/profile.d/conda.sh" ]; then
+        CONDA_BASE="$WORKSPACE_DIR/miniconda3"
+    elif [ -f "$WORKSPACE_DIR/anaconda3/etc/profile.d/conda.sh" ]; then
+        CONDA_BASE="$WORKSPACE_DIR/anaconda3"
+    elif command -v conda &> /dev/null; then
         CONDA_BASE=$(conda info --base)
     elif [ -f "$HOME/anaconda3/etc/profile.d/conda.sh" ]; then
         CONDA_BASE="$HOME/anaconda3"

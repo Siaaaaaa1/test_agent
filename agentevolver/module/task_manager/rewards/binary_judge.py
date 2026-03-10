@@ -3,8 +3,6 @@ import threading
 from typing import Any, Optional, cast
 from loguru import logger
 from agentevolver.client.env_client import EnvClient
-
-# [修改] 只保留新创建的 DashScopeClient
 from agentevolver.client.llm_client import DashScopeClient
 from agentevolver.module.agent_flow.reward_calculator import GraderResult, RewardCalculator
 from agentevolver.schema.task import Task
@@ -15,8 +13,8 @@ from . import grader_manager
 USER_PROMPT = """### Role
 You are an expert AI agent evaluator. Your job is to judge an agent's performance using the following inputs:
 
-1) **User Task** — what the agent was supposed to accomplish.
-2) **Reference Solution** — a correct approach/outcome to compare against (other valid solutions may exist).
+1) **User Task** — what the agent was supposed to accomplish.  
+2) **Reference Solution** — a correct approach/outcome to compare against (other valid solutions may exist).  
 3) **Agent Trajectory** — chronological steps the agent took, including actions, decisions, and outputs.
 
 ### Ground Rules
@@ -30,29 +28,33 @@ You are an expert AI agent evaluator. Your job is to judge an agent's performanc
 
 ## Evaluation Procedure
 
-**Step 1 — Relevance Gate (0 or proceed)**
-- Determine if the trajectory's steps are **materially related** to the User Task.
-- If the approach is wholly unrelated → **score = 0** and stop.
+**Step 1 — Relevance Gate (0 or proceed)**  
+- Determine if the trajectory's steps are **materially related** to the User Task.  
+- If the approach is wholly unrelated → **score = 0** and stop.  
 - Otherwise, continue.
 
-**Step 2 — Repetition Penalty Gate**
-- Check for infinite/runaway repetition of identical or near-identical steps.
-  - If such repetition exists:
-    - If steps are otherwise relevant → **final score must be ≤ 20**.
-    - If steps are irrelevant → **score = 0**.
+**Step 2 — Repetition Penalty Gate**  
+- Check for infinite/runaway repetition of identical or near-identical steps.  
+  - If such repetition exists:  
+    - If steps are otherwise relevant → **final score must be ≤ 20**.  
+    - If steps are irrelevant → **score = 0**.  
 - If no infinite repetition, continue.
 
-**Step 3 — Goal Achievement (Critical Binary Check)**
-- Examine **all** steps and the final result to decide if the task is actually completed **correctly**.
-- **Compare** both the final answer **and** the solution path against the Reference Solution to validate correctness. Note that the Reference Solution is not the only correct solution, other equivalent solution should also be considered correct.
+**Step 3 — Goal Achievement (Critical Binary Check)**  
+- Examine **all** steps and the final result to decide if the task is actually completed **correctly**.  
+- **Compare** both the final answer **and** the solution path against the Reference Solution to validate correctness.  
 - Do not be misled by confident language—verify substance.
-- There are some critic details you should check:
-    - Some APIs are paginated, which is documented in the API doc. Agent must call the API multiple times to get all the data.
 
+**Critic Details**
+There are some critic details you should check:
+- Some APIs are paginated, which is documented in the API doc. Agent must call the API multiple times to get all the data.
+
+If agent does not consider these details, it may be wrong.
 
 **Step 4 — Additional Deductions (respect the above ranges)**
 - **Code Execution Errors:** Deduct for crashes, runtime errors, failed tool calls, or obvious bugs.
-- **Efficiency & Conciseness vs. Reference:** Deduct if the trajectory is substantially more roundabout, redundant, or cluttered than the reference solution, even if it is correct. Unnecessary or irrelevant steps are also penalized. However, additional steps taken solely to consult API documentation are acceptable.
+- **Efficiency & Conciseness vs. Reference:** If the trajectory is significantly more roundabout, redundant, or cluttered than the reference approach, deduct accordingly—even if correct. Unnecessary/irrelevant steps count here.
+
 ---
 
 ## Scoring Guidelines (choose a range, then adjust within it)
@@ -100,15 +102,14 @@ Please note that the average score must be maintained around {mean_score:.4f} (+
 
 def steps_to_msg(steps: list[dict[str, Any]]) -> str:
     """
-    Converts a list of step dictionaries into a single coherent string message.
+    Converts a list of step dictionaries, each containing a role ('assistant' or 'user') and content, into a formatted string that represents the entire trajectory in a structured manner.
 
     Args:
-        steps (list[dict[str, Any]]): A list of dictionaries, each representing a step in the agent's trajectory.
+        steps (list[dict[str, Any]]): A list of dictionaries, where each dictionary contains the role (either 'assistant' or 'user') and the content of the message.
 
     Returns:
-        str: A single string that concatenates all the steps into a coherent message.
+        str: A formatted string representing the entire trajectory.
     """
-    # format the trajectory
     trajectory_text = ""
     assert steps[0]['role'] == 'assistant'
     for i, msg in enumerate(steps):
@@ -126,11 +127,11 @@ def steps_to_msg(steps: list[dict[str, Any]]) -> str:
 """
         else:
             raise ValueError("roles in trajectory must be assistant or user")
-        trajectory_text += block.strip() + "\n\n"
+        trajectory_text += block.strip() + "\n\n"  # ⭐ Append the formatted block to the trajectory text
     return trajectory_text
 
-@grader_manager.reg("llm-binary-gt")
-class LlmAsJudgeBinaryRewardCalculatorWithGT(RewardCalculator):
+@grader_manager.reg("llm-binary")
+class LlmAsJudgeBinaryRewardCalculator(RewardCalculator):
     """
     RewardCalculator that uses LLM as judge.
     """
@@ -142,80 +143,94 @@ class LlmAsJudgeBinaryRewardCalculatorWithGT(RewardCalculator):
     _update_lock = threading.Lock()
 
     def __init__(self, task: Task, model_name='qwen3.5-plus', use_mean_constraint=True):
+        """
+        Initializes the reward calculator with a specific task, model name, and whether to use mean constraint.
+
+        Args:
+            task (Task): The task for which the reward is being calculated.
+            model_name (str, optional): The name of the language model to be used as the judge. Defaults to 'qwq-plus'.
+            use_mean_constraint (bool, optional): Whether to enforce a constraint on the mean score. Defaults to True.
+        """
         super().__init__(task)
-        # [修改] 使用 DashScopeClient 替换 Mix_DashScopeClient，并支持自定义 max_tokens
-        self._client = DashScopeClient(model_name=model_name, max_tokens=32768)
+        
+        self._client = DashScopeClient(model_name=model_name)
+        self._client.max_tokens=32768
         self._use_mean_constraint = use_mean_constraint
 
     @classmethod
     def update_running_mean(cls, new_score: float):
-        with cls._update_lock:
-            cls._running_judge_mean_fast = cls._alpha_fast * cls._running_judge_mean_fast + (1-cls._alpha_fast) * new_score  # ⭐ Update the fast running mean
-            cls._running_judge_mean_slow = cls._alpha_slow * cls._running_judge_mean_slow + (1-cls._alpha_slow) * new_score  # ⭐ Update the slow running mean
+        """
+        Updates the running mean of the judge scores using an exponential moving average (EMA) for both a fast and slow decay.
+        Ensures thread safety by using a lock.
+
+        Args:
+            new_score (float): The new score to be included in the running mean calculation.
+
+        Returns:
+            None
+        """
+        with cls._update_lock:  # ⭐ Acquire the lock to ensure thread safety
+            cls._running_judge_mean_fast = cls._alpha_fast * cls._running_judge_mean_fast + (1-cls._alpha_fast) * new_score
+            cls._running_judge_mean_slow = cls._alpha_slow * cls._running_judge_mean_slow + (1-cls._alpha_slow) * new_score
 
     @classmethod
     def get_running_mean(cls):
-        with cls._update_lock:
+        """
+        Returns the current running mean of the judge's scores.
+
+        Returns:
+            float: The current running mean.
+        """
+        with cls._update_lock:  # ⭐ Ensures thread safety when accessing the running mean
             return cls._running_judge_mean_fast
 
     @classmethod
     def get_stable_mean(cls):
-        with cls._update_lock:
+        """
+        Returns the current stable mean of the judge's scores.
+
+        Returns:
+            float: The current stable mean.
+        """
+        with cls._update_lock:  # ⭐ Ensures thread safety when accessing the stable mean
             return cls._running_judge_mean_slow
 
     def pack_message(self, trajectory: Trajectory):
         """
-        Pack trajectory into a message.
+        Packs the given trajectory into a message format.
 
         Args:
-            trajectory (Trajectory): The trajectory to pack.
+            trajectory (Trajectory): The trajectory to be packed into a message.
 
         Returns:
-            list: A list of messages prepared for the language model.
+            list: A list containing the packed message.
         """
-        # [DEBUG] 标记开始打包消息
-        logger.info(f"[{threading.get_ident()}] Start packing message...")
-
         messages = []
 
         assert len(trajectory.steps) >= 2 and trajectory.steps[1]['role'] == 'user', "trajectory must start with system message and then user message"
         task_query = trajectory.steps[1]['content']
-
-        # the ground-truth must be provided, for now.
-        assert self.task.ground_truth is not None, "ground truth must not be None for synthetic task"
         
+        assert self.task.ground_truth is not None, "ground truth must not be None for synthetic task"
         if self._use_mean_constraint:
-            # [DEBUG] 标记开始获取锁，用于检测是否死锁
-            logger.debug(f"[{threading.get_ident()}] Attempting to acquire locks for mean scores...")
-            
-            # 分别获取，以便确认是哪一步卡住
-            running_mean = self.get_running_mean()
-            stable_mean = self.get_stable_mean()
-            
-            logger.debug(f"[{threading.get_ident()}] Locks acquired. Means: running={running_mean}, stable={stable_mean}")
-
             content=USER_PROMPT_WITH_MEAN_CONSTRAINT.format(
                 task=task_query,
                 trajs=steps_to_msg(trajectory.steps[2:]),
-                running_mean=running_mean,
-                mean_score=stable_mean,
-                reference_trajs=self.task.ground_truth or "[No solution provided, please judge the task by yourself]"
+                running_mean=self.get_running_mean(),
+                mean_score=self.get_stable_mean(),
+                reference_trajs="[No solution provided, please judge the task by yourself]"
             )
         else:
             content=USER_PROMPT.format(
                 task=task_query,
                 trajs=steps_to_msg(trajectory.steps[2:]),
-                reference_trajs=self.task.ground_truth or "[No solution provided, please judge the task by yourself]"
+                reference_trajs="[No solution provided, please judge the task by yourself]"
             )
         messages.append(
             {
                 "role": "user",
-                "content": content  # ⭐ Construct the content of the message
+                "content": content  # ⭐ Constructs the content of the message based on the trajectory and other parameters
             }
         )
-        
-        # [DEBUG] 打包完成
-        logger.info(f"[{threading.get_ident()}] Message packing finished.")
         return messages
 
     def calculate_reward(self, trajectory: Trajectory, env: EnvClient, instance_id: str) -> GraderResult:
@@ -228,70 +243,41 @@ class LlmAsJudgeBinaryRewardCalculatorWithGT(RewardCalculator):
 
     def _calculate_reward(self, trajectory: Trajectory, env: EnvClient, *, eject_llm_output: bool = False):
         """
-        Calculate the reward for a given trajectory in a specific environment by querying an LLM.
+        Evaluates a given trajectory in a specific environment by interacting with a language model (LLM) to get a response,
+        then parses this response to calculate a reward score. The score is based on whether there was a critical failure,
+        the intent comprehension, and the correctness of the completion. If `eject_llm_output` is set to `True`, it also
+        returns the raw LLM response.
 
         Args:
-            trajectory (Trajectory): The trajectory for which the reward is to be calculated.
-            env (EnvClient): The environment in which the trajectory was executed.
-            eject_llm_output (bool, optional): If True, the function will return both the score and the LLM's response. Defaults to False.
+            trajectory (Trajectory): The trajectory to evaluate.
+            env (EnvClient): The environment where the trajectory is executed.
+            eject_llm_output (bool, optional): Whether to return the raw LLM response. Defaults to False.
 
         Returns:
-            float or tuple: The calculated reward score, or a tuple containing the score and the LLM's response if `eject_llm_output` is True.
+            float or tuple: The calculated reward score, and optionally the raw LLM response if `eject_llm_output` is True.
         """
-        # [DEBUG] 进入函数
-        logger.info(f"[{threading.get_ident()}] Entering _calculate_reward...")
-        
-        try:
-            messages = self.pack_message(trajectory)
-        except Exception as e:
-            logger.error(f"[{threading.get_ident()}] Error in pack_message: {e}")
-            raise e
-
-        response = ""
-        # [DEBUG] 准备发起 LLM 请求
-        logger.info(f"[{threading.get_ident()}] Starting LLM chat stream (max_retries=64)...")
-        
-        try:
-            chunk_count = 0
-            # [DEBUG] 进入流式循环
-            for chunk in self._client.chat_stream_with_retry(messages=messages, max_retries=64):
-                response += chunk
-                chunk_count += 1
-                # 仅打印前几个 chunk 和每隔一定数量的 chunk，证明流还在动
-                if chunk_count == 1 or chunk_count % 20 == 0:
-                    logger.debug(f"[{threading.get_ident()}] Receiving chunk #{chunk_count}, current len: {len(response)}")
-            
-            # [DEBUG] 请求循环结束
-            logger.info(f"[{threading.get_ident()}] LLM chat stream finished. Total response length: {len(response)}")
-            
-        except Exception as e:
-            logger.error(f"[{threading.get_ident()}] Exception during LLM chat stream: {e}")
-            # 记录完整堆栈以备排查
-            import traceback
-            logger.error(traceback.format_exc())
-            
+        response=""
+        for chunk in self._client.chat_stream_with_retry(messages=self.pack_message(trajectory),max_retries=64):
+            response += chunk
         if response:
-            # [DEBUG] 开始正则解析
-            logger.debug(f"[{threading.get_ident()}] Parsing response for reward...")
+            import re
             reward_match = re.search(r'<reward>([\d\.]+)</reward>', response.strip())
             if reward_match:
                 score = float(reward_match.group(1))
-                score = max(0.0, min(100.0, score)) / 100.0  # ⭐ Normalize the score to a range of [0, 1]
-                logger.info(f"[{threading.get_ident()}] Score parsed successfully: {score}")
+                score = max(0.0, min(100.0, score))/100.0
             else:
-                logger.warning(f"[{threading.get_ident()}] Could not parse score from response. Response prefix: {response[:100]}...")
-                score = 0.0
+                print(f"Could not parse score from response: {response}")
+                score=0.0
         else:
-            logger.error(f"[{threading.get_ident()}] No response from evaluation API (response is empty)")
-            score = 0.0
-
+            print("No response from evaluation API")
+            score=0.0
+        
         if not eject_llm_output:
             return score
         else:
-            return score, response
+            return score,response
 
-@grader_manager.reg("llm-binary-gt-no_constraint")
-class LlmAsJudgeBinaryRewardCalculatorWithGTNoConstraint(LlmAsJudgeBinaryRewardCalculatorWithGT):
-    # [修改] 默认模型改为 qwen3.5-plus
-    def __init__(self, task: Task, model_name='qwen3.5-plus'):
+@grader_manager.reg("llm-binary-no_constraint")
+class LlmAsJudgeBinaryRewardCalculatorNoConstraint(LlmAsJudgeBinaryRewardCalculator):
+    def __init__(self, task: Task, model_name='qwen3-235b-a22b-instruct-2507'):
         super().__init__(task, model_name, use_mean_constraint=False)
