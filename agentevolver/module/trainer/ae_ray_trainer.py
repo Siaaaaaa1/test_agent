@@ -84,7 +84,7 @@ from verl.utils.metric import reduce_metrics
 # 用于在优势函数 (Advantage) 计算时捕获底层数据的具体分布，排查对齐问题。
 # =============================================================================
 
-DEBUG_BASE_DIR = "/mnt/cephfs/haowengao/test_agent/GEN_NEW_DATA"
+DEBUG_BASE_DIR = "./GEN_NEW_DATA"
 try:
     os.makedirs(DEBUG_BASE_DIR, exist_ok=True)
 except Exception as e:
