@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -e
-export PYTHONNOUSERSITE=1
+
 echo "Installing AgentEvolver environment..."
 echo
 
@@ -23,7 +23,7 @@ fi
 echo
 echo "📦 Creating environment '$ENV_NAME'..."
 conda create -y -n "$ENV_NAME" python=3.11
-export PATH=$CONDA_PREFIX/bin:$PATH
+
 # ---- Step 4. Activate environment ----
 # shellcheck disable=SC1091
 source "$(conda info --base)/etc/profile.d/conda.sh"
