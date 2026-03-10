@@ -125,7 +125,7 @@ class LlmFilter(TaskPostFilter):
         优先使用性价比高且速度快的 qwen3.5-plus，
         如果失败（报错或得分不达标），降级切换至能力更强的 qwen3-max。
         """
-        candidate_models = ["qwen3.5-plus", "qwen3-max"]
+        candidate_models = ["qwen3.5-plus"]
         
         for attempt, model_name in enumerate(candidate_models):
             try:

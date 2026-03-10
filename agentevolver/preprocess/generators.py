@@ -188,7 +188,7 @@ class TaskAppLabeler:
             print("⚠️ 警告: 未检测到 DASHSCOPE_API_KEY，LLM 调用将失败。")
         
         try:
-            self.client = DashScopeClient(model_name="qwen-plus", temperature=0.0)
+            self.client = DashScopeClient(model_name="qwen3.5-plus", temperature=0.0)
         except Exception as e:
             print(f"Client 初始化失败: {e}")
             self.client = None

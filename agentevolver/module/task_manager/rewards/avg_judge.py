@@ -100,6 +100,6 @@ class AvgLlmJudge(AvgJudge):
         for i in range(n):
             self.add_judge(
                 LlmAsJudgeRewardCalculator(
-                    task, model_name="qwq-plus"
+                    task, model_name="qwen3.5-plus"
                 )
             )  # ⭐ Adds a judge with a standard reward calculator

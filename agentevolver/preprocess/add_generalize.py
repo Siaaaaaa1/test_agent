@@ -1,17 +1,14 @@
 import json
 import os
-import time
 import threading
-from typing import Any, Optional
 from loguru import logger
-import requests
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from agentevolver.client.llm_client import DashScopeClient
+
 # ================= 配置区域 =================
-DASHSCOPE_API_KEY = "sk-25678a0b18d24afa86d3185f736fd886"
-DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-MODEL_NAME = "qwen-plus"
+MODEL_NAME = "qwen3.5-plus"
 
 INPUT_PATH = "/Users/sianeko/vscode/AgentEvolver/agentevolver/preprocess/output/appworld_tool_manual.json"
 OUTPUT_PATH = "/Users/sianeko/vscode/AgentEvolver/agentevolver/preprocess/output/appworld_tool_manual_with_generality.json"
@@ -20,54 +17,6 @@ REASON_OUTPUT_PATH = "/Users/sianeko/vscode/AgentEvolver/agentevolver/preprocess
 MAX_WORKERS = 8       # 并行线程数
 SAVE_INTERVAL = 10    # 每完成 10 个 API 保存一次文件
 # ===========================================
-
-class LlmException(Exception):
-    def __init__(self, typ: str):
-        self._type = typ
-    @property
-    def typ(self):
-        return self._type
-
-class DashScopeClient:
-    def __init__(self, api_key: Optional[str] = None, model_name: str = "qwen-plus", 
-                 temperature: float = 0.7, max_tokens: int = 2048, base_url: Optional[str] = None):
-        raw_key = api_key or os.getenv("DASHSCOPE_API_KEY")
-        if not raw_key:
-            raise ValueError("API key is required.")
-        self.api_key = raw_key.strip().strip('"').strip("'")
-        self.model_name = model_name
-        self.temperature = temperature
-        self.max_tokens = max_tokens
-        self.base_url = base_url or "https://dashscope.aliyuncs.com/compatible-mode/v1"
-        self.headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-
-    def chat_completion(self, messages: list[dict[str, str]], **kwargs) -> str:
-        url = f"{self.base_url.rstrip('/')}/chat/completions"
-        params = {
-            "model": self.model_name,
-            "messages": messages,
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
-            **kwargs
-        }
-        response = requests.post(url, headers=self.headers, json=params, timeout=60)
-        if not response.ok:
-            response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"].strip()
-
-    def chat_with_retry(self, messages: list[dict[str, str]], max_retries: int = 3) -> str:
-        for attempt in range(max_retries):
-            try:
-                return self.chat_completion(messages)
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)
-                else:
-                    raise e
-        return ""
 
 class GeneralityEvaluator:
     def __init__(self, client: DashScopeClient):
@@ -130,7 +79,7 @@ def save_now(data, reasons, lock):
 
 def main():
     # 1. 初始化
-    client = DashScopeClient(api_key=DASHSCOPE_API_KEY)
+    client = DashScopeClient(model_name=MODEL_NAME)
     evaluator = GeneralityEvaluator(client)
     file_lock = threading.Lock()
 

@@ -48,10 +48,7 @@ export GEN_OUTPUT_DIR="/mnt/cephfs/haowengao/test_agent/GEN_NEW_DATA"
 mkdir -p "$GEN_OUTPUT_DIR"
 
 # ---- 2. 环境变量 ----
-export http_proxy=http://hk-mmhttpproxy.woa.com:11113
-export https_proxy=http://hk-mmhttpproxy.woa.com:11113
-export no_proxy="localhost,127.0.0.1,::1,0.0.0.0,29.209.112.175,.woa.com"
-export NO_PROXY=$no_proxy
+
 export PYTHONUNBUFFERED=1
 export VLLM_ENFORCE_EAGER=True
 export VLLM_ATTENTION_BACKEND=FLASH_ATTN 

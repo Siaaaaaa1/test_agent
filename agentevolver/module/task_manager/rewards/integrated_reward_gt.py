@@ -1,156 +1,16 @@
 import re
 import time
-import json
-import os
 import threading
-from typing import Any, Optional, cast, Generator, List, Dict, Tuple
+from typing import Any, List, Dict, Tuple
 from loguru import logger
-import requests
-
-# 尝试加载 dotenv
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
 
 # --- 内部模块引入 ---
 from agentevolver.client.env_client import EnvClient
+from agentevolver.client.llm_client import DashScopeClient
 from agentevolver.module.agent_flow.reward_calculator import GraderResult, RewardCalculator
 from agentevolver.schema.task import Task
 from agentevolver.schema.trajectory import Trajectory
 from . import grader_manager
-
-# ==============================================================================
-# SECTION 1: Embedded LLM Client (Azure GPT-5 Mini Specific)
-# ==============================================================================
-
-class _EmbeddedAzureClient:
-    """
-    内置的 Azure Client，专门用于 Reward Calculation。
-    包含：速率限制、并发控制、以及增强的调试日志。
-    """
-    def __init__(self):
-        self.model_name = "azure-gpt-5-mini" 
-        self.base_url = os.getenv("AZURE_PROXY_URL") or "http://ichatproxy.devops.weread.woa.com"
-        # 默认并发限制
-        self._semaphore = threading.BoundedSemaphore(5) 
-        self._rate_limit_lock = threading.Lock()
-        self._request_timestamps = []
-        self._max_rpm = 40 
-        
-        self.headers = {"Content-Type": "application/json"}
-
-    def _wait_for_rate_limit(self):
-        window_duration = 60.0
-        while True:
-            with self._rate_limit_lock:
-                now = time.time()
-                self._request_timestamps = [t for t in self._request_timestamps if now - t < window_duration]
-                if len(self._request_timestamps) < self._max_rpm:
-                    self._request_timestamps.append(now)
-                    return
-                wait_time = window_duration - (now - self._request_timestamps[0])
-            if wait_time > 0:
-                time.sleep(wait_time + 0.05)
-
-    def chat_stream_with_retry(self, messages: list[dict[str, str]], max_retries: int = 3) -> Generator[str, None, None]:
-        """流式对话，带重试机制"""
-        last_error = None
-        for attempt in range(max_retries):
-            try:
-                yield from self._do_stream_request(messages)
-                return 
-            except Exception as e:
-                last_error = e
-                logger.warning(f"[_EmbeddedClient] Attempt {attempt+1}/{max_retries} failed: {e}")
-                if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)
-        
-        # 重试耗尽后，抛出异常以便上层捕获
-        logger.error(f"[_EmbeddedClient] All {max_retries} attempts failed.")
-        raise last_error or Exception("Unknown error after retries")
-
-    def _do_stream_request(self, messages: list[dict[str, str]]) -> Generator[str, None, None]:
-        """实际执行请求，包含锁和超时设置"""
-        url = f"{self.base_url.rstrip('/')}/api/chat_completions?source=emoji_agent_research"
-        params = {
-            "model": self.model_name,
-            "messages": messages,
-            "stream": True
-        }
-        no_proxy = {"http": None, "https": None}
-
-        # 1. 获取信号量
-        logger.info(f"🚦 [Judge-Client] Semaphore Status: {self._semaphore._value}/5 slots free. Thread {threading.get_ident()} trying to enter...")
-        
-        with self._semaphore:
-            self._wait_for_rate_limit()
-            
-            # 2. 发起请求
-            start_req = time.time()
-            # 注意：timeout=(连接超时, 读取超时)
-            response = requests.post(
-                url, headers=self.headers, json=params, stream=True,
-                timeout=(10, 120), proxies=no_proxy
-            )
-            
-            # [DEBUG] 打印响应头信息
-            ct = response.headers.get('Content-Type', '')
-            logger.info(f"📡 [Judge-Net] Response Code: {response.status_code}, Content-Type: {ct}, Latency: {time.time()-start_req:.2f}s")
-
-            if not response.ok:
-                try:
-                    err_msg = response.text[:200]
-                except: err_msg = "Cannot read text"
-                logger.error(f"API Error: {response.status_code} - {err_msg}")
-                response.raise_for_status()
-
-            # 3. 解析流式响应
-            has_valid_data = False
-            line_count = 0
-            
-            for line in response.iter_lines():
-                if line:
-                    line_count += 1
-                    line_str = line.decode('utf-8').strip()
-                    if not line_str: continue
-
-                    # ---------------------------------------------------------
-                    # [修复核心] 兼容两种流式格式：
-                    # 1. 标准 SSE: "data: {...}"
-                    # 2. 裸 JSON (NDJSON): "{...}"
-                    # ---------------------------------------------------------
-                    
-                    json_str = None
-                    if line_str.startswith('data: '):
-                        temp = line_str[6:]
-                        if temp == '[DONE]': break
-                        json_str = temp
-                    elif line_str.startswith('{') and line_str.endswith('}'):
-                        # 捕获直接返回 JSON 的情况
-                        json_str = line_str
-                    
-                    if json_str:
-                        try:
-                            chunk = json.loads(json_str)
-                            # 提取 content
-                            if "choices" in chunk and len(chunk["choices"]) > 0:
-                                delta = chunk["choices"][0].get("delta", {})
-                                content = delta.get("content", "")
-                                if content: 
-                                    has_valid_data = True
-                                    yield content
-                        except json.JSONDecodeError:
-                            logger.warning(f"⚠️ [Judge-Format] JSON decode failed for line: '{line_str[:50]}...'")
-                            continue
-                    else:
-                        # 确实无法识别的格式，且不是空行
-                        if line_count <= 3:
-                            logger.warning(f"⚠️ [Judge-Format] Ignored line: '{line_str[:100]}...'")
-
-            if line_count > 0 and not has_valid_data:
-                logger.error(f"❌ [Judge-Logic] Received {line_count} lines but found NO valid content.")
 
 
 # ==============================================================================
@@ -273,7 +133,7 @@ def steps_to_msg(steps: list[dict[str, Any]]) -> str:
 class IntegratedRewardCalculator_GT(RewardCalculator):
     def __init__(self, task: Task):
         super().__init__(task)
-        self._client = _EmbeddedAzureClient()
+        self._client = DashScopeClient()
 
     def pack_message(self, trajectory: Trajectory) -> List[Dict]:
         if not trajectory.steps or len(trajectory.steps) < 2:
@@ -318,7 +178,7 @@ class IntegratedRewardCalculator_GT(RewardCalculator):
         wd_thread.start()
         # -----------------------------
 
-        logger.info(f"[{task_id}] 🟢 Start calculating reward (Azure-GPT-5-Mini with GT)...")
+        logger.info(f"[{task_id}] 🟢 Start calculating reward (DashScope qwen3.5-plus with GT)...")
         start_time = time.time()
         response_text = ""
         

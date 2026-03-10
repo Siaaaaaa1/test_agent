@@ -18,19 +18,24 @@
 环境采样 (Rollout)、优势评估 (Advantage Computation)、模型更新等一系列核心训练循环动作。
 """
 
+# =============================================================================
+# 模块导入
+# =============================================================================
+
+# --- 标准库 ---
 import os
 import uuid
 import json
 import time
 import random
 import warnings
+from collections import Counter, defaultdict
+from concurrent.futures.thread import ThreadPoolExecutor
 from copy import deepcopy
 from pprint import pprint
-from collections import defaultdict
-from concurrent.futures.thread import ThreadPoolExecutor
 from typing import List, Optional, Any
 
-from collections import Counter
+# --- 第三方库 ---
 import numpy as np
 import ray
 import torch
@@ -38,10 +43,10 @@ import torch.nn.functional as F
 from omegaconf import OmegaConf, open_dict
 from tqdm import tqdm
 from loguru import logger
-
 from torch.utils.data import SequentialSampler, IterableDataset, Dataset, RandomSampler
 from torchdata.stateful_dataloader import StatefulDataLoader
 
+# --- 项目内部模块 ---
 from agentevolver.client.env_client import EnvClient
 from agentevolver.module.task_manager.task_manager import AutoReloadDataset, FullDataset
 from agentevolver.utils.metric_utils import (
@@ -57,7 +62,9 @@ from agentevolver.schema.trajectory import Trajectory
 from agentevolver.utils.tracking import ValidationGenerationsLogger
 from agentevolver.module.adv_processor.adca_grpo_pipeline import apply_adca_grpo
 from agentevolver.module.exp_manager.exp_manager import ExperienceManager
+from agentevolver.utils.smart_logger import SmartLogger
 
+# --- verl 框架模块 ---
 from verl import DataProto
 from verl.single_controller.ray import RayClassWithInitArgs, create_colocated_worker_cls
 from verl.single_controller.ray.base import RayWorkerGroup
@@ -71,11 +78,9 @@ from verl.trainer.ppo.reward import compute_reward, compute_reward_async
 from verl.utils.dataset.rl_dataset import RLHFDataset
 from verl.utils.metric import reduce_metrics
 
-# [NEW: Injection] 引入 SmartLogger
-from agentevolver.utils.smart_logger import SmartLogger
 
 # =============================================================================
-# [调试日志工具]
+# 调试日志工具
 # 用于在优势函数 (Advantage) 计算时捕获底层数据的具体分布，排查对齐问题。
 # =============================================================================
 
@@ -94,26 +99,26 @@ def get_token_context_string(tokenizer, input_ids_tensor, batch_idx, token_idx, 
     """
     if input_ids_tensor is None or tokenizer is None:
         return ""
-    
+
     seq_len = input_ids_tensor.size(1)
     start_idx = max(0, token_idx - window)
     end_idx = min(seq_len, token_idx + window + 1)
-    
+
     context_str = ""
     for i in range(start_idx, end_idx):
         token_id = input_ids_tensor[batch_idx, i].item()
-        
+
         # 防御性编程：防止传入 -100 等忽略标签导致 decode 崩溃
         if token_id < 0:
             token_text = f"<unk_{token_id}>"
         else:
             token_text = tokenizer.decode([token_id]) if tokenizer else str(token_id)
-        
+
         if i == token_idx:
             context_str += f"【{token_text}】"  # 高亮目标 Token
         else:
             context_str += token_text
-            
+
     return repr(context_str) # 使用 repr 使得 \n 等转义字符可视化
 
 def write_debug_log(msg):
@@ -128,35 +133,36 @@ def write_debug_log(msg):
         print(f"[LOG ERROR] Failed to write to {DEBUG_LOG_FILE}: {e}")
         print(msg)
 
+
 # =============================================================================
-# [优势函数计算模块]
+# 奖励解析与优势计算工具函数
 # 以下函数负责不同的奖励和优势函数的精细计算与 Token 对齐。
 # =============================================================================
 
 def compute_single_component_advantage(
-    token_level_rewards: torch.Tensor, 
-    response_mask: torch.Tensor, 
-    uid_index: np.ndarray, 
-    norm_by_std: bool = True, 
+    token_level_rewards: torch.Tensor,
+    response_mask: torch.Tensor,
+    uid_index: np.ndarray,
+    norm_by_std: bool = True,
     epsilon: float = 1e-8,
     mode: str = "sparse",
-    tokenizer = None,          
-    input_ids = None,          
-    component_name: str = "Unknown" 
+    tokenizer = None,
+    input_ids = None,
+    component_name: str = "Unknown"
 ):
     """
     [用途]: 计算单维度（如 API 奖励、Repetition 奖励）的优势函数值，支持 dense（密集）与 sparse（稀疏）计算模式。
     """
     do_debug_print = True
-    
+
     if mode == "dense":
         # 密集模式：不进行分组归一化，直接保留原 Token 分数
         advantage_component = token_level_rewards * response_mask
-        
+
         if do_debug_print and input_ids is not None:
             bsz = token_level_rewards.shape[0]
-            log_lines = [] 
-            
+            log_lines = []
+
             # 记录 Batch 中所有的非 0 奖励分布，用于校验对齐是否正确
             for i in range(bsz):
                 valid_indices = torch.nonzero(response_mask[i]).squeeze(-1)
@@ -165,23 +171,23 @@ def compute_single_component_advantage(
                     if rew != 0.0:
                         context_str = get_token_context_string(tokenizer, input_ids, i, orig_token_idx.item(), window=10)
                         log_lines.append(f"    [Traj {i:2d}] Abs_Token_Idx [{orig_token_idx.item():4d}] | Reward: {rew:8.4f} | Context: {context_str}")
-            
+
             if log_lines:
                 write_debug_log(f"\n>>> [Advantage Logic - Micro] {component_name} (Dense Mode) ALL Non-zero assignments in Batch:")
                 for line in log_lines:
                     write_debug_log(line)
             else:
                 write_debug_log(f"\n>>> [Advantage Logic - Micro] {component_name} (Dense Mode): All rewards are 0.0 for ALL trajectories in this Batch.")
-                        
+
         return advantage_component
 
     elif mode == "sparse":
         # 稀疏模式：通常用于基于组 (Group-based / GRPO) 的计算，首先计算总分，再做组内归一化
-        scores = token_level_rewards.sum(dim=-1) 
+        scores = token_level_rewards.sum(dim=-1)
         id2score = defaultdict(list)
         id2mean, id2std = {}, {}
         bsz = scores.shape[0]
-        
+
         for i in range(bsz):
             id2score[uid_index[i]].append(scores[i])
 
@@ -216,34 +222,34 @@ def compute_outcome_advantage_dual_strategy(
     uid_index: np.ndarray,
     data_ids: list = None,   # [新增] 用于校验任务一致性
     gamma: float = 1.0,
-    strategy: str = "normalize_then_decay", 
+    strategy: str = "normalize_then_decay",
     epsilon: float = 1e-8,
     norm_adv_by_std: bool = True,
-    tokenizer = None,       
-    input_ids = None,       
-    step_ids = None,        
-    step_info: str = ""     
+    tokenizer = None,
+    input_ids = None,
+    step_ids = None,
+    step_info: str = ""
 ):
     """
     [重构版]: 增加了严格的组校验、DataID一致性检查、NaN防御以及兜底策略分支。
     """
-    raw_scores = token_level_rewards.sum(dim=-1) 
+    raw_scores = token_level_rewards.sum(dim=-1)
     lengths = response_mask.sum(dim=-1)
     bsz = raw_scores.shape[0]
-    
+
     # 建立索引映射，同时记录 data_id
     id2data = defaultdict(list)
     for i in range(bsz):
         d_id = data_ids[i] if data_ids is not None else "Unknown"
         id2data[uid_index[i]].append({
-            "score": raw_scores[i], 
-            "length": lengths[i], 
-            "idx": i, 
+            "score": raw_scores[i],
+            "length": lengths[i],
+            "idx": i,
             "data_id": d_id
         })
 
     dense_advantages = torch.zeros_like(token_level_rewards)
-    do_debug_print = True 
+    do_debug_print = True
 
     if do_debug_print:
         write_debug_log(f"\n=========================================================")
@@ -266,12 +272,12 @@ def compute_outcome_advantage_dual_strategy(
         g_scores = torch.stack([it["score"] for it in items])
         g_lens = torch.stack([it["length"] for it in items])
         g_idxs = [it["idx"] for it in items]
-        
+
         # --- 3. 标量优势计算与 NaN 防御 ---
         if strategy == "normalize_then_decay":
             g_mean = g_scores.mean()
             g_std = g_scores.std()
-            
+
             # 如果组内所有样本得分完全一样（g_std=0），优势应为 0 避免除以 0
             if g_std < epsilon:
                 g_adv = torch.zeros_like(g_scores)
@@ -288,19 +294,19 @@ def compute_outcome_advantage_dual_strategy(
             adv_scalar = g_adv[local_i]
             current_mask = response_mask[global_idx]
             valid_indices = torch.nonzero(current_mask).squeeze(-1)
-            
+
             if valid_indices.numel() == 0:
                 continue
-                
+
             num_valid = valid_indices.numel()
-            
+
             # 计算 dist_to_end
             if step_ids is not None:
                 safe_valid_indices = torch.clamp(valid_indices, max=step_ids.size(1) - 1)
                 traj_step_ids = step_ids[global_idx, safe_valid_indices]
-                
+
                 max_step = traj_step_ids.max()
-                
+
                 # [幽灵惩罚检测] 检查是否有 valid token 的 step_id 为 0，但整体 max_step > 0
                 zero_step_mask = (traj_step_ids == 0)
                 if max_step > 0 and zero_step_mask.any():
@@ -311,11 +317,11 @@ def compute_outcome_advantage_dual_strategy(
 
                 if max_step == 0 and num_valid > 1:
                     write_debug_log(f"⚠️ [Warning] Trajectory {global_idx} has {num_valid} tokens but max_step is 0. dist_to_end will be zero for all tokens!")
-                
+
                 dist_to_end = (max_step - traj_step_ids).float().clamp(min=0)
             else:
                 dist_to_end = torch.zeros(num_valid, device=raw_scores.device)
-                
+
             # 应用时序衰减
             # 注意：如果发现梯度不一致，尝试将 gamma 设为 1.0 (等额分配) 观察是否好转
             token_advs = adv_scalar * (gamma ** dist_to_end)
@@ -331,23 +337,23 @@ def parse_reward_from_dataproto(data: DataProto, return_dict=False) -> dict | to
     """
     device = data.batch["input_ids"].device
     full_seq_shape_tensor = data.batch["input_ids"]
-    
+
     # 初始化不同类型奖励 Tensor
     outcome_tensor = torch.zeros_like(full_seq_shape_tensor, dtype=torch.float32, device=device)
     api_tensor = torch.zeros_like(full_seq_shape_tensor, dtype=torch.float32, device=device)
     rep_tensor = torch.zeros_like(full_seq_shape_tensor, dtype=torch.float32, device=device)
     eff_tensor = torch.zeros_like(full_seq_shape_tensor, dtype=torch.float32, device=device)
-    
+
     reward_extra_info = defaultdict(list)
     prompt_lengths = data.batch["prompts"].shape[-1]
-    
+
     response_mask = data.batch["attention_mask"][:, prompt_lengths:]
     response_lengths = response_mask.sum(dim=1)
     step_ids = data.batch.get("step_ids", None)
 
     # 过滤无效响应序列以防越界
     valid_response_mask = (response_lengths > 0)
-    
+
     last_token_indices = prompt_lengths + response_lengths - 1
     max_len = full_seq_shape_tensor.shape[1]
     last_token_indices = torch.clamp(last_token_indices, max=max_len - 1)
@@ -355,7 +361,7 @@ def parse_reward_from_dataproto(data: DataProto, return_dict=False) -> dict | to
     batch_indices = torch.arange(len(data), device=device)
     reward_scores_obj = data.non_tensor_batch["reward_scores"]
     outcome_list = [item["outcome"] for item in reward_scores_obj]
-    
+
     # 设置 Outcome Reward
     if valid_response_mask.any():
         valid_batch_idxs = batch_indices[valid_response_mask]
@@ -371,33 +377,33 @@ def parse_reward_from_dataproto(data: DataProto, return_dict=False) -> dict | to
 
     # 设置 Step 维度的 API 和 Repetition 奖励
     if step_ids is not None:
-        batch_size, seq_len = step_ids.shape 
+        batch_size, seq_len = step_ids.shape
         api_scores_batch = [item.get("step_api_rewards", []) for item in reward_scores_obj]
         rep_scores_batch = [item.get("step_repetition_rewards", []) for item in reward_scores_obj]
 
         for b in range(batch_size):
-            if not valid_response_mask[b]: continue 
+            if not valid_response_mask[b]: continue
 
             valid_steps = step_ids[b]
             cur_api = api_scores_batch[b]
             cur_rep = rep_scores_batch[b]
-            
+
             for t in range(seq_len):
                 if t >= response_lengths[b]: break
                 s_id = valid_steps[t].item()
                 if s_id < 0: continue
-                
+
                 # 判断当前 Token 是否是步骤的最后一个 Token
                 is_last_token_of_step = (t == seq_len - 1) or \
                                         (t + 1 < seq_len and step_ids[b, t+1].item() != s_id) or \
                                         (t + 1 >= response_lengths[b])
-                
+
                 if is_last_token_of_step:
                     write_pos = prompt_lengths + t
                     if write_pos < max_len:
-                        if s_id < len(cur_api): 
+                        if s_id < len(cur_api):
                             api_tensor[b, write_pos] = cur_api[s_id]
-                        if s_id < len(cur_rep): 
+                        if s_id < len(cur_rep):
                             rep_tensor[b, write_pos] = cur_rep[s_id]
 
     data.batch["outcome_reward_tensor"] = outcome_tensor
@@ -434,7 +440,7 @@ def union_gen_batch_via_task_id(tasks, batch: DataProto, gen_batch_output: DataP
         if group_ids.dim() > 1:
             group_ids = group_ids.squeeze(-1)
         group_ids_list = group_ids.tolist()
-        
+
         if isinstance(group_ids_list, list) and len(group_ids_list) == len(gen_batch_output) and max(group_ids_list) < len(batch):
             logger.info(f"✅ Successfully aligned {len(gen_batch_output)} trajectories using native 'group_ids'.")
             batch_extend = batch.select_idxs(group_ids_list)
@@ -443,17 +449,17 @@ def union_gen_batch_via_task_id(tasks, batch: DataProto, gen_batch_output: DataP
     # Fallback：基于 Token 内容做指纹匹配
     logger.warning("⚠️ Native 'group_ids' not found or invalid. Falling back to Token-based fingerprint matching.")
     prompt_to_batch_idx = defaultdict(list)
-    
+
     for i in range(len(batch)):
         p_tensor = batch.batch['prompts'][i]
         core_tokens = tuple(tok for tok in p_tensor.tolist() if tok > 10)
         prompt_to_batch_idx[core_tokens].append(i)
-        
+
     indices = []
     for j in range(len(gen_batch_output)):
         p_tensor = gen_batch_output.batch['prompts'][j]
         core_tokens = tuple(tok for tok in p_tensor.tolist() if tok > 10)
-        
+
         if core_tokens in prompt_to_batch_idx and len(prompt_to_batch_idx[core_tokens]) > 0:
             idx = prompt_to_batch_idx[core_tokens][0]
             indices.append(idx)
@@ -461,7 +467,7 @@ def union_gen_batch_via_task_id(tasks, batch: DataProto, gen_batch_output: DataP
             error_msg = f"[CRITICAL ERROR] Generated trajectory {j} cannot find its original prompt fingerprint!"
             logger.error(error_msg)
             raise ValueError(error_msg)
-            
+
     batch_extend = batch.select_idxs(indices)
     return batch_extend.union(gen_batch_output)
 
@@ -486,10 +492,10 @@ def compute_grpo_outcome_advantage(
 
     with torch.no_grad():
         bsz = scores.shape[0]
-        
+
         for i in range(bsz):
             id2score[index[i]].append(scores[i])
-        
+
         for idx in id2score:
             if len(id2score[idx]) == 1:
                 id2mean[idx] = torch.tensor(0.0)
@@ -500,13 +506,13 @@ def compute_grpo_outcome_advantage(
                 id2std[idx] = torch.std(stacked_scores)
             else:
                 raise ValueError(f"no score in prompt index: {idx}")
-        
+
         for i in range(bsz):
             if norm_adv_by_std_in_grpo:
                 scores[i] = (scores[i] - id2mean[index[i]]) / (id2std[index[i]] + epsilon)
             else:
                 scores[i] = scores[i] - id2mean[index[i]]
-        
+
         scores = scores.unsqueeze(-1) * response_mask
 
     return scores, scores
@@ -525,7 +531,7 @@ def align_dense_rewards_to_model(reward_tensor, loss_mask):
         for i in range(seq_len):
             if loss_mask[b, i] == 1:
                 last_valid_idx = i
-            
+
             rew = reward_tensor[b, i].item()
             if rew != 0.0:
                 if last_valid_idx != -1:
@@ -537,16 +543,16 @@ def align_dense_rewards_to_model(reward_tensor, loss_mask):
 
 
 def compute_advantage(
-    data: DataProto, 
-    adv_estimator, 
-    gamma=1.0, 
-    lam=1.0, 
-    num_repeat=1, 
-    multi_turn=False, 
-    norm_adv_by_std_in_grpo=True, 
+    data: DataProto,
+    adv_estimator,
+    gamma=1.0,
+    lam=1.0,
+    num_repeat=1,
+    multi_turn=False,
+    norm_adv_by_std_in_grpo=True,
     config=None,
-    tokenizer=None,     
-    global_steps=0      
+    tokenizer=None,
+    global_steps=0
 ):
     """
     [用途]: 统领级优势计算网关。根据选定的训练架构（GAE / GRPO 等）调用对应的计算模块，
@@ -554,7 +560,7 @@ def compute_advantage(
     """
     if "response_mask" not in data.batch.keys():
         data.batch["response_mask"] = compute_response_mask(data)
-    
+
     # 针对普通 GAE (Generalized Advantage Estimation) 分支的处理
     if adv_estimator == AdvantageEstimator.GAE:
         from verl.trainer.ppo import core_algos
@@ -580,7 +586,7 @@ def compute_advantage(
             loss_mask = data.batch["loss_mask"]
         else:
             loss_mask = data.batch["response_mask"]
-            
+
         base_tensor = data.batch.get("outcome_reward_tensor", data.batch["token_level_rewards"])
         if loss_mask.size(1) != base_tensor.size(1):
             pad_len = base_tensor.size(1) - loss_mask.size(1)
@@ -591,35 +597,35 @@ def compute_advantage(
 
         uid_index = data.non_tensor_batch["uid"]
         full_input_ids_tensor = data.batch.get("input_ids", None)
-        
+
         # 精确对齐 step_ids
         step_ids_tensor = data.batch.get("step_ids", None)
         padded_step_ids = None
-        
+
         if step_ids_tensor is not None:
             full_seq_len = base_tensor.size(1)
             step_len = step_ids_tensor.size(1)
-            
+
             if "prompts" in data.batch:
                 prompt_length = data.batch["prompts"].shape[1]
             else:
                 prompt_length = full_seq_len - step_len
-                
+
             padded_step_ids = torch.zeros(
                 (step_ids_tensor.size(0), full_seq_len),
                 dtype=step_ids_tensor.dtype,
                 device=step_ids_tensor.device
             )
-            
+
             # --- 🚀 安全截断对齐逻辑 ---
             # 计算当前 Batch 真实的 Response 容量大小
             actual_resp_len = full_seq_len - prompt_length
-            
+
             if actual_resp_len > 0:
                 # 选取较小的一个，防止越界（多出来的肯定是 rollout padding 的无用 0）
                 valid_step_len = min(step_len, actual_resp_len)
                 end_idx = prompt_length + valid_step_len
-                
+
                 # 安全地填入对应的区域
                 padded_step_ids[:, prompt_length:end_idx] = step_ids_tensor[:, :valid_step_len]
             else:
@@ -640,7 +646,7 @@ def compute_advantage(
         api_reward_raw = data.batch.get("api_reward_tensor", None)
         if api_reward_raw is not None:
             data.batch["api_reward_tensor"] = align_dense_rewards_to_model(api_reward_raw, loss_mask)
-            
+
         rep_reward_raw = data.batch.get("rep_reward_tensor", None)
         if rep_reward_raw is not None:
             data.batch["rep_reward_tensor"] = align_dense_rewards_to_model(rep_reward_raw, loss_mask)
@@ -650,49 +656,49 @@ def compute_advantage(
         w_efficiency = 0.0
         w_api = config.get("w_api", 1.0)
         w_rep = config.get("w_rep", 1.0)
-        outcome_strategy = config.get("outcome_strategy", "normalize_then_decay") 
+        outcome_strategy = config.get("outcome_strategy", "normalize_then_decay")
 
         # 汇总 Outcome 流奖励
         outcome_tensor = data.batch.get("outcome_reward_tensor", data.batch["token_level_rewards"])
         adv_out = compute_outcome_advantage_dual_strategy(
             token_level_rewards=outcome_tensor,
-            response_mask=loss_mask,  
+            response_mask=loss_mask,
             uid_index=uid_index,
-            gamma=gamma, 
+            gamma=gamma,
             strategy=outcome_strategy,
             norm_adv_by_std=norm_adv_by_std_in_grpo,
-            tokenizer=tokenizer,         
-            input_ids=full_input_ids_tensor, 
-            step_ids=padded_step_ids,        
-            step_info=f"Step {global_steps}" 
+            tokenizer=tokenizer,
+            input_ids=full_input_ids_tensor,
+            step_ids=padded_step_ids,
+            step_info=f"Step {global_steps}"
         )
-        
+
         # 计算不同进程的辅助奖励
         adv_api = compute_single_component_advantage(
             data.batch.get("api_reward_tensor", torch.zeros_like(data.batch["responses"])),
             loss_mask, uid_index, norm_adv_by_std_in_grpo,
             mode=process_mode,
-            tokenizer=tokenizer,         
-            input_ids=full_input_ids_tensor, 
-            component_name="API Reward"  
+            tokenizer=tokenizer,
+            input_ids=full_input_ids_tensor,
+            component_name="API Reward"
         ) if "api_reward_tensor" in data.batch else torch.zeros_like(adv_out)
-        
+
         adv_rep = compute_single_component_advantage(
             data.batch.get("rep_reward_tensor", torch.zeros_like(data.batch["responses"])),
             loss_mask, uid_index, norm_adv_by_std_in_grpo,
             mode=process_mode,
-            tokenizer=tokenizer,         
-            input_ids=full_input_ids_tensor, 
-            component_name="Repetition Penalty" 
+            tokenizer=tokenizer,
+            input_ids=full_input_ids_tensor,
+            component_name="Repetition Penalty"
         ) if "rep_reward_tensor" in data.batch else torch.zeros_like(adv_out)
 
         adv_eff = compute_single_component_advantage(
             data.batch.get("eff_reward_tensor", torch.zeros_like(data.batch["responses"])),
             loss_mask, uid_index, norm_adv_by_std_in_grpo,
             mode="sparse",
-            tokenizer=tokenizer,         
-            input_ids=full_input_ids_tensor, 
-            component_name="Efficiency Reward" 
+            tokenizer=tokenizer,
+            input_ids=full_input_ids_tensor,
+            component_name="Efficiency Reward"
         )
 
         # ---------------------------------------------------------
@@ -726,15 +732,15 @@ def compute_advantage(
         # final_advantages = pre_norm_advantages.clone()
         # valid_mask = loss_mask.bool()
         # valid_advs = pre_norm_advantages[valid_mask]
-        
+
         # pre_norm_mean, pre_norm_std = 0.0, 0.0
         # if valid_advs.numel() > 1:
         #     pre_norm_mean = valid_advs.mean().item()
         #     pre_norm_std = valid_advs.std().item()
-            
+
         #     # 对有效 Token 进行标准化 (均值 0，方差 1)
         #     normalized_valid_advs = (valid_advs - pre_norm_mean) / (pre_norm_std + 1e-8)
-            
+
         #     # 🚨 [新增修复] NaN/Inf 防御与报警
         #     if torch.isnan(normalized_valid_advs).any() or torch.isinf(normalized_valid_advs).any():
         #         nan_cnt = torch.isnan(normalized_valid_advs).sum().item()
@@ -762,15 +768,15 @@ def compute_advantage(
             if do_table_print and full_input_ids_tensor is not None and tokenizer is not None:
                 api_rew = data.batch.get("api_reward_tensor")
                 rep_rew = data.batch.get("rep_reward_tensor")
-                
+
                 # --- 宏观组信息与 Advantage 统计 ---
                 post_norm_advs = final_advantages[valid_mask]
                 post_norm_mean = post_norm_advs.mean().item() if post_norm_advs.numel() > 0 else 0.0
                 post_norm_std = post_norm_advs.std().item() if post_norm_advs.numel() > 1 else 0.0
-                
+
                 group_sizes = list(Counter(uid_index).values())
                 avg_group_size = sum(group_sizes) / len(group_sizes) if group_sizes else 0
-                
+
                 write_debug_log(f"\n=========================================================")
                 write_debug_log(f"📊 [Step {global_steps} Batch Stats] PRE-Norm Adv  -> Mean: {pre_norm_mean:.4f}, Std: {pre_norm_std:.4f}")
                 write_debug_log(f"📊 [Step {global_steps} Batch Stats] POST-Norm Adv -> Mean: {post_norm_mean:.4f}, Std: {post_norm_std:.4f}")
@@ -780,37 +786,37 @@ def compute_advantage(
                 # --- 随机采样 2 个样本，打印整个有效序列的 Token 级奖励 ---
                 bsz = final_advantages.shape[0]
                 sample_indices = random.sample(range(bsz), min(2, bsz))
-                
+
                 for b in sample_indices:
                     valid_idx = torch.nonzero(loss_mask[b]).squeeze(-1)
                     if valid_idx.numel() == 0:
                         continue
-                        
+
                     start_idx = valid_idx[0].item()
                     end_idx = valid_idx[-1].item() + 1
-                    
+
                     log_str = f"\n👑 === [Token-Level Detail] Step {global_steps} | Sampled Trajectory {b} === 👑\n"
                     log_str += f"{'Idx':<5} | {'Token_Text':<18} | {'StepID':<6} | {'API_Rew':<8} | {'Rep_Rew':<8} | {'Out_Adv':<8} | {'Pre_Adv':<9} | {'Post_Adv':<9}\n"
                     log_str += "-"*95 + "\n"
-                    
+
                     for i in range(start_idx, end_idx):
                         tid = full_input_ids_tensor[b, i].item()
                         ttext = repr(tokenizer.decode([tid])) if tid >= 0 else f"<unk_{tid}>"
                         sid = padded_step_ids[b, i].item() if padded_step_ids is not None else 0
-                        
+
                         api_val = api_rew[b, i].item() if api_rew is not None else 0.0
                         rep_val = rep_rew[b, i].item() if rep_rew is not None else 0.0
                         out_val = adv_out[b, i].item() if 'adv_out' in locals() else 0.0
-                        
+
                         # 提取归一化前和归一化后的 Advantage
                         pre_adv_val = pre_norm_advantages[b, i].item()
                         post_adv_val = final_advantages[b, i].item()
-                        
+
                         # 只打印有数值波动或关键步骤的 Token，避免日志过长
                         if api_val != 0 or rep_val != 0 or abs(pre_adv_val) > 0.01 or abs(post_adv_val) > 0.01 or (i % 20 == 0):
                             flag = "🚀 " if (api_val != 0 or rep_val != 0) else "   "
                             log_str += f"{flag}{i:<4} | {ttext:<18} | {sid:<6} | {api_val:>8.4f} | {rep_val:>8.4f} | {out_val:>8.4f} | {pre_adv_val:>9.4f} | {post_adv_val:>9.4f}\n"
-                    
+
                     write_debug_log(log_str)
         except Exception as e:
             write_debug_log(f"[Warning] Failed to print verification table: {e}")
@@ -837,7 +843,8 @@ def compute_advantage(
 
 
 # =============================================================================
-# [核心主类：AgentEvolver Ray PPO 训练器]
+# AgentEvolverRayPPOTrainer 类
+# 核心主类：AgentEvolver Ray PPO 训练器
 # =============================================================================
 
 class AgentEvolverRayPPOTrainer(RayPPOTrainer):
@@ -873,21 +880,21 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
         self.val_reward_fn = val_reward_fn
 
         self.hybrid_engine = config.actor_rollout_ref.hybrid_engine
-        assert self.hybrid_engine, "Currently, only support hybrid engine" 
+        assert self.hybrid_engine, "Currently, only support hybrid engine"
 
         if self.hybrid_engine:
-            assert Role.ActorRollout in role_worker_mapping, f"{role_worker_mapping.keys()=}"  
+            assert Role.ActorRollout in role_worker_mapping, f"{role_worker_mapping.keys()=}"
 
         self.role_worker_mapping = role_worker_mapping
         self.resource_pool_manager = resource_pool_manager
-        
+
         self.use_reference_policy = Role.RefPolicy in role_worker_mapping
         self.use_rm = Role.RewardModel in role_worker_mapping
-        
+
         self.ray_worker_group_cls = ray_worker_group_cls
         self.device_name = device_name
         self.validation_generations_logger = ValidationGenerationsLogger()
-        
+
         # [NEW: Injection] 挂载 SmartLogger 用于捕获并防御各类训练崩溃风险
         log_directory = os.environ.get("GEN_OUTPUT_DIR", "./log")
         self.smart_logger = SmartLogger(log_dir=log_directory)
@@ -920,7 +927,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
         self.train_task_manager=train_task_manager
         self.val_task_manager=val_task_manager
         self._collate_fn=collate_fn
-        
+
         # 初始化用于 ADCA 分配机制的大语言模型端点
         self.llm_client = None
         if hasattr(self.config, 'attribution_driven_credit_assignment'):
@@ -931,14 +938,14 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                 logger.warning(f"Failed to initialize LLM Client: {e}")
 
         # 利用 TaskManager 构建训练与验证所用的数据管道 Dataloader
-        self._create_dataloader_from_manager(collate_fn, shuffle_trainset) 
+        self._create_dataloader_from_manager(collate_fn, shuffle_trainset)
         self.hindsight_manager = hindsight_manager
 
     def init_workers(self):
         """
         [用途]: 创建并初始化基于 Ray 的各个角色 Worker 组 (如 Actor、Critic、RM)，加载相应模型，并建立环境联通。
         """
-        self.resource_pool_manager.create_resource_pool() 
+        self.resource_pool_manager.create_resource_pool()
 
         self.resource_pool_to_cls = {pool: {} for pool in self.resource_pool_manager.resource_pool_dict.values()}
 
@@ -970,7 +977,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
             self.resource_pool_to_cls[resource_pool]["rm"] = rm_cls
 
         all_wg = {}
-        wg_kwargs = {} 
+        wg_kwargs = {}
         if OmegaConf.select(self.config.trainer, "ray_wait_register_center_timeout") is not None:
             wg_kwargs["ray_wait_register_center_timeout"] = self.config.trainer.ray_wait_register_center_timeout
 
@@ -983,19 +990,19 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
 
         if self.use_critic:
             self.critic_wg = all_wg["critic"]
-            self.critic_wg.init_model() 
+            self.critic_wg.init_model()
 
         if self.use_reference_policy and not self.ref_in_actor:
             self.ref_policy_wg = all_wg["ref"]
-            self.ref_policy_wg.init_model() 
+            self.ref_policy_wg.init_model()
 
         if self.use_rm:
             self.rm_wg = all_wg["rm"]
-            self.rm_wg.init_model() 
+            self.rm_wg.init_model()
 
         # 初始化 Actor（支持 vLLM）
         self.actor_rollout_wg = all_wg["actor_rollout"]
-        self.actor_rollout_wg.init_model() 
+        self.actor_rollout_wg.init_model()
 
         # 启动异步模型支持
         self.async_rollout_mode = False
@@ -1004,7 +1011,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
             self.async_rollout_mode = True
             self.async_rollout_manager = BaAsyncLLMServerManager(
                 config=self.config,
-                worker_group=self.actor_rollout_wg) 
+                worker_group=self.actor_rollout_wg)
 
         self.reward_fn = parse_reward_from_dataproto
         self.val_reward_fn = parse_reward_from_dataproto
@@ -1023,7 +1030,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
 
         from verl.trainer.main_ppo import create_rl_dataset
         env_client=EnvClient(self.config.env_service.env_url)
-        
+
         # 加载训练集合
         if self.config.data.train_files is not None:
             train_seed_dataset = create_rl_dataset(self.config.data.train_files, self.config.data, self.tokenizer, self.processor)
@@ -1031,7 +1038,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
             self.train_task_manager.load_tasks_from_dataset(train_seed_dataset,env_type=self.config.env_service.env_type)
         else:
             self.train_task_manager.load_tasks_from_environment(env_client,env_type=self.config.env_service.env_type,split="train")
-        
+
         # 加载验证集合
         if self.config.data.val_files is not None:
             val_seed_dataset = create_rl_dataset(self.config.data.val_files, self.config.data, self.tokenizer, self.processor)
@@ -1047,10 +1054,10 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                     try:
                         num_loaded_val_tasks += self.val_task_manager.load_tasks_from_environment(env_client,env_type=self.config.env_service.env_type,split=split)
                     except:
-                        logger.warning(f"failed to load val dataset from environment, split={split}. this may be *normal* if your dataset is split into train/dev")    
-            
+                        logger.warning(f"failed to load val dataset from environment, split={split}. this may be *normal* if your dataset is split into train/dev")
+
             assert num_loaded_val_tasks > 0, "failed to load val/dev dataset from environment"
-        
+
         self.train_dataset = FullDataset(
             self.train_task_manager,
             self.train_task_manager._mixture_strategy,
@@ -1072,7 +1079,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
 
         assert not isinstance(self.train_dataset,AutoReloadDataset), "please disable multiple workers for AutoReloadDataset"
         assert not isinstance(self.val_dataset,AutoReloadDataset), "please disable multiple workers for AutoReloadDataset"
-        
+
         self.train_dataloader = StatefulDataLoader(
             dataset=self.train_dataset,
             batch_size=self.config.data.get("gen_batch_size", self.config.data.train_batch_size),
@@ -1080,9 +1087,9 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
             drop_last=True,
             collate_fn=collate_fn,
             sampler=create_rl_sampler(self.config.data,self.train_dataset),
-        ) 
+        )
 
-        val_batch_size = self.config.data.val_batch_size 
+        val_batch_size = self.config.data.val_batch_size
         if val_batch_size is None:
             val_batch_size = len(self.val_dataset) # type: ignore
 
@@ -1093,7 +1100,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
             shuffle=self.config.data.get("validation_shuffle", True),
             drop_last=False,
             collate_fn=collate_fn,
-        ) 
+        )
 
         assert len(self.val_dataloader) >= 1, "Validation dataloader is empty!"
 
@@ -1130,7 +1137,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
         config = self.config.attribution_driven_credit_assignment
 
         if not hasattr(config, 'api_max_retries'):
-            config.api_max_retries = 200 
+            config.api_max_retries = 200
             print(f"[attribution_config] Using default api_max_retries: {config.api_max_retries}")
 
         return config
@@ -1198,11 +1205,11 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
             check_mutually_exclusive(config.reward_model.micro_batch_size, config.reward_model.micro_batch_size_per_gpu, "reward_model")
 
         if not config.actor_rollout_ref.actor.use_dynamic_bsz:
-            assert config.data.train_batch_size >= config.actor_rollout_ref.actor.ppo_mini_batch_size 
+            assert config.data.train_batch_size >= config.actor_rollout_ref.actor.ppo_mini_batch_size
             sp_size = config.actor_rollout_ref.actor.get("ulysses_sequence_parallel_size", 1)
             if config.actor_rollout_ref.actor.ppo_micro_batch_size is not None:
-                assert config.actor_rollout_ref.actor.ppo_mini_batch_size % config.actor_rollout_ref.actor.ppo_micro_batch_size == 0 
-                assert config.actor_rollout_ref.actor.ppo_micro_batch_size * sp_size >= n_gpus 
+                assert config.actor_rollout_ref.actor.ppo_mini_batch_size % config.actor_rollout_ref.actor.ppo_micro_batch_size == 0
+                assert config.actor_rollout_ref.actor.ppo_micro_batch_size * sp_size >= n_gpus
 
         assert config.actor_rollout_ref.actor.loss_agg_mode in [
             "token-mean",
@@ -1215,11 +1222,11 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
             print("NOTICE: You have both enabled in-reward kl and kl loss.")
 
         if self.use_critic and not config.critic.use_dynamic_bsz:
-            assert config.data.train_batch_size >= config.critic.ppo_mini_batch_size 
+            assert config.data.train_batch_size >= config.critic.ppo_mini_batch_size
             sp_size = config.critic.get("ulysses_sequence_parallel_size", 1)
             if config.critic.ppo_micro_batch_size is not None:
-                assert config.critic.ppo_mini_batch_size % config.critic.ppo_micro_batch_size == 0 
-                assert config.critic.ppo_micro_batch_size * sp_size >= n_gpus 
+                assert config.critic.ppo_mini_batch_size % config.critic.ppo_micro_batch_size == 0
+                assert config.critic.ppo_micro_batch_size * sp_size >= n_gpus
 
         if config.actor_rollout_ref.actor.strategy == "fsdp" and (config.actor_rollout_ref.actor.get("ulysses_sequence_parallel_size", 1) > 1 or config.actor_rollout_ref.ref.get("ulysses_sequence_parallel_size", 1) > 1):
             assert config.actor_rollout_ref.model.use_remove_padding, "When using sequence parallelism for actor/ref policy, you must enable `use_remove_padding`."
@@ -1244,7 +1251,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
         [用途]: 保存评估轨迹文件 (JSONL) 。
         """
         os.makedirs(dump_path, exist_ok=True)
-        filename = os.path.join(dump_path, f"{self.global_steps}.jsonl") 
+        filename = os.path.join(dump_path, f"{self.global_steps}.jsonl")
 
         n = len(inputs)
         base_data = {
@@ -1264,7 +1271,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
             lines.append(json.dumps(entry, ensure_ascii=False))
 
         with open(filename, "w") as f:
-            f.write("\n".join(lines) + "\n") 
+            f.write("\n".join(lines) + "\n")
 
         print(f"Dumped generations to {filename}")
 
@@ -1272,7 +1279,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
         """
         [用途]: 跑一次完整的评估流程。拉取验证集数据并使用 Actor 模型生成轨迹，最后汇总出统计数据用于 WandB 等展示。
         """
-        import time 
+        import time
 
         def val_log(msg):
             print(f"[{time.strftime('%H:%M:%S')}] [Validate] {msg}", flush=True)
@@ -1309,7 +1316,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                 non_tensor_batch_keys_to_pop.append("tools_kwargs")
             if "extras" in test_batch.non_tensor_batch:
                 non_tensor_batch_keys_to_pop.append("extras")
-                
+
             test_gen_batch = test_batch.pop(
                 batch_keys=batch_keys_to_pop,
                 non_tensor_batch_keys=non_tensor_batch_keys_to_pop,
@@ -1334,16 +1341,16 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                             env_type=self.config.env_service.env_type,
                             open_query=test_gen_batch.non_tensor_batch["extras"][i]['open_query'],
                           ) for i in range(len(test_gen_batch))]
-                
+
                 task_exp_configs = self.exp_manager.get_complete_exp_configs(tasks, mode="validate")
-                
-                val_log(f"Batch {i}: Starting Rollout ({len(tasks)} tasks)...") 
+
+                val_log(f"Batch {i}: Starting Rollout ({len(tasks)} tasks)...")
                 print("=" * 10 + "start validate rollout" + "=" * 10)
-                
-                trajectories = self.env_manager.rollout(tasks, task_exp_configs, mode="validate", epoch=f"test.1.{i}") 
-                
+
+                trajectories = self.env_manager.rollout(tasks, task_exp_configs, mode="validate", epoch=f"test.1.{i}")
+
                 print("=" * 10 + "end validate rollout" + "=" * 10)
-                val_log(f"Batch {i}: Rollout Finished. Count: {len(trajectories)}") 
+                val_log(f"Batch {i}: Rollout Finished. Count: {len(trajectories)}")
 
                 test_output_gen_batch = self.env_manager.to_dataproto(trajectories)
                 self.async_rollout_manager.sleep()
@@ -1360,8 +1367,8 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
             test_batch = union_gen_batch_via_task_id(tasks, test_batch, test_output_gen_batch)
             test_batch.meta_info["validate"] = True
 
-            val_log(f"Batch {i}: Computing Rewards...") 
-            result = self.val_reward_fn(test_batch, return_dict=True) 
+            val_log(f"Batch {i}: Computing Rewards...")
+            result = self.val_reward_fn(test_batch, return_dict=True)
             reward_tensor = result["reward_tensor"]
             scores = reward_tensor.sum(-1).cpu().tolist()
             sample_scores.extend(scores)
@@ -1400,7 +1407,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                     validation_merged_records.append(record)
 
             data_source_lst.append(test_batch.non_tensor_batch.get("data_source", ["unknown"] * reward_tensor.shape[0]))
-            val_log(f"Batch {i} Finished. Cost: {time.time() - batch_start_time:.2f}s") 
+            val_log(f"Batch {i} Finished. Cost: {time.time() - batch_start_time:.2f}s")
 
         self._maybe_log_val_generations(inputs=sample_inputs, outputs=sample_outputs, scores=sample_scores)
 
@@ -1409,11 +1416,11 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                 val_log("Saving merged validation traces...")
                 save_path = os.path.join(val_data_dir, f"{self.global_steps}.jsonl")
                 try:
-                    os.makedirs(val_data_dir, exist_ok=True) 
+                    os.makedirs(val_data_dir, exist_ok=True)
                     with open(save_path, "w", encoding='utf-8') as f:
                         for record in validation_merged_records:
                             f.write(json.dumps(record, ensure_ascii=False) + "\n")
-                    logger.info(f"Saved merged validation traces to {save_path}") 
+                    logger.info(f"Saved merged validation traces to {save_path}")
                     val_log(f"Saved to {save_path}")
                 except Exception as e:
                     print(f"Failed to save validation traces: {e}")
@@ -1424,7 +1431,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
         data_sources = np.concatenate(data_source_lst, axis=0)
 
         val_log("Computing validation metrics...")
-        data_src2var2metric2val = process_validation_metrics(data_sources, sample_inputs, reward_extra_infos_dict) 
+        data_src2var2metric2val = process_validation_metrics(data_sources, sample_inputs, reward_extra_infos_dict)
         metric_dict = {}
         for data_source, var2metric2val in data_src2var2metric2val.items():
             core_var = "acc" if "acc" in var2metric2val else "reward"
@@ -1440,7 +1447,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
 
         val_log("Validation Complete.")
         return metric_dict
-    
+
     def initialize_exp_pool(self):
         """
         [用途]: 利用跑一次初评生成的基础轨迹来预热经验池 (Experience Pool)，使其不在刚开始训练时为空。
@@ -1486,15 +1493,15 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                             open_query=test_gen_batch.non_tensor_batch["extras"][i]['open_query'],
                           ) for i in range(len(test_gen_batch))]
                 task_exp_configs = self.exp_manager.get_complete_exp_configs(tasks, mode="validate")
-                
+
                 print("=" * 10 + "start validate rollout" + "=" * 10)
-                trajectories = self.env_manager.rollout(tasks, task_exp_configs, mode="validate", epoch=f"test.1.{i}") 
+                trajectories = self.env_manager.rollout(tasks, task_exp_configs, mode="validate", epoch=f"test.1.{i}")
                 print("=" * 10 + "end validate rollout" + "=" * 10)
                 self.async_rollout_manager.sleep()
 
             # 将本批次生成的轨迹存入经验管理器中
             self.exp_manager.summarize_in_batch(trajectories)
-        
+
         return
 
     def fit(self):
@@ -1513,17 +1520,17 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
         from agentevolver.utils.tracking import Tracking
         import threading
         import uuid
-        import time 
+        import time
 
         def main_log(msg):
             print(f"[{time.strftime('%H:%M:%S')}] [MainLoop] {msg}", flush=True)
 
         # ================= [纯生成模式] =================
         generate_task_only = self.config.task_manager.get("generate_task_only", False)
-        
+
         if generate_task_only:
             main_log("🚀 Detected 'generate_task_only' mode. Initializing Generation Sequence...")
-            
+
             if "GEN_OUTPUT_DIR" in os.environ:
                 isolation_dir = os.environ["GEN_OUTPUT_DIR"]
                 os.makedirs(isolation_dir, exist_ok=True)
@@ -1532,12 +1539,12 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                 timestamp_str = time.strftime("%Y%m%d_%H%M%S")
                 dir_prefix = self.config.get("gen_output_prefix", "gen_")
                 isolation_dir = os.path.join(os.getcwd(), f"{dir_prefix}{timestamp_str}")
-                
+
                 os.makedirs(isolation_dir, exist_ok=True)
                 main_log(f"📂 Created isolation directory: {isolation_dir}")
-                
+
                 os.environ["GEN_OUTPUT_DIR"] = isolation_dir
-            
+
             main_log("🔄 Triggering Task Generation (Force Execution)...")
             try:
                 self.train_dataset.reload_new_task()
@@ -1546,7 +1553,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
             except Exception as e:
                 main_log(f"❌ Generation Failed: {e}")
                 raise e
-            
+
             main_log("🛑 Exiting program as 'generate_task_only' is active.")
             return
         # ====================================================================
@@ -1584,10 +1591,10 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
 
         self.global_steps += 1
         last_val_metrics = None
-        
+
         for epoch in range(self.config.trainer.total_epochs):
             main_log(f"=== Starting Epoch {epoch} ===")
-            
+
             # 动态注入新生成的数据 (Hindsight)
             if hasattr(self.train_task_manager, 'load_new_hindsight_tasks'):
                 new_count = self.train_task_manager.load_new_hindsight_tasks()
@@ -1643,20 +1650,20 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                                         ground_truth=gen_batch.non_tensor_batch['extras'][i]['ground_truth']
                                     ) for i in range(len(gen_batch))
                                     ]
-                            
+
                             task_exp_configs = self.exp_manager.get_complete_exp_configs(tasks, mode="sample")
-                            
-                            main_log(f"Step {self.global_steps}: Generating Rollouts (Async)...") 
+
+                            main_log(f"Step {self.global_steps}: Generating Rollouts (Async)...")
                             print("=" * 10 + "start fit rollout" + "=" * 10)
-                            
+
                             trajectories = self.env_manager.rollout(tasks, task_exp_configs, mode="sample", epoch=f"train.{epoch}.{i}")
-                            
+
                             assert len(trajectories)>0, "{len(trajectories)=}?"
                             print("=" * 10 + "end fit rollout" + "=" * 10)
-                            main_log(f"Step {self.global_steps}: Rollout Finished. Count: {len(trajectories)}") 
-                            
+                            main_log(f"Step {self.global_steps}: Rollout Finished. Count: {len(trajectories)}")
+
                             gen_batch_output = self.env_manager.to_dataproto(trajectories)
-                            
+
                             exp_mask_ratio = gen_batch_output.batch["exp_mask"].float().mean()
                             metrics.update({"exp_mask_ratio": exp_mask_ratio.detach().item()})
                             context_time_cost = [x.metadata["context_time_cost"] for x in trajectories if "context_time_cost" in x.metadata]
@@ -1695,10 +1702,10 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
 
                     # 生成用于过滤不计算梯度的掩码（只更新 Response 部分，不更新 Prompt）
                     prompt_length = batch.batch['prompts'].shape[1]
-                    attention_mask = batch.batch['attention_mask'] 
+                    attention_mask = batch.batch['attention_mask']
                     response_mask = attention_mask.clone()
-                    response_mask[:, :prompt_length] = 0 
-                    batch.batch["response_mask"] = response_mask 
+                    response_mask[:, :prompt_length] = 0
+                    batch.batch["response_mask"] = response_mask
 
                     summary_task = self.exp_manager.submit_summary_task(trajectories, self.global_steps)
 
@@ -1708,7 +1715,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                     batch.meta_info["global_token_num"] = torch.sum(batch.batch["attention_mask"], dim=-1).tolist()
 
                     with _timer("reward", timing_raw):
-                        main_log(f"Step {self.global_steps}: Computing Rewards...") 
+                        main_log(f"Step {self.global_steps}: Computing Rewards...")
                         if self.use_rm:
                             reward_tensor = self.rm_wg.compute_rm_score(batch)
                             batch = batch.union(reward_tensor)
@@ -1719,11 +1726,11 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                             reward_tensor, reward_extra_infos_dict = compute_reward(batch, self.reward_fn)
 
                     with _timer("old_log_prob", timing_raw):
-                        main_log(f"Step {self.global_steps}: Computing Old Log Probs...") 
+                        main_log(f"Step {self.global_steps}: Computing Old Log Probs...")
                         old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
                         entropys = old_log_prob.batch["entropys"]
                         response_masks = batch.batch["response_mask"]
-                        
+
                         # ========================================================
                         # [鲁棒性防御] 对齐掩码长度，防止因为底层框架丢掉 Padding 导致的严重维度错乱
                         # ========================================================
@@ -1734,9 +1741,9 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                             if ent_len < mask_len:
                                 left_slice = response_masks[:, :ent_len]
                                 right_slice = response_masks[:, -ent_len:]
-                                
+
                                 orig_valid_tokens = response_masks.sum()
-                                
+
                                 if left_slice.sum() == orig_valid_tokens:
                                     response_masks_for_loss = left_slice
                                 elif right_slice.sum() == orig_valid_tokens:
@@ -1754,14 +1761,14 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                         else:
                             response_masks_for_loss = response_masks
                         # ========================================================
-                            
+
                         loss_agg_mode = self.config.actor_rollout_ref.actor.loss_agg_mode
                         entropy_loss = agg_loss(loss_mat=entropys, loss_mask=response_masks_for_loss, loss_agg_mode=loss_agg_mode)
                         old_log_prob_metrics = {"actor/entropy_loss": entropy_loss.detach().item()}
                         metrics.update(old_log_prob_metrics)
                         old_log_prob.batch.pop("entropys")
                         batch = batch.union(old_log_prob)
-                        
+
                         if "rollout_log_probs" in batch.batch.keys():
                             rollout_old_log_probs = batch.batch["rollout_log_probs"]
                             actor_old_log_probs = batch.batch["old_log_probs"]
@@ -1787,7 +1794,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
 
                     if self.use_reference_policy:
                         with _timer("ref", timing_raw):
-                            main_log(f"Step {self.global_steps}: Computing Ref Policy...") 
+                            main_log(f"Step {self.global_steps}: Computing Ref Policy...")
                             if not self.ref_in_actor:
                                 ref_log_prob = self.ref_policy_wg.compute_ref_log_prob(batch)
                             else:
@@ -1796,12 +1803,12 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
 
                     if self.use_critic:
                         with _timer("values", timing_raw):
-                            main_log(f"Step {self.global_steps}: Computing Critic Values...") 
+                            main_log(f"Step {self.global_steps}: Computing Critic Values...")
                             values = self.critic_wg.compute_values(batch)
                             batch = batch.union(values)
 
                     with _timer("adv", timing_raw):
-                        main_log(f"Step {self.global_steps}: Computing Advantages...") 
+                        main_log(f"Step {self.global_steps}: Computing Advantages...")
                         reward_extra_infos_dict: dict[str, list]
                         if self.config.reward_model.launch_reward_fn_async:
                             reward_tensor, reward_extra_infos_dict = ray.get(future_reward)
@@ -1832,33 +1839,33 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                             norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
                             multi_turn=self.config.actor_rollout_ref.rollout.multi_turn.enable,
                             config=self.config.algorithm,
-                            tokenizer=self.tokenizer,          
-                            global_steps=self.global_steps     
+                            tokenizer=self.tokenizer,
+                            global_steps=self.global_steps
                         )
                         # =====================================================================
                         # 强制对齐 Advantages 和 Returns 的维度 (直接截取 Response 长度维度的数据)
                         # =====================================================================
                         resp_len = batch.batch["responses"].size(1)
-                        
+
                         if batch.batch["advantages"].size(1) != resp_len:
                             batch.batch["advantages"] = batch.batch["advantages"][:, -resp_len:]
-                            
+
                         if "returns" in batch.batch and batch.batch["returns"].size(1) != resp_len:
                             batch.batch["returns"] = batch.batch["returns"][:, -resp_len:]
-                            
+
                         if "token_level_rewards" in batch.batch and batch.batch["token_level_rewards"].size(1) != resp_len:
                             batch.batch["token_level_rewards"] = batch.batch["token_level_rewards"][:, -resp_len:]
                         # =====================================================================
 
                         # ==================== Hindsight 后见之明重构流 ====================
                         attribution_cfg = self._get_attribution_config()
-                        
+
                         if getattr(attribution_cfg, "enable_hindsight", False) and getattr(self, "hindsight_manager", None) is not None:
                             try:
-                                main_log(f"Step {self.global_steps}: Processing Hindsight...") 
+                                main_log(f"Step {self.global_steps}: Processing Hindsight...")
                                 prompts = batch.batch['prompts'].tolist()
                                 responses = batch.batch['responses'].tolist()
-                                
+
                                 if "extras" in batch.non_tensor_batch:
                                     task_ids = [e.get("task_id", "unknown") for e in batch.non_tensor_batch["extras"]]
                                 else:
@@ -1868,7 +1875,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                                 token_rewards = batch.batch['token_level_rewards']
                                 if hasattr(token_rewards, 'cpu'):
                                     token_rewards = token_rewards.cpu()
-                                
+
                                 for _idx in range(len(prompts)):
                                     score = token_rewards[_idx].sum().item()
                                     sample_scores.append(1.0 if score > 0 else 0.0)
@@ -1878,26 +1885,26 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                                     args=(prompts, responses, sample_scores, task_ids),
                                     kwargs={"threshold": 0.0}
                                 ).start()
-                                
+
                             except Exception as e:
                                 print(f"[Warning] Hindsight logic encountered an error: {e}")
 
                     # ==================== 开始模型更新 ====================
                     if self.use_critic:
                         with _timer("update_critic", timing_raw):
-                            main_log(f"Step {self.global_steps}: Updating Critic Model...") 
+                            main_log(f"Step {self.global_steps}: Updating Critic Model...")
                             critic_output = self.critic_wg.update_critic(batch)
                         critic_output_metrics = reduce_metrics(critic_output.meta_info["metrics"])
                         metrics.update(critic_output_metrics)
 
                     if self.config.trainer.critic_warmup <= self.global_steps:
                         with _timer("update_actor", timing_raw):
-                            main_log(f"Step {self.global_steps}: Updating Actor Model...") 
+                            main_log(f"Step {self.global_steps}: Updating Actor Model...")
                             batch.meta_info["multi_turn"] = self.config.actor_rollout_ref.rollout.multi_turn.enable
                             actor_output = self.actor_rollout_wg.update_actor(batch)
                         actor_output_metrics = reduce_metrics(actor_output.meta_info["metrics"])
                         metrics.update(actor_output_metrics)
-                    
+
                     if summary_task is not None:
                         main_log(f"Step {self.global_steps}: Collecting Summary Task...")
                         time_cost = self.exp_manager.collect_summary_result(summary_task)
@@ -1909,12 +1916,12 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                         main_log(f"Step {self.global_steps}: Saving Rollout Data...")
                         with _timer("dump_rollout_generations", timing_raw):
                             os.makedirs(rollout_data_dir, exist_ok=True)
-                            
+
                             scores_list = batch.batch["token_level_scores"].sum(-1).cpu().tolist()
-                            
+
                             inputs_text = self.tokenizer.batch_decode(batch.batch["prompts"], skip_special_tokens=True)
                             outputs_text = self.tokenizer.batch_decode(batch.batch["responses"], skip_special_tokens=True)
-                            
+
                             merged_records = []
                             for idx, (traj, task, score) in enumerate(zip(trajectories, tasks, scores_list)):
                                 record = {
@@ -1945,7 +1952,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                             with open(save_path, "w", encoding='utf-8') as f:
                                 for record in merged_records:
                                     f.write(json.dumps(record, ensure_ascii=False) + "\n")
-                            
+
                             filename = os.path.join(rollout_data_dir, f"traj_{self.global_steps}.jsonl")
                             with open(filename, "w") as f:
                                 for traj in trajectories:
@@ -1993,7 +2000,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                     for k, v_list in custom_stats.items():
                         if v_list:
                             metrics[f"rollout/{k.split('/')[-1]}"] = np.mean(v_list)
-                
+
                 logger.log(data=metrics, step=self.global_steps)
 
                 # ==================== [NEW: Injection] 触发智能诊断与记录 ====================
@@ -2005,9 +2012,9 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                     is_agent=True
                 )
                 # ==============================================================================
-                
+
                 step_cost = time.time() - step_start_time
-                main_log(f"Step {self.global_steps} Finished. Cost: {step_cost:.2f}s") 
+                main_log(f"Step {self.global_steps} Finished. Cost: {step_cost:.2f}s")
 
                 progress_bar.update(1)
                 self.global_steps += 1

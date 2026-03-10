@@ -123,7 +123,7 @@ class APIProcessRewardCalculator(RewardCalculator):
     1. 步骤奖励：API 命中奖励 (基于语义梯队) + 复读惩罚 + 执行错误四象限惩罚。
     2. 结果奖励：语义打分 (Outcome) + 效率打分 (Efficiency)。
     """
-    def __init__(self, task: Task, model_name='DeepSeek-V3-Online-64K', 
+    def __init__(self, task: Task, model_name='qwen3.5-plus',
                  reward_mode='outcome_continuous', 
                  degeneration_mode='ngram', 
                  degeneration_char_limit=100, 

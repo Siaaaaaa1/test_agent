@@ -91,13 +91,13 @@ class LlmAsJudgeRewardCalculator(RewardCalculator):
     """
     A naive RewardCalculator that uses LLM as judge.
     """
-    def __init__(self,task:Task, model_name='qwen3-235b-a22b-instruct-2507'):
+    def __init__(self,task:Task, model_name='qwen3.5-plus'):
         """
         Initializes the LlmAsJudgeRewardCalculator with a specific task and model name.
 
         Args:
             task (Task): The task to be evaluated.
-            model_name (str, optional): The name of the language model to be used as the judge. Defaults to 'qwen3-235b-a22b-instruct-2507'.
+            model_name (str, optional): The name of the language model to be used as the judge. Defaults to 'qwen3.5-plus'.
         """
         super().__init__(task)
         self._client=DashScopeClient(model_name=model_name)  # ⭐ Initializes the LLM client with the specified model name
