@@ -35,13 +35,13 @@ class Mix_DashScopeClient:
     """
     
     # Azure 系模型集合，用于判断 API 路径
-    AZURE_MODELS = {"azure-gpt-5-mini", "azure-gpt-5"}
+    AZURE_MODELS = {"qwen3.5-plus", "qwen3.5-plus"}
     
     # 统一限制配置
     MAX_CONCURRENCY = 20
     MAX_RPM = 30
     
-    def __init__(self, api_key: Optional[str] = None, model_name: str = "azure-gpt-5-mini", 
+    def __init__(self, api_key: Optional[str] = None, model_name: str = "qwen3.5-plus", 
                  temperature: float = 0.7, max_tokens: int = 2048):
         
         if load_dotenv:

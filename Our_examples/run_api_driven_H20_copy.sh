@@ -140,7 +140,7 @@ python3 -m agentevolver.main_ppo \
     task_manager.strategy=api_driven \
     task_manager.exploration_strategy_args.active_apps="['amazon','gmail','spotify','venmo','simple_note','todoist','splitwise','phone','file_system']" \
     task_manager.exploration_strategy_args.task_labels_path="./environments/appworld/data/datasets/train.jsonl" \
-    task_manager.llm_client="azure-gpt-5" \
+    task_manager.llm_client="qwen3.5-plus" \
     task_manager.grader.synthetic_grader=api_process_llm_judge \
     ray_init.num_cpus=32 \
     2>&1 | tee "$log_file"
