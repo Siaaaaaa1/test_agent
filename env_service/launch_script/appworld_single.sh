@@ -1,31 +1,18 @@
 #!/bin/bash
 
+# 开启严格模式：遇到执行错误即退出 (除了条件判断里)
+set -e
+
 # ============================================================
-# AppWorld 单机服务启动器 (Tencent WOA 修复版)
+# AppWorld 单机服务启动器 (Tencent WOA 修复版 - 优化增强)
 # ============================================================
 
 # 1. 强制实时日志 (防止日志被吃)
 export PYTHONUNBUFFERED=1
 
-# 2. 网络配置 (绑定 0.0.0.0 以规避 localhost/127.0.0.1 差异)
-export MASTER_ADDRESS="0.0.0.0" 
-export PORT="8080"
-
-# ---- [修复关键点：强制指定代理] ----
-# 如果不加这个，Python 去外网下载 tokenizer/config 时会无限卡死
-export http_proxy=http://hk-mmhttpproxy.woa.com:11113
-export https_proxy=http://hk-mmhttpproxy.woa.com:11113
-export all_proxy=http://hk-mmhttpproxy.woa.com:11113
-
-# 获取本机 IP 并更新 no_proxy (防止 Ray 连不上)
-HOST_IP=$(hostname -I | tr ' ' '\n' | grep '^29\.' | head -n 1)
-# 必须包含 localhost, 127.0.0.1, 本机IP, 以及 Ray 的 Head IP (29.209.112.175)
-export no_proxy="localhost,127.0.0.1,::1,0.0.0.0,$HOST_IP,.woa.com"
-export NO_PROXY=$no_proxy
-
-echo "🌍 Network Config:"
-echo "   Proxy: $http_proxy"
-echo "   No Proxy: $no_proxy"
+# 2. 检查必须的环境变量 (并提供缺省值)
+MASTER_ADDRESS=${MASTER_ADDRESS:-"127.0.0.1"} # 默认本机
+PORT=${PORT:-"8080"}                          # 默认8080端口
 
 # 3. 路径计算 (自动定位项目根目录)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -41,26 +28,45 @@ echo "========================================"
 echo "🚀 AppWorld Service Launcher"
 echo "📂 Project Root: $PROJECT_ROOT"
 echo "📂 AppWorld Root: $APPWORLD_ROOT"
+echo "🌐 Portal: $MASTER_ADDRESS:$PORT"
 echo "========================================"
 
 # 5. 自动激活 Conda
 if [[ "$CONDA_DEFAULT_ENV" != "appworld" ]]; then
     echo "⚡ Activating 'appworld' conda environment..."
-    CONDA_BASE=$(conda info --base 2>/dev/null || echo "$HOME/anaconda3")
+    
+    # 尝试寻找确切的 conda 路径 (兼顾 anaconda 和 miniconda)
+    if command -v conda &> /dev/null; then
+        CONDA_BASE=$(conda info --base)
+    elif [ -f "$HOME/anaconda3/etc/profile.d/conda.sh" ]; then
+        CONDA_BASE="$HOME/anaconda3"
+    elif [ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then
+        CONDA_BASE="$HOME/miniconda3"
+    else
+        echo "❌ Error: Cannot find conda installation."
+        exit 1
+    fi
+    
     source "$CONDA_BASE/etc/profile.d/conda.sh"
-    conda activate appworld
+    
+    # 尝试激活，如果失败则报错退出 (通过 || exit 1 拦截)
+    conda activate appworld || {
+        echo "❌ Error: Failed to activate conda environment 'appworld'. Please check if it exists."
+        exit 1
+    }
 fi
 
-# 确保 Ray 已安装
+# 6. 确保 Ray 已安装
 if ! python -c "import ray" 2>/dev/null; then
     echo "⚠️  Ray not found, installing..."
     pip install "ray[default]"
 fi
 
-# 6. 切换目录并启动
+# 7. 切换目录并启动
 cd "$PROJECT_ROOT"
 
-# 使用 exec 替换当前 Shell 进程
+echo "🌟 Starting service..."
+# 使用 exec 替换当前 Shell 进程，并安全传入变量
 exec python -m env_service.env_service \
     --env appworld \
     --portal "$MASTER_ADDRESS" \

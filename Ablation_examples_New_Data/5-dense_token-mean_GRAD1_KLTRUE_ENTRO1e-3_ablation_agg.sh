@@ -41,10 +41,10 @@ ps -ef | grep -E "ray|vllm|agentevolver|env_service" | grep -v grep | awk '{prin
 fuser -k -9 8080/tcp >/dev/null 2>&1
 fuser -k -9 6379/tcp >/dev/null 2>&1
 rm -rf /tmp/ray/* 2>/dev/null
-find /mnt/cephfs/haowengao/test_agent/env_service/environments/appworld/experiments/outputs -type d -depth -exec rmdir {} + 2>/dev/null
+find ./env_service/environments/appworld/experiments/outputs -type d -depth -exec rmdir {} + 2>/dev/null
 
 sleep 2
-export GEN_OUTPUT_DIR="/mnt/cephfs/haowengao/test_agent/GEN_DATA_0225"
+export GEN_OUTPUT_DIR="./GEN_DATA_0225"
 mkdir -p "$GEN_OUTPUT_DIR"
 
 # ---- 2. 环境变量 ----
