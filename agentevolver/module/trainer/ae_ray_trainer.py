@@ -868,7 +868,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
         collate_fn=None,
         shuffle_trainset:bool=False,
         device_name="cuda",
-        hindsight_manager=Optional[None],
+        hindsight_manager: Optional[Any]= None
     ):
         """
         [用途]: 初始化训练器基础参数、任务管理器及关联的远端依赖模块。
@@ -1658,7 +1658,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
 
                             trajectories = self.env_manager.rollout(tasks, task_exp_configs, mode="sample", epoch=f"train.{epoch}.{i}")
 
-                            assert len(trajectories)>0, "{len(trajectories)=}?"
+                            assert len(trajectories)>0, f"{len(trajectories)=}?"
                             print("=" * 10 + "end fit rollout" + "=" * 10)
                             main_log(f"Step {self.global_steps}: Rollout Finished. Count: {len(trajectories)}")
 

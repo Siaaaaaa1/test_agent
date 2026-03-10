@@ -21,7 +21,7 @@ from agentevolver.module.env_manager.env_worker import EnvWorker
 from agentevolver.module.exp_manager.exp_manager import TrajExpConfig
 from agentevolver.module.task_manager.agent_flow import ModifiedAgentFlow
 from agentevolver.module.task_manager.base import LlmClient
-# [修改 1/4] 替换为 DashScopeClient
+# 替换为 DashScopeClient 支持多模型降级
 from agentevolver.client.llm_client import DashScopeClient 
 
 # 奖励计算与总结相关
@@ -39,6 +39,10 @@ from . import TaskPostFilter
 std_logger = logging.getLogger(__name__)
 
 class LlmFilter(TaskPostFilter):
+    """
+    大模型后置终审裁判：将生成好的任务放到真实环境中试跑。
+    通过轮询多个梯度的模型（从弱到强），筛选出具有合适难度且可被跑通的任务。
+    """
     def __init__(self, env_url: str, llm_client: LlmClient, num_threads: int, *, tokenizer, config):
         """
         初始化 LlmFilter。强制重写为 DashScopeClient 以支持 qwen 系列模型轮询。
@@ -50,7 +54,6 @@ class LlmFilter(TaskPostFilter):
         self._lock = threading.Lock()
         self._io_lock = threading.Lock()
 
-        # [修改 2/4] 强制实例化刚才定义的 DashScopeClient
         try:
             logger.info("🛡️ [LlmFilter] Initializing DashScopeClient for tier polling.")
             # 默认传入基础模型，后续在轮询中通过 kwargs 覆盖 model 参数
@@ -71,7 +74,7 @@ class LlmFilter(TaskPostFilter):
         self.rejected_file = os.path.join(self.output_dir, "post_filter_rejected.jsonl")
 
     def _save_to_log(self, item: TaskObjective, is_success: bool, reason: str = ""):
-        """线程安全的实时追加写入"""
+        """线程安全的实时追加写入日志文件"""
         target_file = self.success_file if is_success else self.rejected_file
         with self._io_lock:
             try:
@@ -121,11 +124,12 @@ class LlmFilter(TaskPostFilter):
 
     def _execute_strategy1(self, task: TaskObjective) -> TaskObjective | None:
         """
-        [修改 3/4] 模型轮训核心逻辑：
+        模型轮训核心逻辑：
         优先使用性价比高且速度快的 qwen3.5-plus，
-        如果失败（报错或得分不达标），降级切换至能力更强的 qwen3-max。
+        如果失败，自动降级切换至能力更强的 qwen3-max。
         """
-        candidate_models = ["qwen3.5-plus"]
+        # [修复] 补齐候选模型列表，防止降级逻辑失效
+        candidate_models = ["qwen3.5-plus", "qwen3-max"]
         
         for attempt, model_name in enumerate(candidate_models):
             try:
@@ -160,7 +164,7 @@ class LlmFilter(TaskPostFilter):
                 # 3. 校验数据
                 assert task.task.query is not None, "Task query is missing"
 
-                # 4. 执行
+                # 4. 执行探索
                 traj = worker.execute(
                     data_id=task.task.task_id,
                     rollout_id=f"filter_{model_name}",
@@ -176,7 +180,7 @@ class LlmFilter(TaskPostFilter):
                     score = traj.reward.outcome
                     if score >= 0.7:
                         logger.info(f"✅ [Filter] Task {task.task.task_id} PASSED with {model_name} (Score: {score})")
-                        # 记录使用的模型并重写 GT
+                        # 记录跑通该任务所使用的模型，并重写 Ground Truth
                         task.task.metadata = task.task.metadata or {}
                         task.task.metadata["filter_model"] = model_name
                         return self._rewrite_new_gt(task, traj)
@@ -191,7 +195,7 @@ class LlmFilter(TaskPostFilter):
         return None
 
     def _validate(self, task: TaskObjective, trajectory: Trajectory) -> bool:
-        """保留方法兼容性"""
+        """保留方法兼容性，调用外部评估器进行轨迹成功率验证。"""
         try:
             validator = TrajectoryEvaluator(self._llm_client)
             return validator.evaluate_trajectory_success(task, trajectory)
@@ -200,13 +204,11 @@ class LlmFilter(TaskPostFilter):
             return False
 
     def _rewrite_new_gt(self, task: TaskObjective, trajectory: Trajectory) -> TaskObjective:
-        """任务成功后重新总结 Ground Truth"""
+        """任务成功后重新提取并改写 Ground Truth"""
         sys_prompt, user_prompt = get_task_summarize_prompt([trajectory], [task], None)
         messages = [{"role": "system", "content": sys_prompt}, {"role": "user", "content": user_prompt}]
         
         try:
-            # 重写 GT 时，默认使用刚执行成功的模型即可，不需要额外传 params，
-            # 这里 _get_llm_chat_fn 无参调用会默认走初始化时的配置。
             llm_output_dict = self._get_llm_chat_fn()(messages)
             llm_output = llm_output_dict.get("content", "")
             
@@ -214,7 +216,6 @@ class LlmFilter(TaskPostFilter):
             if gt is not None:
                 if task.task.origin_ground_truth is None:
                     task.task.origin_ground_truth = task.task.ground_truth
-                
                 task.ground_truth = gt 
                 
         except Exception as e:
@@ -224,8 +225,7 @@ class LlmFilter(TaskPostFilter):
         
     def _get_llm_chat_fn(self, sampling_params: Optional[dict] = None) -> Callable:
         """
-        完善了重试机制。如果在当前模型下遇到网络波动，会进行退避重试（最多3次），
-        如果 3 次网络级请求依然失败，会将异常抛出/返回错误，交由外层的轮询机制切模型。
+        构造并返回一个满足 AgentFlow 所需签名的闭包函数，内含退避重试逻辑。
         """
         def llm_chat(
             messages: list[dict[str, str]],
@@ -256,33 +256,35 @@ class LlmFilter(TaskPostFilter):
         return llm_chat
 
 class TrajectoryEvaluator:
-    """Evaluate trajectory success using LLM"""
+    """使用 LLM 评估历史轨迹是否成功完成了给定任务。"""
     
     def __init__(self, client: LlmClient):
         self.client = client
         self.prompts = EvaluationPrompts()
 
     def evaluate_trajectory_success(self, task: TaskObjective, trajectory: Trajectory) -> bool:
-        """Evaluate if trajectory completed the task successfully"""
+        """评估轨迹的核心方法。"""
         try:
             trajectory_summary = self._create_trajectory_summary(trajectory)
             
             final_observation: str | None = None
+            # [修复] 兼容字典或对象属性访问，防止 TypeError
             for step in reversed(trajectory.steps):
-                if final_observation is None and step['role'] != 'assistant':
-                    final_observation = step['content']
+                role = step.get('role') if isinstance(step, dict) else getattr(step, 'role', '')
+                content = step.get('content') if isinstance(step, dict) else getattr(step, 'content', '')
+                if final_observation is None and role != 'assistant':
+                    final_observation = content
                     break
                 
             assert task.objective is not None, "synthetic task must have objective"
             
-            # 拿到的是 Message 列表
             prompt_messages = self.prompts.success_evaluation_prompt(
                 query=task.objective,
                 trajectory_summary=trajectory_summary,
                 final_observation=final_observation or "[no observation]"
             )
             
-            # [修改 4/4] 使用重试机制调用，并明确给评估器分配基础模型
+            # 使用重试机制调用，并明确给评估器分配基础模型
             response = None
             for i in range(3):
                 try:
@@ -303,16 +305,20 @@ class TrajectoryEvaluator:
             return False
     
     def _create_trajectory_summary(self, traj: Trajectory) -> str:
+        """从 Trajectory 对象中抽提流水账日志供大模型审阅。"""
         summary_blocks = []
         for i, step in enumerate(traj.steps):
-            block = f"(Step {i + 1}) {step['role']}:\n"
-            block += f"{step['content'][:200]}...\n"  
+            # [修复] 兼容字典或对象属性访问
+            role = step.get('role') if isinstance(step, dict) else getattr(step, 'role', '')
+            content = step.get('content') if isinstance(step, dict) else getattr(step, 'content', '')
+            block = f"(Step {i + 1}) {role}:\n"
+            block += f"{content[:200]}...\n"  
             summary_blocks.append(block)
         return "\n".join(summary_blocks)
     
     def _parse_evaluation_response(self, response: str) -> bool:
         """
-        [修改 4/4] 使用精准正则匹配，抛弃了原来容易被误导的词频统计法。
+        使用精准正则匹配解析大模型的判定结论。
         """
         if not response:
             return False
@@ -322,7 +328,7 @@ class TrajectoryEvaluator:
         if match:
             return match.group(1).lower() == "true"
             
-        # 兜底逻辑：如果大模型没有按照格式输出，但在最后几句话明确给出了结论
+        # 兜底逻辑：如果没按格式，但在文末等地方明确写了成功
         if "success: true" in response.lower() or "successful: true" in response.lower():
             return True
             
@@ -370,6 +376,7 @@ class EvaluationPrompts:
         return messages
 
 def make_solver_tip_prompt(query: str, gt: str):
+    """构建自带前置提示词信息的 Agent 运行起点 Prompt"""
     return f"""You are an AI assistant helping to complete tasks in an interactive environment.
 Feel free to use the tips to help you complete the task. The tips include a potential step-by-step solution to the task, but I do not ensure it is correct.
 

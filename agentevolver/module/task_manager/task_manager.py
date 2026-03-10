@@ -14,7 +14,7 @@ from typing import (
 from loguru import logger
 from omegaconf import DictConfig
 import requests
-import numpy as np  # [新增] 引入 numpy 以优化采样性能
+import numpy as np  # 引入 numpy 以优化采样性能
 from torch.utils.data import IterableDataset, Dataset
 from tqdm import tqdm
 
@@ -56,36 +56,28 @@ LEVEL_WEIGHTS = {
 def get_weighted_api_sample(api_dict, k=5):
     """
     基于 Generality 等级进行加权无放回采样，获取 API 子集。
-
-    核心逻辑：通过将大模型评估的 API 泛化等级映射为数值权重，利用 numpy 进行基于概率分布的采样，
-    从而确保泛化能力强的 API 在合成任务时有更高概率被选中。
+    通过将大模型评估的 API 泛化等级映射为数值权重，利用 numpy 进行概率分布采样。
 
     Args:
-        api_dict (dict): 包含 API 信息的字典，键为 API 标识，值为 API 详情字典。
+        api_dict (dict): 包含 API 信息的字典。
         k (int, optional): 需要采样的 API 数量，默认为 5。
 
     Returns:
         list: 采样出的 API 详情列表。
     """
     apis = list(api_dict.values())
-    # 如果候选 API 数量不足或刚好等于 k，则无需采样，直接返回全部
     if len(apis) <= k:
         return apis
 
-    # 计算每个 API 的权重：遍历获取大模型评估的级别
     weights = []
     for api in apis:
-        # 提取当前 API 的泛化能力评估等级，若无则默认为 Unknown
         assessment = api.get("generality_assessment", {})
         level = assessment.get("generality_level", "Unknown")
-        # 映射为具体数值权重，默认兜底权重为 1.0
         w = LEVEL_WEIGHTS.get(level, 1.0)
         weights.append(w)
 
-    # [优化] 使用 numpy 替代 random.choices + pop，将 O(N) 操作优化为高效的 C 层面无放回采样
     weights_arr = np.array(weights)
-    probs = weights_arr / weights_arr.sum() # 归一化为概率分布
-    # 执行加权无放回采样，获取目标索引
+    probs = weights_arr / weights_arr.sum() 
     chosen_indices = np.random.choice(len(apis), size=k, replace=False, p=probs)
     
     return [apis[i] for i in chosen_indices]
@@ -109,17 +101,13 @@ def get_exploration_strategy(name: str, strategy_args, *, tokenizer, config, llm
         strategy_args (dict): 传递给具体策略类的额外参数字典。
         tokenizer: 模型对应的 tokenizer 实例。
         config (DictConfig): 全局配置对象。
-        llm_client (LlmClient): 用于大模型交互的客户端实例。
+        llm_client (LlmClient): 用于大模型交互的客户端。
         env_profile (EnvProfile): 目标环境的画像配置。
 
     Returns:
         TaskExploreStrategy: 实例化后的具体探索策略对象。
-
-    Raises:
-        NotImplementedError: 当传入了未支持的策略名称时抛出。
     """
     logger.info(f"loading exploration strategy {name}")
-    # 根据传入的 name 路由到不同的策略实现类
     if name == "random":
         return LlmRandomSamplingExploreStrategy(
             tokenizer=tokenizer, 
@@ -138,41 +126,30 @@ def get_exploration_strategy(name: str, strategy_args, *, tokenizer, config, llm
     else:
         raise NotImplementedError(f"exploration strategy {name} not implemented")
 
-# ================= ApiDrivenPipeline (重构提取的专门管线类) =================
+# ================= ApiDrivenPipeline =================
 
 class ApiDrivenPipeline:
     """
     专门负责处理 API-Driven 策略的复杂生成、过滤、探索生命周期的 Pipeline。
-
-    设计初衷：将之前臃肿的 _generate_task_api_driven 方法拆解为职责明确的类，
-    通过状态隔离、多阶段落盘（流式写入）以及多线程并发，保障大规模任务合成的稳定性与可恢复性。
     """
     def __init__(self, manager: "TaskManager", tasks: Sequence[Task], show_progress: bool = False, resume_file: Optional[str] = None):
         """
-        初始化 API 驱动的数据生成流水线。
-
-        Args:
-            manager (TaskManager): 调用的任务管理器，提供上下文和全局配置。
-            tasks (Sequence[Task]): 用于探索的种子任务列表。
-            show_progress (bool): 是否显示 tqdm 进度条。
-            resume_file (Optional[str]): 恢复检查点的基础文件路径，如果为空则使用默认隐式文件。
+        初始化 API 驱动的数据生成流水线，准备上下文及文件读写锁。
         """
         self.manager = manager
         self.tasks = tasks
         self.show_progress = show_progress
-        self.mem_lock = threading.Lock() # [修复] 用于保护内存列表多线程安全的锁，防止并发写冲突
+        self.mem_lock = threading.Lock() 
         
-        # 解析生成策略的超参数
         self.strategy_args = manager._config.task_manager.get('exploration_strategy_args', {})
-        self.a = self.strategy_args.get('a', 1) # Intra-domain 任务扩展比例
-        self.b = self.strategy_args.get('b', 1) # Cross-domain 任务扩展比例
+        self.a = self.strategy_args.get('a', 1) 
+        self.b = self.strategy_args.get('b', 1) 
         self.debug_mode = False 
         
         logger.info(f"[API-Driven] Strategy Args: a={self.a}, b={self.b}, debug_log={self.debug_mode}")
         if self.debug_mode:
             logger.warning("Debug mode enabled: forcing single thread.")
 
-        # 路径初始化：如果环境变量中指定了统一输出目录，则强制将产物重定向到该目录，方便集中管理
         gen_output_dir = os.environ.get("GEN_OUTPUT_DIR")
         if gen_output_dir:
             base_name = "generated_tasks"
@@ -183,20 +160,19 @@ class ApiDrivenPipeline:
             
         self._init_paths()
         
-        # 从管理器的探索策略中提取 API 知识库及已激活的 App 集合
         self.api_knowledge = getattr(self.manager._exploration_strategy, 'api_knowledge', {})
         self.active_apps_set = getattr(self.manager._exploration_strategy, 'active_apps', set(self.api_knowledge.keys()))
 
     def _init_paths(self):
-        """挂载所有流式文件的落地路径，细分各阶段（Intra/Cross，生成/过滤/演化）的产物存储。"""
-        # 同领域（Intra-domain）产物路径
+        """
+        挂载所有流式文件的落地路径，细分各阶段（Intra/Cross，生成/过滤/演化）的产物存储。
+        """
         self.intra_gen_path = f"{self.resume_file}.intra.generated.jsonl"
         self.intra_filtered_path = f"{self.resume_file}.intra.filtered.jsonl"
         self.intra_final_path = f"{self.resume_file}.intra.jsonl"
         self.intra_direct_path = f"{self.resume_file}.intra.direct.jsonl"
         self.intra_evolved_path = f"{self.resume_file}.intra.evolved.jsonl" 
         
-        # 跨领域（Cross-domain）产物路径
         self.cross_gen_path = f"{self.resume_file}.cross.generated.jsonl"
         self.cross_filtered_path = f"{self.resume_file}.cross.filtered.jsonl"
         self.cross_final_path = f"{self.resume_file}.extra.jsonl"
@@ -205,29 +181,23 @@ class ApiDrivenPipeline:
 
     def _load_intermediate_tasks(self, path: str) -> Optional[List[Task]]:
         """
-        按行读取流式 jsonl 文件，还原为内存中的 Task 列表（支持从断点恢复）。
-
-        Args:
-            path (str): 目标 jsonl 文件路径。
-
-        Returns:
-            Optional[List[Task]]: 成功反序列化的 Task 对象列表，若文件不存在或读取失败则返回 None 或空列表。
+        按行读取流式 jsonl 文件，还原为内存中的 Task 列表。
+        [修复] 修正了读取旧格式时提早 return 导致后续行被忽略的 Bug。
         """
         if os.path.exists(path):
             try:
                 tasks_list = []
                 with open(path, 'r') as f:
                     for line in f:
-                        if line.strip(): # 忽略空行
+                        if line.strip(): 
                             try:
                                 data = json.loads(line)
-                                # 兼容旧版包含额外元数据的复合结构
                                 if "task" in data and "processed_indices" in data:
-                                    return [Task.parse_obj(t) for t in data['tasks']]
+                                    # 修复：改为 extend 而非 return，允许继续读取下一行
+                                    tasks_list.extend([Task.parse_obj(t) for t in data['tasks']])
                                 else:
-                                    # 标准 Task 结构解析
                                     tasks_list.append(Task.parse_obj(data))
-                            except: pass # 忽略单行解析失败的脏数据，保证主体可用
+                            except: pass 
                 logger.info(f"Loaded {len(tasks_list)} tasks from stream file {path}")
                 return tasks_list
             except Exception as e:
@@ -237,26 +207,21 @@ class ApiDrivenPipeline:
     def _thread_safe_append(self, path: str, items: List[Any]):
         """
         通过获取全局 IO 锁，安全地将对象序列化为 JSON 行并追加入文件。
-
-        Args:
-            path (str): 目标写入文件路径。
-            items (List[Any]): 待写入的对象列表（通常是 Task 或 TaskObjective）。
         """
         if not items: return
-        # 使用全局互斥锁防止多个 Worker 线程同时写文件导致 JSONL 格式乱码
         with io_lock:
             try:
                 with open(path, 'a', encoding='utf-8') as f:
                     for item in items:
-                        # 兼容 Pydantic 模型与普通 dict 对象的序列化
                         obj = item.dict() if hasattr(item, 'dict') else item
                         f.write(json.dumps(obj, ensure_ascii=False) + "\n")
             except Exception as e:
                 logger.error(f"Failed to append to {path}: {e}")
 
-    # --- Worker 方法集群 ---
     def _worker_generate_intra(self, idx: int, app_name: str, seed_task: Task) -> List[Task]:
-        """重构 Worker：传入单个 app_name 字符串"""
+        """
+        同领域任务的生成 Worker，调用大模型生成面向单 App 的查询。
+        """
         try:
             base_task = copy.deepcopy(seed_task)
             if base_task.metadata is None: base_task.metadata = {}
@@ -273,7 +238,9 @@ class ApiDrivenPipeline:
             return []
 
     def _worker_generate_cross(self, idx: int, target_apps: List[str], seed_task: Task) -> List[Task]:
-        """重构 Worker：传入 2-3 个 App 名称列表"""
+        """
+        跨领域任务的生成 Worker，调用大模型生成多 App 协同作业的查询。
+        """
         try:
             base_task = copy.deepcopy(seed_task)
             if base_task.metadata is None: base_task.metadata = {}
@@ -291,39 +258,31 @@ class ApiDrivenPipeline:
 
     def _worker_explore_intra(self, task: Task) -> List[TaskObjective]:
         """
-        同领域任务的探索 Worker 函数。
-        执行任务，并根据反馈归档直接验证成功的轨迹（Direct GT）或进一步演化的轨迹（Evolved）。
+        同领域任务探索 Worker：在环境中执行生成的任务，收集有效轨迹和直接验证标签。
         """
         try:
             data_id = task.metadata.get("data_id", f"unknown_{random.randint(0,1000)}")
-            # 在环境中进行轨迹探索
             trajectories = self.manager._exploration_strategy.explore(task, data_id, data_id)
-            # 判定阈值：只有 reward >= 0.7 被视为探索成功
             success_traj = trajectories[0] if (trajectories and trajectories[0].reward and trajectories[0].reward.outcome >= 0.7) else None
             if not success_traj: return []
 
             reward_val = success_traj.reward.outcome
-            # 序列化轨迹步骤，以备归档
             raw_gt_steps = [s.dict() if hasattr(s, 'dict') else s for s in success_traj.steps]
-            # 尝试作为直接 Ground Truth 验证
             direct_verified_obj = self.manager._exploration_strategy.verify_direct_gt(task, success_traj)
             
             origin_query_for_evolved = task.query
             origin_gt_for_evolved = None 
 
             if direct_verified_obj:
-                # 记录直接验证通过的详细元信息
                 direct_verified_obj.task.raw_trajectory = raw_gt_steps
                 direct_verified_obj.task.origin_ground_truth = None
                 direct_verified_obj.task.origin_query = task.query
                 direct_verified_obj.task.metadata["source_data_id"] = data_id
                 direct_verified_obj.task.metadata["execution_reward"] = {"outcome": reward_val}
                 
-                # 安全追加落盘
                 self._thread_safe_append(self.intra_direct_path, [direct_verified_obj])
                 origin_gt_for_evolved = direct_verified_obj.task.ground_truth 
 
-            # 基于成功轨迹生成更凝练/泛化的任务总结（Evolved Results）
             evolved_results = self.manager._exploration_strategy.summarize(task, success_traj)
             if evolved_results:
                 for res in evolved_results:
@@ -333,7 +292,6 @@ class ApiDrivenPipeline:
                     res.confidence = 0 
                     res.reward = reward_val
                     res.task.metadata.update({"data_pair_type": "evolved", "source_data_id": data_id, "has_verified_origin": (origin_gt_for_evolved is not None)})
-                # 追加演化结果落盘
                 self._thread_safe_append(self.intra_evolved_path, evolved_results)
             return evolved_results if evolved_results else []
         except Exception as e:
@@ -341,7 +299,9 @@ class ApiDrivenPipeline:
             return []
 
     def _worker_explore_cross(self, task: Task) -> List[TaskObjective]:
-        """跨领域任务的探索 Worker 函数（逻辑与 Intra 基本一致，主要区分埋点与落盘路径）。"""
+        """
+        跨领域任务探索 Worker：同上，主要负责多 App 联动环境执行及提取。
+        """
         try:
             data_id = task.metadata.get("data_id", f"unknown_{random.randint(0,1000)}")
             trajectories = self.manager._exploration_strategy.explore(task, data_id, data_id)
@@ -381,7 +341,7 @@ class ApiDrivenPipeline:
 
     def run(self) -> List[TaskObjective]:
         """
-        执行 API-Driven 流水线。包含中间级拦截和最终产物聚合。
+        执行 API-Driven 流水线。涵盖多阶段：生成 -> 初筛 -> 环境推演 -> 提取归档 -> 后置大模型打分。
         """
         target_files = [
             self.intra_direct_path, 
@@ -390,7 +350,6 @@ class ApiDrivenPipeline:
             self.cross_evolved_path
         ]
         
-        # 检查四个底层产物文件是否全部齐全
         all_files_exist = all(os.path.exists(p) for p in target_files)
 
         if all_files_exist:
@@ -534,7 +493,6 @@ class ApiDrivenPipeline:
                                 with self.mem_lock: cross_res.extend(filtered_objs)
 
         # === Final Merge & Post Filter (支持断点续传) ===
-        # 无论是跳过生成进来的，还是刚刚生成完的，最终都会在这里把四个文件合起来过 Post Filter
         logger.info("=== Starting Final Merge & Filtering (Direct & Evolved, 支持断点续传) ===")
         total_results = []
         
@@ -555,13 +513,9 @@ class ApiDrivenPipeline:
 
         logger.info(f"🔍 数据聚合完成，共 {len(total_results)} 条。送入 Post Filter (LLM 裁判)...")
         
-        # ---------------------------------------------------------
-        # [新增] 断点续传核心机制 (缓存文件自动挂载在 GEN_OUTPUT_DIR 下)
-        # ---------------------------------------------------------
         passed_cache_path = self.resume_file + ".post_filter_passed.jsonl"
         processed_ids_path = self.resume_file + ".post_filter_processed.json"
         
-        # 1. 加载已经处理过的 ID（包括被拒绝和通过的），防止重复请求大模型
         processed_ids = set()
         if os.path.exists(processed_ids_path):
             try:
@@ -569,7 +523,6 @@ class ApiDrivenPipeline:
                     processed_ids = set(json.load(f))
             except Exception: pass
             
-        # 2. 加载之前已经跑通过滤器的幸存者数据
         final_survivors = []
         if os.path.exists(passed_cache_path):
             with open(passed_cache_path, 'r', encoding='utf-8') as f:
@@ -577,10 +530,8 @@ class ApiDrivenPipeline:
                     if line.strip():
                         final_survivors.append(TaskObjective.parse_obj(json.loads(line)))
                         
-        # 3. 筛选出还没有被处理过的数据
         pending_results = []
         for obj in total_results:
-            # 优先使用 data_id 保证唯一性，兜底使用 task_id
             uid = obj.task.metadata.get("data_id") if (obj.task.metadata and "data_id" in obj.task.metadata) else obj.task.task_id
             if uid not in processed_ids:
                 pending_results.append((uid, obj))
@@ -588,31 +539,24 @@ class ApiDrivenPipeline:
         if pending_results:
             logger.info(f"🚀 发现 {len(pending_results)} 条待过滤数据 (已跳过 {len(processed_ids)} 条历史记录)，开始分批送入 LLM 裁判...")
             
-            # 分批处理以随时保存状态 (每 10 条保存一次)
             batch_size = 10 
             for i in tqdm(range(0, len(pending_results), batch_size), desc="Post Filtering Batches"):
                 batch_tuples = pending_results[i : i + batch_size]
                 batch_objs = [item[1] for item in batch_tuples]
                 batch_uids = [item[0] for item in batch_tuples]
                 
-                # 调用 LLM 过滤当前批次
                 batch_survivors = self.manager._apply_post_filter(batch_objs)
                 
                 if batch_survivors:
                     final_survivors.extend(batch_survivors)
-                    # 线程安全地追加写入通过的数据
                     self._thread_safe_append(passed_cache_path, batch_survivors)
                 
-                # 记录所有已被处理的 UID（无论死活，防止重试）
                 processed_ids.update(batch_uids)
                 with open(processed_ids_path, 'w', encoding='utf-8') as f:
                     json.dump(list(processed_ids), f)
         else:
             logger.info("✅ 所有聚合数据均已在历史中过滤完毕，直接使用缓存的过滤结果。")
 
-        # ---------------------------------------------------------
-        # 最终写入 tasks_explored.train.json
-        # ---------------------------------------------------------
         gen_output_dir = os.environ.get("GEN_OUTPUT_DIR", "")
         if gen_output_dir:
             output_file = os.path.join(gen_output_dir, "tasks_explored.train.json")
@@ -652,7 +596,10 @@ class TaskManager(object):
         env_worker: Optional[Any] = None, 
         **kwargs: Unpack[TaskManagerProps],
     ):
-        """初始化管理器上下文、挂载依赖服务。"""
+        """
+        初始化管理器上下文、挂载依赖服务。
+        [修复] 添加 _already_loaded_target_file 的显式初始化。
+        """
         self._config = config
         self._tokenizer = tokenizer
         self._exploration_strategy = get_exploration_strategy(
@@ -670,11 +617,11 @@ class TaskManager(object):
         self._env_service_url = env_service_url
         self._num_exploration_threads = kwargs.get("num_explore_threads", 5)
         self._n = kwargs.get("n", 1)
+        self._already_loaded_target_file = False  # [修复] 补齐属性初始化
 
         self.agent_flow = agent_flow  
         self.env_worker = env_worker  
 
-        # 注册三个不同粒度/阶段的过滤器组
         self._realtime_filters: list[TaskPostFilter] = [NaiveTaskPostFilter()]
         self._post_filter: list[TaskPostFilter] = [
             LlmFilter(env_service_url, llm_client, self._num_exploration_threads, tokenizer=tokenizer, config=config)
@@ -684,18 +631,17 @@ class TaskManager(object):
         ]
         
         self._tasks: list[Task] = [] 
-        # 管理后见之明（Hindsight）增补数据的偏移，实现流式读取不重复
         self._hindsight_file_offset = 0  
         self._hindsight_file_path = self._config.task_manager.get('exploration_strategy_args', {}).get('hindsight_data_path', './tasks_explored/hindsight_supplement.jsonl')
         
     @property
     def seed_tasks(self):
-        """获取当前持有的原始（种子）任务列表"""
+        """获取当前持有的原始（种子）任务列表。"""
         return self._tasks
     
     @property
     def seed_task_objectives(self):
-        """将原始种子任务打包为强化学习的目标格式（满置信度、无Reward）"""
+        """将原始种子任务打包为强化学习的目标格式（满置信度、无Reward）。"""
         return [TaskObjective(task=task, confidence=1.0, reward=None) for task in self.seed_tasks]
 
     def load_tasks(self, tasks: Sequence[Task]):
@@ -761,7 +707,7 @@ class TaskManager(object):
         return 0
 
     def _compute_tasks_hash(self, tasks: Sequence[Task]) -> str:
-        """计算任务集的 MD5 哈希，用于校验缓存匹配度（断点复用判定）。"""
+        """计算任务集的 MD5 哈希，用于校验缓存匹配度。"""
         combined_str = "|".join([f"{task.task_id}:{task.env_type}" for task in tasks])
         return hashlib.md5(combined_str.encode()).hexdigest()
 
@@ -781,14 +727,6 @@ class TaskManager(object):
     def _apply_filters_with_report(self, items: List[Any], filters: List[Any], stage_name: str) -> List[Any]:
         """
         执行一条由多个 Filter 对象组成的流水线，并详细报告丢弃统计和示例。
-
-        Args:
-            items (List[Any]): 输入待过滤列表。
-            filters (List[Any]): 继承了 filter() 方法的规则对象集合。
-            stage_name (str): 日志中用于标识过滤阶段的前缀名。
-
-        Returns:
-            List[Any]: 成功穿透所有过滤器的存活样本集。
         """
         if not items: return []
         current_items = items
@@ -796,7 +734,6 @@ class TaskManager(object):
         for f in filters:
             filter_name = f.__class__.__name__
             before_count = len(current_items)
-            # 建立 ID->Obj 映射方便后续追溯丢弃的对象详情
             before_map = {self._get_item_identifier(item): item for item in current_items}
             current_items = f.filter(current_items)
             after_count = len(current_items)
@@ -805,7 +742,6 @@ class TaskManager(object):
                 logger.warning(f"❌ [Filter: {filter_name}] 过滤掉了 {dropped_count} 个样本 (剩余: {after_count})")
                 after_ids = set(self._get_item_identifier(item) for item in current_items)
                 dropped_items = [item for uid, item in before_map.items() if uid not in after_ids]
-                # 随机采样前 3 个被丢弃的 Bad Case 展示，方便开发人员 Debug
                 for i, dropped in enumerate(dropped_items[:3]):
                     logger.warning(f"   -> 丢弃样本示例 #{i+1}: {self._get_item_desc(dropped)}")
                 if dropped_count > 3: logger.warning(f"   -> ... 以及其他 {dropped_count - 3} 个")
@@ -815,20 +751,15 @@ class TaskManager(object):
 
     def generate_task(self, tasks: Sequence[Task], *, show_progress=False, resume_file: Optional[str] = None) -> list[TaskObjective]:
         """
-        总入口：最高级拦截。如果有 tasks_explored.train.json，直接全量读取并跳过所有生成。
+        总入口：最高级拦截。如果有训练终态文件，直接全量读取并跳过所有生成。
         """
-        # ==================== [最高级拦截] ====================
-        # 1. 获取环境变量 GEN_OUTPUT_DIR
         gen_output_dir = os.environ.get("GEN_OUTPUT_DIR", "")
-        
-        # 2. 智能拼接路径（如果环境变量有值就拼接，没有就直接用当前目录下的文件名）
         if gen_output_dir:
             target_file = os.path.join(gen_output_dir, "tasks_explored.train.json")
         else:
             target_file = "tasks_explored.train.json"
         
         if os.path.exists(target_file):
-            # 防重入：如果 Dataset 是流式的，第二次以后调用直接返回空，结束这一个 epoch
             if getattr(self, "_already_loaded_target_file", False):
                 return []
                 
@@ -854,8 +785,6 @@ class TaskManager(object):
                 logger.error(f"❌ 读取或解析 {target_file} 失败: {e}")
                 raise
 
-        # ========================================================
-        # 如果没有最终文件，才进入具体的策略生成管线
         strategy_type = "api_driven" if isinstance(self._exploration_strategy, ApiDrivenExploreStrategy) else "random"
         if strategy_type == "api_driven":
             pipeline = ApiDrivenPipeline(self, tasks, show_progress, resume_file)
@@ -866,20 +795,18 @@ class TaskManager(object):
     def _generate_task_random(self, tasks: Sequence[Task], *, show_progress=False, resume_file: Optional[str] = None) -> list[TaskObjective]:
         """
         早期版本的纯随机策略生成管线，保留用于降级与兼容测试。
-        依赖线程池将任务按照 Batch 切分并发探索。
         """
         if resume_file is None: resume_file = '.generate_task.checkpoint.json'
         current_tasks_hash = self._compute_tasks_hash(tasks)
         res = []
         processed_indices = set()
         
-        # 尝试通过本地哈希缓存复原任务状态
         if resume_file and os.path.exists(resume_file):
             try:
                 with open(resume_file, 'r') as f:
                     checkpoint = json.load(f)
                     if checkpoint.get('tasks_hash') != current_tasks_hash:
-                        os.remove(resume_file) # 指纹不匹配说明底层数据变动，直接废弃旧缓存
+                        os.remove(resume_file) 
                     else:
                         res = [TaskObjective.parse_raw(json.dumps(obj)) for obj in checkpoint.get('results', [])]
                         processed_indices = {int(i) for i in checkpoint.get('processed_indices', [])}
@@ -893,14 +820,11 @@ class TaskManager(object):
             batch_indices = list(range(0, len(task_q), parallel_num))
             for idx, i in enumerate(tqdm(batch_indices, desc="generating tasks (random)", disable=not show_progress)):
                 if idx in processed_indices: continue
-                # 将一个 Batch 切分后分配给各 Thread 处理
                 futures = [pool.submit(self._exlore_and_summarize, task, "unknown", "unknown") for task in task_q[i : i + parallel_num]]
                 task_objectives = sum([future.result() for future in futures], [])
-                # 回收后应用初筛
                 batch_filtered = self._apply_filters_with_report(task_objectives, self._realtime_filters, f"Random-Batch-{idx}-Realtime")
                 res.extend(batch_filtered)
                 
-                # 更新基于检索知识的任务判别器缓存
                 self._old_retrival.reset()
                 for j in batch_filtered: self._old_retrival.add_objective(j)
                 processed_indices.add(idx)
@@ -957,6 +881,7 @@ class FullDataset(Dataset):
     用于一次性完整准备整个阶段的强化学习交互数据，通过 MixtureStrategy 调和原始分布与合成数据的比例。
     """
     def __init__(self, manager: TaskManager, mixture_strategy: MixtureStrategy, reward_config: RewardProps, cache_path: Optional[str] = None, *, tokenizer, config, processor):
+        """初始化全量数据集实例。"""
         self._manager = manager
         self._tasks = self._manager.seed_task_objectives
         self._mixture_strategy = mixture_strategy
@@ -970,10 +895,8 @@ class FullDataset(Dataset):
         self._objectives = []
         self._synthetic_objectives = []
 
-        # 如果混合策略判定需要依赖合成任务（如某些阶段主要学 Exploration）
         if self._mixture_strategy.need_synthetic:
             logger.info("正在准备合成任务数据...")
-            # 优先读文件，规避冗长的生成耗时
             if self._cache_path is not None and os.path.exists(self._cache_path):
                 self.load_from_file()
             else:
@@ -983,12 +906,11 @@ class FullDataset(Dataset):
         self._rebuild_dataset()
 
     def _rebuild_dataset(self):
-        """核心数据组装方法：按既定配方 (MixtureStrategy) 混合两者后转换为 RL 引擎特有格式。"""
+        """核心数据组装方法：按既定配方混合两者后转换为 RL 引擎特有格式。"""
         self._objectives = self._mixture_strategy.mix_data(self._synthetic_objectives, self._tasks)
         if len(self._objectives) == 0:
             logger.error("【严重错误】没有可用的训练数据！可能是环境服务挂了，或者 Debug 模式下生成的任务全部被过滤了。")
             raise ValueError("Dataset is empty. Please check env_service status or disable debug_log.")
-        # 移交适配层转化为面向 Pytorch Dataloader 的 RlDataset
         self._dataset = to_rl_dataset(self._objectives, self._tokenizer, self._config, self._processor)
 
     def update(self):
@@ -1019,33 +941,26 @@ class FullDataset(Dataset):
         if os.path.exists(self._cache_path):
             with open(self._cache_path, "r") as f:
                 self._synthetic_objectives = []
-                # [优化 & 修复] 改为使用迭代器按行读取节省内存，同时消除了不必要的 json.loads 重复调用
                 for line in f:
                     if not line.strip(): continue
                     t = json.loads(line)
                     assert 'task' in t
-                    # 补充兜底的 query 判别标签
                     if 'open_query' not in t['task']:
                         t['task']['open_query'] = True 
                     
-                    # 借助 Pydantic 强校验解析格式
                     tmp = TaskObjective.parse_obj(t)
                     if tmp.ground_truth is None:
-                        # [修复] 直接复用之前解析出的字典 t，省去 CPU 与 IO 开销
                         tmp.ground_truth = t.get('ground_truth')
                     self._synthetic_objectives.append(tmp)
         else:
             raise FileNotFoundError(f"failed to load synthetic objectives from file {self._cache_path}, file not found")
         
-        # 强校验必须带有参考答案以便作强化学习 Critic/Rewarder 纠偏
         for item in self._synthetic_objectives:
             assert item.ground_truth is not None
 
         logger.info("patching grader config to all synthetic data")
-        # 强制接管并打上对应模型打分器标签
         for item in self._synthetic_objectives:
             item.task.evaluator=self._reward_config["synthetic_grader"]  
-
 
     def reload_new_task(self):
         """强制触发 TaskManager 走一轮完整的任务合成流以覆盖旧缓存。"""
@@ -1069,10 +984,12 @@ class FullDataset(Dataset):
         }
 
     def __getitem__(self, index):
+        """支持索引获取内部包装的 RlDataset 元素。"""
         if self._dataset is None: raise RuntimeError("Dataset not loaded.")  
         return self._dataset[index]
 
     def __len__(self):
+        """返回数据集实际可用的总样本数。"""
         return 0 if self._dataset is None else len(self._dataset)
 
 class AutoReloadDataset(IterableDataset):
@@ -1081,8 +998,13 @@ class AutoReloadDataset(IterableDataset):
     特别适用于难以将大规模数据全部持留于内存的大模型在线训练 (On-fly RL) 场景。
     """
     def __init__(self, manager: TaskManager, tasks: Iterable[Task], bs: int, mix_origins: bool = False, *, tokenizer, config, processor):
+        """
+        初始化流式数据集上下文。
+        [修复] 添加独立的迭代器维护游标，防止多轮 Reload 采样卡死在列表头部。
+        """
         self._manager = manager
         self._tasks = tasks
+        self._task_iter = iter(tasks)  # [修复] 维护真正的迭代器状态
         self._bs = bs
         self._tokenizer = tokenizer
         self._config = config
@@ -1092,16 +1014,21 @@ class AutoReloadDataset(IterableDataset):
     def reload(self):
         """
         触发拉取/生成下一批次所需训练数据的逻辑挂载点。
+        [修复] 修正了获取 delta 时对列表对象的错误遍历方式。
         """
         delta = []
-        for task in self._tasks:
-            delta.append(task)
-            if len(delta) == self._bs:
-                break
+        try:
+            for _ in range(self._bs):
+                delta.append(next(self._task_iter))
+        except StopIteration:
+            pass # 种子任务池已耗尽，此时可能获取到的 len(delta) < bs
+
+        # 如果没有任务可领，通知迭代停止
+        if not delta:
+            return 0
 
         ls = self._manager.generate_task(delta)
         
-        # [防卡死逻辑] 限制重试次数，避免本地文件读完后陷入死循环
         retry_count = 0
         max_retries = 3 
         
@@ -1109,7 +1036,6 @@ class AutoReloadDataset(IterableDataset):
             logger.debug(f"数据不足期望量，正在尝试重新获取... ({retry_count}/{max_retries})")
             new_ls = self._manager.generate_task(delta)
             
-            # 如果管线返回为空（说明读文件完毕），立即跳出
             if not new_ls:
                 break
                 
@@ -1117,20 +1043,21 @@ class AutoReloadDataset(IterableDataset):
             retry_count += 1
 
         if not ls:
-            return 0 # 彻底没有数据可拿了，通知迭代器结束
+            return 0 
 
-        # 追加装填到底层消耗队列表中
         self._dataset.append_dataset(to_rl_dataset(ls, self._tokenizer, self._config, self._processor))
         return self._dataset.num_rest_data
 
     def __iter__(self):
+        """使得类实例成为一个标准的 Python 迭代器。"""
         return self
 
     def __next__(self):
-        # 弹尽粮绝（底层缓存空载）时触发按需加载事件
+        """
+        动态按需吐出数据，底层数据空载时安全挂起并触发生成引擎补充弹药。
+        """
         if self._dataset.num_rest_data == 0:  
             logger.debug("no data left")
-            # 如果加载策略返回 0，意味着上游迭代器也穷尽了，此时安全结束训练
             if self.reload() == 0:  
                 logger.debug("no task left, stop reloading and iteration")
                 raise StopIteration

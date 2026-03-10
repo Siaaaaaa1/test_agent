@@ -170,7 +170,7 @@ python3 -m agentevolver.main_ppo \
     task_manager.llm_client="qwen3.5-plus" \
     task_manager.grader.synthetic_grader=api_process_llm_judge \
     task_manager.env_profile=./cookbook/env_profiles/appworld.json \
-    thread_pool.max_workers=4 \
+    thread_pool.max_workers=12 \
     actor_rollout_ref.rollout.enable_gt_process_reward=true \
     task_manager.generate_task_only=false \
     2>&1 | tee "$log_file"

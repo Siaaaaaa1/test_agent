@@ -70,55 +70,9 @@ Then output a single integer score (either **0-40** or **60-100**, never 41-59) 
 {trajs}
 """
 
-# USER_PROMPT = """### Role
-# You are an expert AI agent evaluator. Your job is to judge an agent's performance using the following inputs:
-
-# 1) **User Task** — what the agent was supposed to accomplish.
-# 2) **Agent Trajectory** — chronological steps the agent took, including actions, decisions, and outputs.
-
-# ### Ground Rules
-# - Base your judgment strictly on the provided trajectory. Do **not** invent missing steps or assumptions.
-# - Rely on your own knowledge to validate the correctness of the approach and the final result.
-# - Be deterministic: follow the procedure below and the scoring constraints exactly.
-
-# ---
-
-# ## Evaluation Procedure
-# 1. **Relevance Gate**: If the approach is wholly unrelated → **score = 0**.
-# 2. **Repetition Penalty**: If infinite/runaway repetition exists → **max score = 20**.
-# 3. **Goal Achievement**: Examine all steps. Did it actually complete the task correctly?
-# 4. **Deductions**: Deduct for execution errors, inefficiency, or roundabout steps.
-
-# ## Scoring Guidelines
-# **If goal achieved (must be 60-100):**
-# - **90-100:** Exceptional — clean, efficient.
-# - **80-89:** Strong — correct with minor inefficiencies.
-# - **70-79:** Good — correct but notably less efficient.
-# - **60-69:** Adequate — correct yet with significant problems.
-
-# **If goal not achieved (must be 0-40):**
-# - **30-40:** Poor — incorrect but generally relevant.
-# - **10-29:** Very poor — incorrect with major execution issues.
-# - **0-9:** Failure — irrelevant or infinite repetition.
-
-# ## Output Format
-# First, provide a **detailed reasoning analysis**.
-# Then output a single integer score (either **0-40** or **60-100**, never 41-59) wrapped in tags:
-
-# <reward>75</reward>
-
-# ---
-
-# ** User Task **
-# {task}
-
-# ** Agent Trajectory (STEP-ACTION-OBSERVATION) **
-# {trajs}
-# """
-
 def steps_to_msg(steps: list[dict[str, Any]]) -> str:
     """
-    Converts a list of step dictionaries into a single coherent string message.
+    将字典格式的步骤转化为纯文本格式供裁判分析。
     """
     trajectory_text = ""
     if not steps or not isinstance(steps, list):
@@ -157,13 +111,12 @@ class IntegratedRewardCalculator(RewardCalculator):
         self._client = DashScopeClient()
 
     def pack_message(self, trajectory: Trajectory) -> List[Dict]:
+        """将轨迹打包进 LLM 裁判的 Prompt。"""
         if not trajectory.steps or len(trajectory.steps) < 2:
             task_query = "Unknown Task"
             traj_text = "No steps."
         else:
-            # 假设 steps[1] 是 User Task
             task_query = trajectory.steps[1].get('content', '')
-            # steps[2:] 是实际交互
             traj_text = steps_to_msg(trajectory.steps[2:])
 
         content = USER_PROMPT.format(task=task_query, trajs=traj_text)
@@ -177,13 +130,18 @@ class IntegratedRewardCalculator(RewardCalculator):
         }
 
     def _calculate_reward_internal(self, trajectory: Trajectory) -> Tuple[float, str]:
+        """
+        [修复] 取消了不稳定的流式读取机制，改为标准同步请求。
+        优化了 Watchdog 的资源回收逻辑，避免僵尸线程堆积。
+        """
         task_id = getattr(self.task, 'task_id', 'unknown_task')
         
-        # --- Watchdog (防止网络死锁) ---
+        # --- Watchdog 防死锁 (改良版) ---
         watchdog_done = threading.Event()
         def watchdog():
-            time.sleep(120) 
-            if not watchdog_done.is_set():
+            # [核心修复] 使用 wait 替代 sleep，一旦主线程发出信号立刻结束守护，不占用资源
+            is_timeout = not watchdog_done.wait(timeout=120)
+            if is_timeout:
                 logger.critical(f"[{task_id}] 🚨 WATCHDOG ALERT: Reward calculation stuck > 120s! Network congestion likely.")
         
         wd_thread = threading.Thread(target=watchdog, daemon=True)
@@ -195,30 +153,25 @@ class IntegratedRewardCalculator(RewardCalculator):
         response_text = ""
         
         try:
-            stream = self._client.chat_stream_with_retry(
+            # [核心修复] 作为后台裁判系统，无需使用流式 API，直接使用阻塞重试获取完整回复，极大降低解析错误概率
+            response = self._client.chat_with_retry(
                 messages=self.pack_message(trajectory), 
                 max_retries=3
             )
             
-            first_token_seen = False
-            chunk_count = 0
-            
-            for chunk in stream:
-                if not first_token_seen:
-                    logger.info(f"[{task_id}] ⚡ First token received after {time.time()-start_time:.2f}s")
-                    first_token_seen = True
-                
-                response_text += chunk
-                chunk_count += 1
-                
-                if chunk_count % 100 == 0:
-                    logger.debug(f"[{task_id}] ... receiving reward stream (len: {len(response_text)})")
+            # 兼容返回值格式
+            if isinstance(response, dict):
+                response_text = response.get("content", "")
+            elif hasattr(response, "content"):
+                response_text = response.content
+            elif isinstance(response, str):
+                response_text = response
                 
         except Exception as e:
-            logger.error(f"[{task_id}] ❌ Reward calculation failed (Stream Error): {e}")
-            # 如果是异常，将错误信息放入 Reason，分数记为 0
+            logger.error(f"[{task_id}] ❌ Reward calculation failed (Network Error): {e}")
             return 0.0, f"Error: {str(e)}"
         finally:
+            # 发出事件通知，秒杀挂起的 Watchdog 线程
             watchdog_done.set()
 
         total_time = time.time() - start_time
@@ -229,6 +182,7 @@ class IntegratedRewardCalculator(RewardCalculator):
         if response_text:
             logger.info(f"[{task_id}] Judge Reasoning:\n{response_text}")
             
+            # 优先精准正则匹配标签内的分值
             match = re.search(r'<reward>([\d\.]+)</reward>', response_text.strip())
             if match:
                 raw = float(match.group(1))
@@ -236,7 +190,7 @@ class IntegratedRewardCalculator(RewardCalculator):
                 logger.info(f"[{task_id}] ✅ Score parsed: {score} (Raw: {raw})")
             else:
                 logger.warning(f"[{task_id}] ⚠️ No score tag found in response.")
-                # 简单兜底
+                # 兜底：如果模型忘了输出标签，强行找最后出现的数字
                 try:
                     fallback = re.findall(r'\b(100|[1-9]?[0-9])\b', response_text)
                     if fallback:

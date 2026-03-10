@@ -2,15 +2,15 @@ import re
 import time
 import zlib
 from typing import Any, cast, Set, List, Optional, Tuple, Dict
+import math
 
-# 保持原有导入不变
+# 内部模块导入
 from agentevolver.client.env_client import EnvClient
 from agentevolver.client.llm_client import DashScopeClient
 from agentevolver.module.agent_flow.reward_calculator import GraderResult, RewardCalculator
 from agentevolver.schema.task import Task
 from agentevolver.schema.trajectory import Trajectory
 from . import grader_manager
-import math
 
 # 辅助打印函数
 def log_reward(msg):
@@ -18,7 +18,7 @@ def log_reward(msg):
 
 # ================= PROMPTS =================
 
-# 🛠️ [核心修改] 引入里程碑断档 (Milestone Tiering) 的 Prompt
+# 里程碑断档 (Milestone Tiering) 的连续分数评价 Prompt
 CONTINUOUS_SCORE_PROMPT = """Based on the conversation trajectory above, evaluate the task completion quality using the framework provided.
 
 Your evaluation should address the following dimensions in order:
@@ -64,6 +64,7 @@ Provide your detailed analysis first, explaining your reasoning for each evaluat
 First provide your detailed reasoning analysis, then output an integer score between 0-40 or 60-100 enclosed in <reward></reward> tags, e.g., <reward>75</reward>
 """
 
+# 纯二元评价 Prompt (非 1 即 0)
 BINARY_SCORE_PROMPT = """Based on the conversation trajectory above, you are a strict evaluator tasked with determining if the user's request was **successfully resolved** using a binary scoring system.
 
 You must follow the strict evaluation framework below to determine the final score (0 or 1). Partial completion counts as FAILURE (0).
@@ -103,6 +104,7 @@ Reasoning: The agent encountered an error in step 2 but fixed it in step 4. The 
 """
 
 def steps_to_msg(steps: list[dict[str, Any]]) -> str:
+    """将步骤列表转化为适合 LLM 裁判阅读的文本流水账。"""
     trajectory_text = ""
     for i, msg in enumerate(steps):
         role = msg.get("role", "unknown")
@@ -119,9 +121,9 @@ def steps_to_msg(steps: list[dict[str, Any]]) -> str:
 @grader_manager.reg("api_process_llm_judge")
 class APIProcessRewardCalculator(RewardCalculator):
     """
-    混合型奖励计算器 (增强版)：
-    1. 步骤奖励：API 命中奖励 (基于语义梯队) + 复读惩罚 + 执行错误四象限惩罚。
-    2. 结果奖励：语义打分 (Outcome) + 效率打分 (Efficiency)。
+    混合型奖励计算器：
+    1. 步骤级：API 命中奖励 (基于语义梯队) + 复读惩罚 + 执行错误四象限惩罚。
+    2. 结果级：语义打分 (Outcome) + 效率分 (Efficiency，仅供参考，不计入总分)。
     """
     def __init__(self, task: Task, model_name='qwen3.5-plus',
                  reward_mode='outcome_continuous', 
@@ -151,32 +153,23 @@ class APIProcessRewardCalculator(RewardCalculator):
         self.efficiency_lambda = efficiency_lambda
         self.api_cost_weight = api_cost_weight
 
-        # API 提取初始化
+        # 预加载并解析 Ground Truth 中的 API
         self.gt_apis: Set[str] = self._extract_apis(task.ground_truth)
         self.visited_apis: Set[str] = set()
         
+        # 用于累加执行过程中的奖励/惩罚分数
         self.total_process_reward = 0.0 
 
-        # log_reward("-" * 40)
-        # log_reward(f"Init RewardCalculator [Semantic API + Repetition + 4-Quadrant ErrorCheck].")
-        # log_reward(f"Efficiency: lambda={self.efficiency_lambda}, api_weight={self.api_cost_weight}")
-        # log_reward("-" * 40)
-
-    # ---------------- 辅助：单步规则检测 (Rule-Based Check) ----------------
+    # ---------------- 辅助：单步规则检测 ----------------
     
     def _check_step_degeneration(self, content: str) -> Tuple[bool, str]:
-        """
-        检测单个步骤的内容是否发生退化（复读/死循环）。
-        针对 step_code (LLM输出) 进行检测。
-        """
+        """检测输出内容是否发生退化（复读/死循环）。"""
         if not self.deg_mode:
             return False, ""
         
-        # 只有内容足够长才检测，避免误伤简短回答
         if not content or len(content) < self.deg_char_limit:
             return False, ""
 
-        # 分流算法
         if self.deg_mode == 'zlib':
             return self._check_zlib(content)
         elif self.deg_mode == 'ngram':
@@ -185,7 +178,7 @@ class APIProcessRewardCalculator(RewardCalculator):
         return False, ""
 
     def _check_zlib(self, content: str) -> Tuple[bool, str]:
-        """算法1: Zlib 压缩比检测"""
+        """使用 Zlib 压缩比检测文本信息熵，判断是否复读。"""
         compressed = zlib.compress(content.encode('utf-8'))
         ratio = len(compressed) / len(content)
         if ratio < self.zlib_thresh:
@@ -193,7 +186,7 @@ class APIProcessRewardCalculator(RewardCalculator):
         return False, ""
 
     def _check_ngram(self, content: str) -> Tuple[bool, str]:
-        """算法2: N-gram 重复率检测"""
+        """使用 N-gram 词汇多样性检测是否复读。"""
         tokens = content.split()
         if len(tokens) < self.ngram_n:
             return False, ""
@@ -213,23 +206,19 @@ class APIProcessRewardCalculator(RewardCalculator):
 
     def _check_execution_error(self, observation: str) -> bool:
         """
-        [修改版] 增强型错误检测。
-        针对: NameError, TypeError, 422/401 API Exception, SyntaxError 等。
+        基于正则和关键字，增强检测环境反馈中是否包含致命的代码或 API 报错。
         """
         if not observation:
             return False
             
-        # --- Level 1: 绝对实锤的 Python 报错 (Regex) ---
         if re.search(r"\b[a-zA-Z]*Error:\s", observation):
             return True
 
-        # --- Level 2: 绝对实锤的 API/环境 报错 (Specific String) ---
         if "Exception: Response status code" in observation:
             return True
         if "Traceback (most recent call last)" in observation:
             return True
 
-        # --- Level 3: 语义级报错 (Case Insensitive Keywords) ---
         obs_lower = observation.lower()
         critical_phrases = [
             "command not found",      
@@ -247,7 +236,7 @@ class APIProcessRewardCalculator(RewardCalculator):
                 
         return False
 
-    # ---------------- 核心修改：步骤奖励 (API + Repetition + Error) ----------------
+    # ---------------- 核心：步骤奖励 ----------------
 
     def _extract_apis(self, code_str: str) -> Set[str]:
         if not code_str:
@@ -256,15 +245,10 @@ class APIProcessRewardCalculator(RewardCalculator):
 
     def _get_api_weight_by_category(self, api_name: str) -> float:
         """
-        [AppWorld 专属版] 根据 API 的核心语义动作分配阶梯权重。
-        权重设定：
-        - Setup (0.2): 账号、登录、验证等毫无业务进展的基础操作。
-        - Read/Search (0.6): 信息检索、文件读取、列表展示等中等难度操作。
-        - Write/Action (1.2): 状态修改、购买、发送、发帖等高风险核心操作。
+        根据 API 的核心语义动作分配阶梯权重，鼓励高难度操作。
         """
         api_lower = api_name.lower()
         
-        # 梯队 1：基础准备 (Setup & Auth) -> 权重 0.2
         setup_keywords = [
             'login', 'logout', 'signup', 'account', 'profile', 
             'password', 'verification', 'verify', 'help'
@@ -272,7 +256,6 @@ class APIProcessRewardCalculator(RewardCalculator):
         if any(kw in api_lower for kw in setup_keywords):
             return 0.2
 
-        # 梯队 3：核心状态变更 (Write & Action) -> 权重 1.2
         write_action_keywords = [
             'create', 'update', 'delete', 'add', 'remove', 'move', 'copy', 
             'compress', 'decompress', 'send', 'reply', 'forward', 'upload',
@@ -285,7 +268,6 @@ class APIProcessRewardCalculator(RewardCalculator):
         if any(kw in api_lower for kw in write_action_keywords):
             return 1.2
 
-        # 梯队 2：信息检索与读取 (Read & Search) -> 权重 0.6
         read_search_keywords = [
             'show', 'search', 'get', 'download', 'exists'
         ]
@@ -307,7 +289,6 @@ class APIProcessRewardCalculator(RewardCalculator):
         
         if matched_apis:
             if not is_error:
-                # 场景 1：选对 API 且执行成功 -> 按照 API 类别含金量发奖
                 newly_covered = matched_apis - self.visited_apis
                 if newly_covered:
                     for api in newly_covered:
@@ -315,17 +296,13 @@ class APIProcessRewardCalculator(RewardCalculator):
                     api_valid = 1
                     self.visited_apis.update(newly_covered)
             else:
-                # 场景 3：选对 API 但报错 -> 轻微惩罚 (-0.1)，鼓励试错
                 api_reward = -0.1 
         else:
             if not is_error:
-                # 场景 2：无关 API 且成功 -> 0.0，靠最后的效率(Efficiency)衰减来软约束
                 api_reward = 0.0
             else:
-                # 场景 4：无关 API 且报错 -> 中度惩罚 (-0.3)，警告换路
                 api_reward = -0.3 
 
-        # 检查是否发生退化 (死循环复读)
         repetition_pen = 0.0
         is_bad, reason = self._check_step_degeneration(step_code)
         if is_bad:
@@ -343,10 +320,9 @@ class APIProcessRewardCalculator(RewardCalculator):
             "total_score": total_score
         }
 
-    # ---------------- 结果奖励 (Only Semantic) ----------------
+    # ---------------- 结果奖励 ----------------
 
     def pack_message(self, trajectory: Trajectory, use_binary_prompt: bool = False):
-        messages=[]
         query = "Unknown Query"
         if len(trajectory.steps) >= 2:
             query = trajectory.steps[1].get('content', '')
@@ -363,7 +339,7 @@ class APIProcessRewardCalculator(RewardCalculator):
         ]
     
     def _count_trajectory_cost(self, trajectory: Trajectory) -> float:
-        """计算轨迹总成本"""
+        """计算轨迹调用的总成本，用于观察记录。"""
         assistant_steps = [s for s in trajectory.steps if s.get('role') == 'assistant']
         num_steps = len(assistant_steps)
         api_count = 0
@@ -375,7 +351,7 @@ class APIProcessRewardCalculator(RewardCalculator):
         return total_cost
 
     def calculate_reward(self, trajectory: Trajectory, env: EnvClient, instance_id: str) -> GraderResult:
-        """计算最终奖励：Outcome + Efficiency"""
+        """计算最终奖励：严格保持原有的 Score 输出逻辑"""
         use_binary = 'binary' in self.reward_mode
         outcome_score, _ = self._calculate_llm_outcome(trajectory, use_binary=use_binary)
         
@@ -388,6 +364,7 @@ class APIProcessRewardCalculator(RewardCalculator):
         else:
             log_reward(f"[Efficiency] Failed. Score=0.0")
 
+        # 保持 score 仅返回大模型语义分数，效率分及过程分仅存放于元数据
         return {
             "score": outcome_score,
             "efficiency_score": efficiency_score, 
@@ -399,6 +376,7 @@ class APIProcessRewardCalculator(RewardCalculator):
         }
 
     def _calculate_llm_outcome(self, trajectory: Trajectory, use_binary: bool) -> Tuple[float, str]:
+        """请求大模型作为裁判打分。"""
         messages = self.pack_message(trajectory, use_binary_prompt=use_binary)
         try:
             response = self._client.chat_with_retry(messages=messages, max_retries=10)
