@@ -88,7 +88,7 @@ echo -e "\n✅ Server is UP!"
 # ---- 6. 启动训练 (参数已更新) ----
 CONDA_BASE=$(conda info --base 2>/dev/null || echo "$HOME/anaconda3")
 source "$CONDA_BASE/etc/profile.d/conda.sh"
-conda activate AgentEvolver121
+conda activate agentevolver
 
 CONFIG_PATH="$(pwd)/config"
 current_time=$(date "+%Y%m%d_%H%M%S")

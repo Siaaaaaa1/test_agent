@@ -19,7 +19,7 @@ export GEN_OUTPUT_DIR="/mnt/cephfs/haowengao/test_agent/GEN_NEW_DATA"
 # 3. 激活训练 Conda
 CONDA_BASE=$(conda info --base 2>/dev/null || echo "$HOME/anaconda3")
 source "$CONDA_BASE/etc/profile.d/conda.sh"
-conda activate AgentEvolver121
+conda activate agentevolver
 
 current_time=$(date "+%Y%m%d_%H%M%S")
 log_file="log_multi_${current_time}.log"

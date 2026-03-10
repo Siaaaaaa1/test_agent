@@ -63,7 +63,7 @@ echo "✅ Service is UP!"
 # ---- 6. 启动生成任务 (参数已完全补齐) ----
 CONDA_BASE=$(conda info --base 2>/dev/null || echo "$HOME/anaconda3")
 source "$CONDA_BASE/etc/profile.d/conda.sh"
-conda activate AgentEvolver121
+conda activate agentevolver
 
 current_time=$(date "+%Y%m%d_%H%M%S")
 log_file="log_gen_fullparam_${current_time}.log"
