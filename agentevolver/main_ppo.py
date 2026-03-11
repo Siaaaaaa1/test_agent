@@ -291,7 +291,7 @@ class TaskRunner:
             config=config,
             exploration_strategy=config.task_manager.strategy,
             env_profile=EnvProfile.load_from_json(config.task_manager.env_profile),
-            exploration_strategy_args=config.task_manager.strategy_args,
+            exploration_strategy_args=config.task_manager.exploration_strategy_args,
             llm_client=llm_client,
             old_retrival=NaiveTaskObjectiveRetrieval(),
             mixture_strategy=UnifiedMixtureStrategy(
@@ -306,12 +306,12 @@ class TaskRunner:
             num_explore_threads=config.task_manager.num_explore_threads,
             n=config.task_manager.n,
         )
-        
+
         val_task_manager = TaskManager(
             config=config,
             exploration_strategy=config.task_manager.strategy,
             env_profile=EnvProfile.load_from_json(config.task_manager.env_profile),
-            exploration_strategy_args=config.task_manager.strategy_args,
+            exploration_strategy_args=config.task_manager.exploration_strategy_args,
             llm_client=llm_client,
             old_retrival=NaiveTaskObjectiveRetrieval(),
             mixture_strategy=OriginalOnlyStrategy(),
@@ -324,7 +324,7 @@ class TaskRunner:
 
         # 10. 初始化 Hindsight Manager
         hindsight_manager = None
-        attribution_cfg = config.get("attribution", {})
+        attribution_cfg = config.get("attribution_driven_credit_assignment", {})
         if attribution_cfg.get("enable_hindsight", False):
             print("[Main] Initializing HindsightManager for AgentEvolver...")
             try:
@@ -332,7 +332,7 @@ class TaskRunner:
                 hindsight_manager = HindsightManager(
                     llm_client=llm_client,
                     tokenizer=tokenizer,  # [保留] 直接传入 tokenizer
-                    saved_path=save_path,
+                    save_path=save_path,
                     num_threads=config.task_manager.get("num_explore_threads", 4)
                 )
             except Exception as e:

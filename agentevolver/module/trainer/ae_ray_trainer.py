@@ -228,7 +228,8 @@ def compute_outcome_advantage_dual_strategy(
     tokenizer = None,
     input_ids = None,
     step_ids = None,
-    step_info: str = ""
+    step_info: str = "",
+    expected_group_size: int = None,
 ):
     """
     [重构版]: 增加了严格的组校验、DataID一致性检查、NaN防御以及兜底策略分支。
@@ -256,11 +257,11 @@ def compute_outcome_advantage_dual_strategy(
         write_debug_log(f">>> [Advantage Logic] {step_info} | Strategy: {strategy} | Gamma: {gamma}")
 
     for uid, items in id2data.items():
-        # --- 1. 组大小验证 (必须为 8) ---
+        # --- 1. 组大小验证 ---
         group_size = len(items)
-        if group_size != 8:
-            # 如果训练出问题，首要检查 rollout.n 是否配置为 8
-            raise ValueError(f"[GRPO Error] Group UID {uid} has size {group_size}, expected 8. Check your config.")
+        if expected_group_size is not None and group_size != expected_group_size:
+            # 如果训练出问题，首要检查 rollout.n 是否与实际组大小一致
+            raise ValueError(f"[GRPO Error] Group UID {uid} has size {group_size}, expected {expected_group_size}. Check actor_rollout_ref.rollout.n in your config.")
 
         # --- 2. DataID 一致性验证 ---
         if data_ids is not None:
@@ -670,7 +671,8 @@ def compute_advantage(
             tokenizer=tokenizer,
             input_ids=full_input_ids_tensor,
             step_ids=padded_step_ids,
-            step_info=f"Step {global_steps}"
+            step_info=f"Step {global_steps}",
+            expected_group_size=num_repeat,
         )
 
         # 计算不同进程的辅助奖励
@@ -710,14 +712,20 @@ def compute_advantage(
         final_advantages = pre_norm_advantages.clone()
         valid_mask = loss_mask.bool()
 
+        # 计算 PRE-clip 统计量，供后续日志使用
+        _pre_valid = pre_norm_advantages[valid_mask]
+        pre_norm_mean = _pre_valid.mean().item() if _pre_valid.numel() > 0 else 0.0
+        pre_norm_std = _pre_valid.std().item() if _pre_valid.numel() > 1 else 0.0
+
         # 🚨 [关键修复] 移除破坏 GRPO 组内零和性质的 Batch 全局归一化！
         # 直接使用截断 (Clipping) 和 NaN 托底来保证数值稳定性
         valid_advs = pre_norm_advantages[valid_mask]
         if valid_advs.numel() > 0:
             # 安全托底防御
-            valid_advs = torch.nan_to_num(valid_advs, nan=0.0, posinf=5.0, neginf=-5.0)
-            # 限制最终 Advantage 绝对值，防止梯度爆炸（推荐裁切范围 -5.0 到 5.0）
-            valid_advs = torch.clamp(valid_advs, min=-5.0, max=5.0)
+            valid_advs = torch.nan_to_num(valid_advs, nan=0.0, posinf=10.0, neginf=-10.0)
+            # 限制最终 Advantage 绝对值，防止梯度爆炸
+            # 多路奖励叠加（outcome+api+rep）极端情况下峰值可能超过 ±5，设为 ±10 避免信号被截断
+            valid_advs = torch.clamp(valid_advs, min=-10.0, max=10.0)
             final_advantages[valid_mask] = valid_advs
         # ---------------------------------------------------------
 

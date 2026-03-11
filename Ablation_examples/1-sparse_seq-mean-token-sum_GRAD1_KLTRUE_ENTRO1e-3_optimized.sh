@@ -102,6 +102,7 @@ python3 -m agentevolver.main_ppo \
     algorithm.adv_estimator=grpo \
     algorithm.use_kl_in_reward=False \
     algorithm.process_reward_mode=$REWARD_MODE \
+    algorithm.gamma=1.0 \
     data.train_batch_size=32 \
     data.truncation='error' \
     data.return_raw_chat=True \
@@ -117,9 +118,9 @@ python3 -m agentevolver.main_ppo \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.actor.grad_clip=$GRAD_VAL \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
-    actor_rollout_ref.actor.ppo_mini_batch_size=8 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=32 \
     actor_rollout_ref.actor.use_kl_loss=$KL_BOOL \
-    actor_rollout_ref.actor.kl_loss_coef=0.02 \
+    actor_rollout_ref.actor.kl_loss_coef=0.003 \
     actor_rollout_ref.actor.off_cliprange_high=0.6 \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \

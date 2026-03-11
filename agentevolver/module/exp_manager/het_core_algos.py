@@ -147,7 +147,7 @@ def het_compute_token_on_off_policy_loss(
     off_pg_losses, off_pg_clipfrac, off_pg_clipfrac_lower = compute_pg_losses(off_cliprange_low, off_cliprange_high)
     # 仅保留 exp_mask == 1 的部分 (Off-policy)
     off_pg_loss = verl_F.masked_mean(off_pg_losses, exp_mask * response_mask)
-    off_pg_loss = torch.tensor(0.0) if off_pg_loss.isnan().item() else off_pg_loss
+    off_pg_loss = off_pg_loss.new_tensor(0.0) if off_pg_loss.isnan().item() else off_pg_loss
 
     # ================= 组合 Loss =================
     exp_mask = exp_mask.float()
@@ -230,7 +230,7 @@ def bam_compute_token_on_off_policy_loss(
     off_pg_losses = -advantages * off_ratio
     off_pg_loss = verl_F.masked_mean(off_pg_losses, exp_mask * response_mask)
     if off_pg_loss.isnan().item() is True:
-        off_pg_loss = torch.tensor(0.0)
+        off_pg_loss = off_pg_loss.new_tensor(0.0)
 
     # ---------------- 聚合 ----------------
     exp_mask = exp_mask.float()
@@ -308,7 +308,7 @@ def bam_compute_token_on_off_policy_loss_v2(
     adjusted_off_pg_losses = torch.where(off_positive_mask, off_pg_losses, torch.zeros_like(off_pg_losses))
     off_pg_loss = verl_F.masked_mean(off_pg_losses, off_positive_mask)
     if torch.isnan(off_pg_loss).item():
-        off_pg_loss = torch.tensor(0.0)
+        off_pg_loss = off_pg_loss.new_tensor(0.0)
 
     # ---------------- 聚合 ----------------
     exp_mask = exp_mask.float()
@@ -390,7 +390,7 @@ def bam_compute_token_on_off_policy_loss_v3(
     off_pg_losses = torch.where(advantages < 0, off_clip_pg_losses2, off_clip_pg_losses1)
     off_pg_loss = verl_F.masked_mean(off_pg_losses, (1.0-exp_mask) * response_mask)
     if off_pg_loss.isnan().item() is True:
-        off_pg_loss = torch.tensor(0.0)
+        off_pg_loss = off_pg_loss.new_tensor(0.0)
 
     # ---------------- 聚合 ----------------
     exp_mask = exp_mask.float()
