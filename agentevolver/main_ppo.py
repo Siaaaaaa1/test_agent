@@ -144,6 +144,11 @@ def run_ppo(config) -> None:
 
         print(f"🔌 [DEBUG] Connecting to Ray Cluster at: {ray_address}")
         
+        # 从环境变量读取 WANDB_API_KEY，如果没有配置则抛出错误
+        wandb_api_key = os.getenv("WANDB_API_KEY")
+        if not wandb_api_key:
+            raise ValueError("WANDB_API_KEY environment variable is not set. Please set it before running training.")
+        
         runtime_env_config = {
             "env_vars": {
                 "TOKENIZERS_PARALLELISM": "true", 
@@ -151,7 +156,7 @@ def run_ppo(config) -> None:
                 "VLLM_LOGGING_LEVEL": "WARN",
                 "VLLM_ALLOW_RUNTIME_LORA_UPDATING": "true",
                 "VLLM_USE_V1": "1", 
-                "WANDB_API_KEY": os.getenv("WANDB_API_KEY", "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"),
+                "WANDB_API_KEY": wandb_api_key,
             }
         }
 
