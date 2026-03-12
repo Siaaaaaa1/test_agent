@@ -92,6 +92,10 @@ except Exception as e:
 
 # 创建固定的日志文件名
 DEBUG_LOG_FILE = os.path.join(DEBUG_BASE_DIR, "debug_adv_calc.log")
+# Token 级别详细信息单独写入，避免淹没 adv_calc 日志
+DEBUG_TOKEN_DETAIL_FILE = os.path.join(DEBUG_BASE_DIR, "debug_token_detail.log")
+# 异常/不符合预期情况单独写入，方便监控
+ANOMALY_LOG_FILE = os.path.join(DEBUG_BASE_DIR, "debug_anomaly.log")
 
 def get_token_context_string(tokenizer, input_ids_tensor, batch_idx, token_idx, window=10):
     """
@@ -123,7 +127,7 @@ def get_token_context_string(tokenizer, input_ids_tensor, batch_idx, token_idx, 
 
 def write_debug_log(msg):
     """
-    [用途]: 将调试信息追加写入到指定的 Debug 日志文件中。
+    [用途]: 将调试信息追加写入到 debug_adv_calc.log（优势计算过程日志）。
     """
     try:
         with open(DEBUG_LOG_FILE, "a", encoding="utf-8") as f:
@@ -132,6 +136,31 @@ def write_debug_log(msg):
     except Exception as e:
         print(f"[LOG ERROR] Failed to write to {DEBUG_LOG_FILE}: {e}")
         print(msg)
+
+def write_token_detail_log(msg):
+    """
+    [用途]: Token 级别逐步详情写入 debug_token_detail.log，与 adv_calc 日志分离。
+    """
+    try:
+        with open(DEBUG_TOKEN_DETAIL_FILE, "a", encoding="utf-8") as f:
+            timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+            f.write(f"[{timestamp}] {msg}\n")
+    except Exception as e:
+        print(f"[LOG ERROR] Failed to write to {DEBUG_TOKEN_DETAIL_FILE}: {e}")
+        print(msg)
+
+def write_anomaly_log(msg):
+    """
+    [用途]: 将任何不符合预期的异常情况写入 debug_anomaly.log，便于快速排查。
+    同时打印到 logger.warning，确保训练过程中能实时看到。
+    """
+    try:
+        with open(ANOMALY_LOG_FILE, "a", encoding="utf-8") as f:
+            timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+            f.write(f"[{timestamp}] {msg}\n")
+    except Exception as e:
+        print(f"[LOG ERROR] Failed to write to {ANOMALY_LOG_FILE}: {e}")
+    logger.warning(msg)
 
 
 # =============================================================================
@@ -282,6 +311,13 @@ def compute_outcome_advantage_dual_strategy(
             # 如果组内所有样本得分完全一样（g_std=0），优势应为 0 避免除以 0
             if g_std < epsilon:
                 g_adv = torch.zeros_like(g_scores)
+                # 异常上报：组内所有回复得分相同，本组无梯度信号
+                if g_mean.abs() > epsilon:
+                    write_anomaly_log(
+                        f"⚠️ [零方差组] UID={uid} | 组内 {group_size} 条回复得分完全相同 "
+                        f"(mean={g_mean.item():.4f}, std≈0) → 本组 advantage 全为 0，无梯度信号。"
+                        f" {step_info}"
+                    )
             else:
                 g_adv = (g_scores - g_mean) / (g_std + epsilon) if norm_adv_by_std else (g_scores - g_mean)
         else:
@@ -539,8 +575,8 @@ def align_dense_rewards_to_model(reward_tensor, loss_mask):
             if rew != 0.0:
                 if last_valid_idx != -1:
                     aligned_tensor[b, last_valid_idx] += rew
-                else:
-                    aligned_tensor[b, i] += rew
+                # 若 last_valid_idx == -1，说明当前 token 之前没有任何有效模型 token，
+                # 奖励无法对齐到可训练位置，静默丢弃（避免写入 prompt 区域影响梯度）。
     return aligned_tensor
 
 
@@ -724,11 +760,28 @@ def compute_advantage(
         # 直接使用截断 (Clipping) 和 NaN 托底来保证数值稳定性
         valid_advs = pre_norm_advantages[valid_mask]
         if valid_advs.numel() > 0:
+            # NaN/Inf 检测：出现说明 reward 计算链路有问题
+            nan_cnt = torch.isnan(valid_advs).sum().item()
+            inf_cnt = torch.isinf(valid_advs).sum().item()
+            if nan_cnt > 0 or inf_cnt > 0:
+                write_anomaly_log(
+                    f"🚨 [NaN/Inf Advantage] {step_info} | "
+                    f"pre_norm advantage 中含有脏数据：NaN={nan_cnt}, Inf={inf_cnt} / {valid_advs.numel()} valid tokens。"
+                    f"已用 nan_to_num 托底修复，请排查 reward 计算链路！"
+                )
             # 安全托底防御
             valid_advs = torch.nan_to_num(valid_advs, nan=0.0, posinf=10.0, neginf=-10.0)
             # 限制最终 Advantage 绝对值，防止梯度爆炸
             # 多路奖励叠加（outcome+api+rep）极端情况下峰值可能超过 ±5，设为 ±10 避免信号被截断
+            clipped_cnt = ((valid_advs.abs() > 10.0) | (valid_advs.abs() > 10.0)).sum().item()
             valid_advs = torch.clamp(valid_advs, min=-10.0, max=10.0)
+            if clipped_cnt > 0:
+                write_anomaly_log(
+                    f"⚠️ [Advantage Clipped] {step_info} | "
+                    f"{clipped_cnt} 个 valid token 的 advantage 被截断到 [-10, 10]，"
+                    f"当前 pre_clip: mean={pre_norm_mean:.4f}, std={pre_norm_std:.4f}。"
+                    f"请检查 reward 量级是否合理。"
+                )
             final_advantages[valid_mask] = valid_advs
         # ---------------------------------------------------------
 
@@ -773,14 +826,29 @@ def compute_advantage(
                                 data.batch.get("api_reward_tensor", 0) + \
                                 data.batch.get("rep_reward_tensor", 0)
 
-        # 日志打印部分
+        # -------------------------------------------------------
+        # 异常检测：Batch 级别 outcome reward 全为 0
+        # -------------------------------------------------------
+        if outcome_tensor is not None:
+            outcome_sum = outcome_tensor[valid_mask].abs().sum().item()
+            if outcome_sum < 1e-8:
+                write_anomaly_log(
+                    f"⚠️ [零 Outcome Reward] {step_info} | "
+                    f"本 Batch 所有轨迹的 outcome reward 均为 0！"
+                    f"模型将无法从结果奖励中学习。请检查 reward 计算是否正常。"
+                )
+
+        # -------------------------------------------------------
+        # 日志打印：宏观统计 → debug_adv_calc.log
+        # Token 级别详情 → debug_token_detail.log（单独文件）
+        # -------------------------------------------------------
         try:
             do_table_print = True
             if do_table_print and full_input_ids_tensor is not None and tokenizer is not None:
                 api_rew = data.batch.get("api_reward_tensor")
                 rep_rew = data.batch.get("rep_reward_tensor")
 
-                # --- 宏观组信息与 Advantage 统计 ---
+                # --- 宏观组信息与 Advantage 统计（写入 debug_adv_calc.log）---
                 post_norm_advs = final_advantages[valid_mask]
                 post_norm_mean = post_norm_advs.mean().item() if post_norm_advs.numel() > 0 else 0.0
                 post_norm_std = post_norm_advs.std().item() if post_norm_advs.numel() > 1 else 0.0
@@ -794,9 +862,11 @@ def compute_advantage(
                 write_debug_log(f"👥 [Group Stats] Total Groups: {len(group_sizes)}, Avg Group Size: {avg_group_size:.1f}")
                 write_debug_log(f"=========================================================")
 
-                # --- 随机采样 2 个样本，打印整个有效序列的 Token 级奖励 ---
+                # --- 随机采样 2 个样本，打印 Token 级别详情（写入 debug_token_detail.log）---
                 bsz = final_advantages.shape[0]
                 sample_indices = random.sample(range(bsz), min(2, bsz))
+                steps_info = data.non_tensor_batch.get("steps", None)  # List[List[{"action":..., "observation":...}]]
+                reward_scores_obj = data.non_tensor_batch.get("reward_scores", None)
 
                 for b in sample_indices:
                     valid_idx = torch.nonzero(loss_mask[b]).squeeze(-1)
@@ -810,6 +880,8 @@ def compute_advantage(
                     log_str += f"{'Idx':<5} | {'Token_Text':<18} | {'StepID':<6} | {'API_Rew':<8} | {'Rep_Rew':<8} | {'Out_Adv':<8} | {'Pre_Adv':<9} | {'Post_Adv':<9}\n"
                     log_str += "-"*95 + "\n"
 
+                    api_reward_steps = []  # 收集本轨迹有 API 奖励的步骤，末尾统一说明
+
                     for i in range(start_idx, end_idx):
                         tid = full_input_ids_tensor[b, i].item()
                         ttext = repr(tokenizer.decode([tid])) if tid >= 0 else f"<unk_{tid}>"
@@ -819,7 +891,6 @@ def compute_advantage(
                         rep_val = rep_rew[b, i].item() if rep_rew is not None else 0.0
                         out_val = adv_out[b, i].item() if 'adv_out' in locals() else 0.0
 
-                        # 提取归一化前和归一化后的 Advantage
                         pre_adv_val = pre_norm_advantages[b, i].item()
                         post_adv_val = final_advantages[b, i].item()
 
@@ -828,9 +899,47 @@ def compute_advantage(
                             flag = "🚀 " if (api_val != 0 or rep_val != 0) else "   "
                             log_str += f"{flag}{i:<4} | {ttext:<18} | {sid:<6} | {api_val:>8.4f} | {rep_val:>8.4f} | {out_val:>8.4f} | {pre_adv_val:>9.4f} | {post_adv_val:>9.4f}\n"
 
-                    write_debug_log(log_str)
+                        # 记录有 API 奖励的步骤（在 step 最后一个 token 处，api_val 非 0）
+                        if api_val != 0 and sid >= 0:
+                            api_reward_steps.append((sid, api_val, i))
+
+                    # --- API 奖励详情附录：说明是哪步、什么原因、调用了什么 ---
+                    if api_reward_steps:
+                        log_str += "\n" + "="*95 + "\n"
+                        log_str += "📡 [API Reward Detail] 以下步骤获得/扣除了 API 奖励：\n"
+                        log_str += "="*95 + "\n"
+                        seen_steps = set()
+                        for (step_id, api_val, token_pos) in api_reward_steps:
+                            if step_id in seen_steps:
+                                continue
+                            seen_steps.add(step_id)
+
+                            reason = "命中目标 API（write 类权重 1.2 / read 类权重 0.6）" if api_val > 0 else \
+                                     "调用了目标 API 但执行出错（惩罚 -0.1）" if api_val > -0.2 else \
+                                     "调用了非目标 API 且执行出错（惩罚 -0.3）"
+
+                            action_text = ""
+                            if steps_info is not None and b < len(steps_info):
+                                step_list = steps_info[b]
+                                if step_id < len(step_list):
+                                    action_text = step_list[step_id].get("action", "")
+
+                            log_str += f"  Step {step_id:>3} | token_pos={token_pos} | reward={api_val:+.4f} | 原因: {reason}\n"
+                            if action_text:
+                                # 截取前 300 字符，便于快速确认调用了哪个 API
+                                log_str += f"  Action (前300字):\n    {action_text[:300].replace(chr(10), chr(10)+'    ')}\n"
+                            log_str += "-"*95 + "\n"
+
+                    # --- Outcome reward 汇总 ---
+                    if reward_scores_obj is not None and b < len(reward_scores_obj):
+                        rs = reward_scores_obj[b]
+                        outcome_val = rs.get("outcome", "N/A")
+                        step_api_list = rs.get("step_api_rewards", [])
+                        log_str += f"\n📊 Outcome={outcome_val} | step_api_rewards={step_api_list}\n"
+
+                    write_token_detail_log(log_str)
         except Exception as e:
-            write_debug_log(f"[Warning] Failed to print verification table: {e}")
+            write_debug_log(f"[Warning] Failed to print token detail table: {e}")
 
     # Fallback/Custom 分支
     else:
@@ -1854,18 +1963,22 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                             global_steps=self.global_steps
                         )
                         # =====================================================================
-                        # 强制对齐 Advantages 和 Returns 的维度 (直接截取 Response 长度维度的数据)
+                        # 强制对齐 Advantages 和 Returns 的维度 (截取 Response 对应的列)
+                        # advantages/returns/token_level_rewards 形状为 (bs, prompt_len+resp_len)，
+                        # 需要截取后 resp_len 列与 responses 对齐。
+                        # 使用 prompt_len 偏移（显式）而非负索引（隐式），更安全。
                         # =====================================================================
                         resp_len = batch.batch["responses"].size(1)
+                        prompt_len = batch.batch["input_ids"].size(1) - resp_len
 
                         if batch.batch["advantages"].size(1) != resp_len:
-                            batch.batch["advantages"] = batch.batch["advantages"][:, -resp_len:]
+                            batch.batch["advantages"] = batch.batch["advantages"][:, prompt_len:]
 
                         if "returns" in batch.batch and batch.batch["returns"].size(1) != resp_len:
-                            batch.batch["returns"] = batch.batch["returns"][:, -resp_len:]
+                            batch.batch["returns"] = batch.batch["returns"][:, prompt_len:]
 
                         if "token_level_rewards" in batch.batch and batch.batch["token_level_rewards"].size(1) != resp_len:
-                            batch.batch["token_level_rewards"] = batch.batch["token_level_rewards"][:, -resp_len:]
+                            batch.batch["token_level_rewards"] = batch.batch["token_level_rewards"][:, prompt_len:]
                         # =====================================================================
 
                         # ==================== Hindsight 后见之明重构流 ====================
