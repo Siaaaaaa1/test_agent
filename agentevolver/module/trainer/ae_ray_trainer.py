@@ -308,13 +308,15 @@ def compute_outcome_advantage_dual_strategy(
 
                 max_step = traj_step_ids.max()
 
-                # [幽灵惩罚检测] 检查是否有 valid token 的 step_id 为 0，但整体 max_step > 0
-                zero_step_mask = (traj_step_ids == 0)
-                if max_step > 0 and zero_step_mask.any():
-                    zero_count = zero_step_mask.sum().item()
-                    alert_msg = f"🚨 [CRITICAL ALERT] 幽灵惩罚 (Ghost Penalty) 检测触发！Traj {global_idx} max_step 为 {max_step.item()}，但有 {zero_count} 个有效 Token 的 step_id 为 0。它们将被施加最大衰减！"
+                # [幽灵惩罚检测] 检查是否有 valid token 的 step_id 为 -1（无步骤标记），
+                # 这类 token 不属于任何 action step（例如 observation token 被错误地纳入了 loss_mask）。
+                # 注意：step_id=0 是第一步的合法 action token，不应触发告警。
+                ghost_mask = (traj_step_ids < 0)
+                if ghost_mask.any():
+                    ghost_count = ghost_mask.sum().item()
+                    alert_msg = f"⚠️ [Ghost Penalty] Traj {global_idx} 中有 {ghost_count} 个有效 Token 的 step_id 为 -1（未分配步骤），可能是 observation token 进入了 loss_mask。dist_to_end 将被 clamp 为 0。"
                     write_debug_log(alert_msg)
-                    logger.error(alert_msg)
+                    logger.warning(alert_msg)
 
                 if max_step == 0 and num_valid > 1:
                     write_debug_log(f"⚠️ [Warning] Trajectory {global_idx} has {num_valid} tokens but max_step is 0. dist_to_end will be zero for all tokens!")
@@ -612,8 +614,9 @@ def compute_advantage(
             else:
                 prompt_length = full_seq_len - step_len
 
-            padded_step_ids = torch.zeros(
+            padded_step_ids = torch.full(
                 (step_ids_tensor.size(0), full_seq_len),
+                fill_value=-1,
                 dtype=step_ids_tensor.dtype,
                 device=step_ids_tensor.device
             )
