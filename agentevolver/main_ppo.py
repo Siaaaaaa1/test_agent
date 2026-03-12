@@ -22,7 +22,10 @@ from agentevolver.module.adv_processor.hindsight import HindsightManager  # [新
 # 引入 verl 库的相关模块
 from verl.trainer.ppo.reward import load_reward_manager
 from verl.trainer.ppo import core_algos
+from dotenv import load_dotenv
 
+# 自动寻找并加载项目根目录下的 .env 文件
+load_dotenv()
 # # =============================================================================
 # # 1. Monkey Patching: KL 散度计算逻辑修改
 # # =============================================================================
