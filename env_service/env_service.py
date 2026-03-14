@@ -862,6 +862,22 @@ async def handle_fetch_db_data(request: FetchDBRequest):
         print(f"❌ [Data Fetch] 无法加载 AppWorld 沙盒 {request.sandbox_id}: {e}")
         raise HTTPException(status_code=500, detail=tb) from e
 
+@app.get("/list_task_ids")
+async def handle_list_task_ids(split: str = "train"):
+    """
+    供主训练进程远程调用：在 appworld conda 环境中执行 load_task_ids，
+    返回指定 split 的任务 ID 列表，避免训练进程直接依赖 appworld 包。
+    """
+    try:
+        from appworld import load_task_ids
+        ids = list(load_task_ids(split))
+        return {"success": True, "task_ids": ids, "split": split}
+    except ImportError:
+        raise HTTPException(status_code=500, detail="The 'appworld' module is missing in the EnvService conda environment.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the environment service")
     parser.add_argument(

@@ -807,20 +807,24 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
     def _load_sandbox_task_ids(self, path: str) -> List[str]:
         """
         加载沙盒 ID 列表，优先级：
-          1. AppWorld 标准库 load_task_ids("train") — 最可靠，无路径依赖
-          2. 手动读取 path 文件（纯文本每行一个 ID / JSONL / JSON 数组）
+          1. env_service /list_task_ids 接口（在 appworld conda 环境中执行，无包依赖问题）
+          2. 直接读取 path 文件（纯文本 / JSONL / JSON 数组）
+          3. 扫描 data/tasks/ 目录
         """
-        # 优先使用 AppWorld 标准库，与 appworld_env.py / generators.py 保持一致
+        # 优先通过 env_service 接口获取（appworld 环境负责执行，训练环境无需安装 appworld）
         try:
-            from appworld import load_task_ids
-            ids = list(load_task_ids("train"))
-            if ids:
-                logger.info(f"[ApiDriven] Loaded {len(ids)} sandbox IDs via appworld.load_task_ids('train').")
-                return ids
+            env_url = self.config.get("env_service", {}).get("env_url", "http://localhost:8080")
+            response = requests.get(f"{env_url}/list_task_ids", params={"split": "train"}, timeout=5.0)
+            if response.status_code == 200:
+                result = response.json()
+                ids = result.get("task_ids", [])
+                if ids:
+                    logger.info(f"[ApiDriven] Loaded {len(ids)} sandbox IDs via env_service /list_task_ids.")
+                    return ids
         except Exception as e:
-            logger.warning(f"[ApiDriven] appworld.load_task_ids failed: {e}. Falling back to file.")
+            logger.warning(f"[ApiDriven] env_service /list_task_ids failed: {e}. Falling back to file.")
 
-        # 兜底：手动读取 path 文件
+        # 手动读取 path 文件
         if os.path.exists(path):
             try:
                 with open(path, 'r', encoding='utf-8') as f:
