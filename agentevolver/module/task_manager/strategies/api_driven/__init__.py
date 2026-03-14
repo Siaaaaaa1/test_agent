@@ -806,60 +806,45 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
 
     def _load_sandbox_task_ids(self, path: str) -> List[str]:
         """
-        从文件中加载沙盒 ID 列表，支持三种格式（自动检测）：
-          - 纯文本：每行一个 ID（如 82e2fac_1）
-          - JSONL：每行一个 JSON 对象，含 task_id / TaskID 字段
-          - JSON 数组：整体为 list of dict，含 task_id / TaskID 字段
-        文件不可用时，自动扫描 data/tasks/ 目录作为兜底。
+        加载沙盒 ID 列表，优先级：
+          1. AppWorld 标准库 load_task_ids("train") — 最可靠，无路径依赖
+          2. 手动读取 path 文件（纯文本每行一个 ID / JSONL / JSON 数组）
         """
-        ids = []
+        # 优先使用 AppWorld 标准库，与 appworld_env.py / generators.py 保持一致
+        try:
+            from appworld import load_task_ids
+            ids = list(load_task_ids("train"))
+            if ids:
+                logger.info(f"[ApiDriven] Loaded {len(ids)} sandbox IDs via appworld.load_task_ids('train').")
+                return ids
+        except Exception as e:
+            logger.warning(f"[ApiDriven] appworld.load_task_ids failed: {e}. Falling back to file.")
+
+        # 兜底：手动读取 path 文件
         if os.path.exists(path):
             try:
                 with open(path, 'r', encoding='utf-8') as f:
                     content = f.read().strip()
                 lines = [l.strip() for l in content.splitlines() if l.strip()]
-
                 first = lines[0] if lines else ""
-                if first.startswith('[') or first.startswith('{'):
-                    # JSON 数组 or JSONL
-                    if first.startswith('['):
-                        data = json.loads(content)
-                    else:
-                        data = [json.loads(l) for l in lines]
-                    for item in data:
-                        tid = item.get("task_id") or item.get("TaskID")
-                        if tid:
-                            ids.append(str(tid))
+                if first.startswith('['):
+                    data = json.loads(content)
+                    ids = [str(item.get("task_id") or item.get("TaskID", "")) for item in data]
+                elif first.startswith('{'):
+                    data = [json.loads(l) for l in lines]
+                    ids = [str(item.get("task_id") or item.get("TaskID", "")) for item in data]
                 else:
-                    # 纯文本：每行一个 ID
-                    ids = lines
+                    ids = lines  # 纯文本，每行一个 ID
+                ids = [i for i in ids if i]
+                if ids:
+                    logger.info(f"[ApiDriven] Loaded {len(ids)} sandbox IDs from file {path}.")
+                    return ids
             except Exception as e:
-                logger.warning(f"[ApiDriven] Failed to load sandbox IDs from {path}: {e}")
-
-        if ids:
-            logger.info(f"[ApiDriven] Loaded {len(ids)} sandbox IDs from {path}.")
-            return ids
-
-        # Fallback：从 data/tasks/ 目录扫描真实存在的 sandbox ID
-        tasks_dir = os.path.normpath(os.path.join(
-            os.path.dirname(os.path.abspath(path)), "..", "tasks"
-        ))
-        if os.path.isdir(tasks_dir):
-            scanned = sorted([
-                d for d in os.listdir(tasks_dir)
-                if os.path.isdir(os.path.join(tasks_dir, d)) and not d.startswith(".")
-            ])
-            if scanned:
-                logger.warning(
-                    f"[ApiDriven] task_labels_path not usable ({path}). "
-                    f"Falling back to {len(scanned)} IDs scanned from {tasks_dir}."
-                )
-                return scanned
+                logger.warning(f"[ApiDriven] Failed to read {path}: {e}")
 
         logger.error(
-            f"[ApiDriven] Cannot find any valid sandbox IDs. "
-            f"task_labels_path={path}, tasks_dir={tasks_dir}. "
-            "Please check your configuration."
+            "[ApiDriven] Cannot load any sandbox IDs. "
+            "Check appworld installation and task_labels_path config."
         )
         return []
 
