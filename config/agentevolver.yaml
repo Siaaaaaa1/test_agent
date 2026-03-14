@@ -17,7 +17,25 @@ algorithm:
   w_api: 0.5           # API流权重 (辅助，引导规范性)
   w_rep: 1.0          # 复读惩罚流权重 (轻微惩罚)
   w_efficiency: 0.0    # 显式效率分权重 (如果用了 discount_first，这里通常设为 0，因为 gamma 已经隐式包含了效率)
-  
+  step_credit_alpha: 0.0  # 轨迹内步骤级信用重分配强度；0.0=禁用，退化为纯 sparse；建议范围 0.3~1.0
+  w_fmt: 0.5               # 格式惩罚流权重（对应每步 ```python...``` 格式不合规的惩罚）
+
+  # [Feature] API 奖励收敛退火：组内 API reward std 连续低于阈值时自动降权
+  api_reward_annealing:
+    enable: false
+    convergence_threshold: 0.05  # 组内 api_reward_sum std 低于此值视为收敛
+    min_converged_count: 3       # 连续多少步满足条件才触发退火（防偶发噪声）
+    anneal_steps: 5              # 退火步数（w_api 线性从当前值降至 0）
+
+  # [Feature] 课程学习：按步跟踪 intra 成功率，动态增加 cross 任务比例
+  curriculum:
+    enable: false
+    intra_success_threshold: 0.5  # intra outcome 成功率滑动窗口均值超过此值时引入 cross
+    max_cross_ratio: 4.0          # cross:intra 最大倍数（超参数）
+    ramp_rate_per_step: 0.5       # 每步满足条件时 cross_ratio 的增量
+    window_size: 3                # 滑动窗口大小（最近几步的 intra 成功率）
+    rebuild_delta: 0.5            # cross_ratio 累计变化超过此值才重建 DataLoader
+
 ray_init:
   num_cpus: null
   address: auto
@@ -236,8 +254,10 @@ exp_manager:
 attribution_driven_credit_assignment:
   # main switch
   enable: false
-  # evaluation type ("local" or "api")
-  evaluation_type: "api"
+  # evaluation type:
+  #   "rule" — zero LLM cost; flags each step as GOOD/BAD based on api_reward > 0 (GT API hit)
+  #   "api"  — calls LLM judge per step (expensive, more general)
+  evaluation_type: "rule"
   # consistent step scaling factor
   consistent_scale: 1.0
   # inconsistent step scaling factor
@@ -282,3 +302,11 @@ attribution_driven_credit_assignment:
     enable_adca_metric: false
     # whether to use hindsight data for attribution
   enable_hindsight: false
+  # path to save hindsight-generated tasks (loaded at each epoch start)
+  hindsight_save_path: "tasks_explored/hindsight_supplement.jsonl"
+  # group success rate threshold: only trigger hindsight when success_rate < this value
+  # (prevents processing groups the model has already mastered)
+  hindsight_success_rate_threshold: 0.5
+  # whether to use LlmFilter (run generated tasks in real env) for quality verification
+  # requires env_service to be reachable; set false to use lightweight LLM validator instead
+  hindsight_use_llm_filter: false

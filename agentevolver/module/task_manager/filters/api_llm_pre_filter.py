@@ -31,7 +31,9 @@ class LlmQualityPreFilter:
         # 简单的重试配置 (网络问题重试5次)
         self._max_retries = 5
         
-        # [修复] 引入线程锁替代 fcntl，保证跨平台且安全的并发文件写入
+        # 线程锁用于同进程内多线程安全写入（ThreadPoolExecutor 场景）。
+        # 注意：threading.Lock 仅保护同一进程内的并发，不跨进程；
+        # 若改为多进程并行，需换用 multiprocessing.Lock 或 fcntl.flock。
         self._file_lock = threading.Lock()
 
     def filter(self, tasks: Sequence[Task]) -> List[Task]:
@@ -161,17 +163,46 @@ class LlmQualityPreFilter:
         """
         构造用于判断任务质量的 Prompt。不修改 Prompt 内容。
         """
-        content = f"""You are a Data Quality Evaluator for an AI Agent dataset.
-Task Query: "{query}"
-Evaluation Criteria:
-The query must express a clear goal. Moderate vagueness is acceptable (e.g., not specifying a brand or model) as long as the Agent can supplement those details using common sense or search capabilities.
-ACCEPT (Clear Intent): Commands with a clear action and object (e.g., "Buy a fan," "Book me a flight to London").
-REJECT (Logical Flaws/Over-specification): Commands that include precise values or prerequisites that the user cannot guarantee, which would likely lead to execution failure.
-Unacceptable: "Buy a fan that costs exactly $20.50" (Price fluctuations make this high-risk).
-Unacceptable: "If my current balance is $100, then pay my phone bill" (The user should not speculate on internal states that only the Agent can verify).
-ACCEPT (Delegated Commands): Queries where the user sets a goal and lets the Agent handle the filtering/optimization.
-Example: "Help me find a desktop fan under $50.", "Update my username to 'Alex'."
-Is this a valid and usable query? Please think first, then reply with the result strictly in this format: <answer>True</answer> or <answer>False</answer>"""
+        content = f"""You are a **Data Quality Evaluator** for an AI Agent dataset. 
+Your task is to determine whether a given user Query is "High Quality" and "Executable" by an advanced AI Agent.
+
+#### Task Query:
+"{query}"
+
+#### Evaluation Criteria (Strictly Adhere to These):
+
+1. **Intent Clarity:**
+   - **ACCEPT**: The query must have a clear action (e.g., buy, move, reply, update) and a clear object (e.g., specific files, emails, or products).
+   - **ACCEPT**: Moderate vagueness is acceptable if the Agent can fill in the gaps using common sense, search, or context (e.g., "find the cheapest option" or "based on highest ratings").
+
+2. **Logical Sanity vs. Over-specification:**
+   - **REJECT**: Commands with hyper-precise values that the user cannot guarantee (e.g., "Buy a fan that costs exactly $20.51").
+   - **REJECT**: Commands based on blind speculation of internal system states (e.g., "If my bank balance is exactly $500, then..."). Users should ask the Agent to check the state first.
+   - **ACCEPT**: Delegated constraints where the Agent handles the filtering (e.g., "Move items with under 4.2 rating from my cart to wish list").
+
+3. **Complex Multi-step & Cross-App Reasoning:**
+   - **ACCEPT**: Queries involving multi-step logic or cross-platform interaction (e.g., parsing an email to trigger an Amazon purchase, or managing files based on metadata).
+
+4. **Privacy & Permission Boundaries:**
+   - **ACCEPT**: Operations within the user's explicit or implied digital circle (e.g., "Email my parents," "Follow artists on my Spotify").
+
+---
+
+#### High-Quality Reference Examples:
+* **File Management**: Add "YYYY-MM-DD_" prefix to all files in ~/downloads/ based on creation date and move old files to trash.
+* **Cross-App Logistics**: Check a checklist sent via email and order the remaining missing items on Amazon with the highest ratings.
+* **Social & Gifting**: Buy 2 identical earbuds; deliver one gift-wrapped to my parents' house and one to my home.
+* **Workflow Automation**: Schedule a "gentle reminder" reply to every job application email I sent in the last 48 hours.
+* **Media Management**: Follow all artists who have at least one song in my "Liked Songs" on Spotify.
+
+---
+
+#### Evaluation Process:
+Analyze the query for logical traps, clarity of intent, and whether an Agent equipped with tools (Email, Browser, File System, Spotify, etc.) could realistically complete it.
+
+**Response Format:**
+Provide your thought process first (analyze intent, constraints, and executability), then conclude strictly in this format:
+<answer>True</answer> (if valid and usable) or <answer>False</answer> (if invalid or logically flawed)."""
 
         return [{"role": "user", "content": content}]
 

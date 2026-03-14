@@ -14,26 +14,34 @@ if [[ $SCRIPT_NAME_UPPER == *"DENSE"* ]]; then REWARD_MODE="dense"; else REWARD_
 if [[ $SCRIPT_NAME_UPPER == *"SEQ-MEAN-TOKEN-SUM"* ]]; then LOSS_AGG="seq-mean-token-sum"; else LOSS_AGG="token-mean"; fi
 
 # 3. 解析 Gradient Norm (支持小数，例如 GRAD0.5)
-if [[ $SCRIPT_NAME_UPPER == *"GRAD"* ]]; then 
+if [[ $SCRIPT_NAME_UPPER == *"GRAD"* ]]; then
     RAW_GRAD=$(echo "$SCRIPT_NAME" | grep -i -oP 'GRAD\K[0-9.eE+-]+')
     GRAD_VAL=$(printf "%.10f" "$RAW_GRAD" | sed 's/\.\?0*$//') # 转换科学计数法并去除末尾0
-else 
-    GRAD_VAL=1.0 
+else
+    GRAD_VAL=1.0
 fi
 
 # 4. 解析 KL 开关
 if [[ $SCRIPT_NAME_UPPER == *"KLFALSE"* ]]; then KL_BOOL="False"; else KL_BOOL="True"; fi
 
 # 5. 解析 Entropy Coefficient (支持科学计数法)
-if [[ $SCRIPT_NAME_UPPER == *"ENTRO"* ]]; then 
+if [[ $SCRIPT_NAME_UPPER == *"ENTRO"* ]]; then
     RAW_ENTRO=$(echo "$SCRIPT_NAME" | grep -i -oP 'ENTRO\K[0-9.eE+-]+')
     ENTRO_VAL=$(printf "%.10f" "$RAW_ENTRO" | sed 's/\.\?0*$//')
-else 
-    ENTRO_VAL=0.001 
+else
+    ENTRO_VAL=0.001
+fi
+
+# 6. 解析 Step Credit Alpha
+if [[ $SCRIPT_NAME_UPPER == *"STEPCREDIT"* ]]; then
+    RAW_ALPHA=$(echo "$SCRIPT_NAME" | grep -i -oP 'STEPCREDIT\K[0-9.eE+-]+')
+    STEP_CREDIT_ALPHA=$(printf "%.10f" "$RAW_ALPHA" | sed 's/\.\?0*$//')
+else
+    STEP_CREDIT_ALPHA=0.0
 fi
 
 echo "🧪 Auto-Config from Filename: $SCRIPT_NAME"
-echo ">> REWARD_MODE: $REWARD_MODE | LOSS_AGG: $LOSS_AGG | GRAD_NORM: $GRAD_VAL | KL_LOSS: $KL_BOOL | ENTRO: $ENTRO_VAL"
+echo ">> REWARD_MODE: $REWARD_MODE | LOSS_AGG: $LOSS_AGG | GRAD_NORM: $GRAD_VAL | KL_LOSS: $KL_BOOL | ENTRO: $ENTRO_VAL | STEP_CREDIT_ALPHA: $STEP_CREDIT_ALPHA"
 
 # ---- 1. 强力清理 ----
 echo "🧹 Nuking previous processes..."
@@ -51,12 +59,12 @@ mkdir -p "$GEN_OUTPUT_DIR"
 
 export PYTHONUNBUFFERED=1
 export VLLM_ENFORCE_EAGER=True
-export VLLM_ATTENTION_BACKEND=FLASH_ATTN 
-export DEBUG_ARG="kl_control" 
+export VLLM_ATTENTION_BACKEND=FLASH_ATTN
+export DEBUG_ARG="kl_control"
 
 # ---- 3. 启动 Ray Head ----
 echo "🚀 Starting Local Ray Head..."
-ray start --head --port=6379 --num-gpus=8 --num-cpus=32 --dashboard-host=0.0.0.0 --disable-usage-stats --block & 
+ray start --head --port=6379 --num-gpus=8 --num-cpus=32 --dashboard-host=0.0.0.0 --disable-usage-stats --block &
 RAY_PID=$!
 
 sleep 5
@@ -102,6 +110,8 @@ python3 -m agentevolver.main_ppo \
     algorithm.adv_estimator=grpo \
     algorithm.use_kl_in_reward=False \
     algorithm.process_reward_mode=$REWARD_MODE \
+    algorithm.gamma=1.0 \
+    algorithm.step_credit_alpha=$STEP_CREDIT_ALPHA \
     data.train_batch_size=32 \
     data.truncation='error' \
     data.return_raw_chat=True \
@@ -148,7 +158,7 @@ python3 -m agentevolver.main_ppo \
     trainer.critic_warmup=0 \
     trainer.logger="['console','wandb']" \
     trainer.project_name="AgentEvolver" \
-    trainer.experiment_name="appworld_${REWARD_MODE}_${LOSS_AGG}_GRAD${GRAD_VAL}_ENTRO${ENTRO_VAL}_KL${KL_BOOL}" \
+    trainer.experiment_name="appworld_${REWARD_MODE}_${LOSS_AGG}_GRAD${GRAD_VAL}_ENTRO${ENTRO_VAL}_KL${KL_BOOL}_STEPCREDIT${STEP_CREDIT_ALPHA}" \
     trainer.save_freq=5 \
     trainer.test_freq=5 \
     trainer.total_epochs=40 \

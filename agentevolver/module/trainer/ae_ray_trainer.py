@@ -245,6 +245,66 @@ def compute_single_component_advantage(
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
+def apply_step_redistribution(
+    combined_advantage: torch.Tensor,
+    step_level_rewards: torch.Tensor,
+    step_ids: torch.Tensor,
+    response_mask: torch.Tensor,
+    alpha: float = 0.5,
+    epsilon: float = 1e-8,
+) -> torch.Tensor:
+    """
+    在已完成 sparse 归一化的 advantage 基础上，在每条轨迹内部按步骤奖励做信用重分配。
+
+    算法：
+      1. 对每条轨迹，统计各 step 的奖励总和 step_reward_sum[s]
+      2. 在轨迹内部对所有 step 的奖励做 Z-score（零均值，不改变轨迹整体信号强度）
+      3. 把归一化后的步骤偏移量按 alpha 叠加到原 advantage 上：
+         final[i][t] = combined_advantage[i][t] + alpha * step_norm[step_id[i][t]]
+
+    std=0（所有步奖励相同）或步数<=1时，该轨迹不做修改，退化为原始 sparse 结果。
+    """
+    bsz, seq_len = combined_advantage.shape
+    result = combined_advantage.clone()
+
+    for i in range(bsz):
+        valid_mask_i = (step_ids[i] >= 0) & (response_mask[i].bool())
+        if not valid_mask_i.any():
+            continue
+
+        max_step = int(step_ids[i][valid_mask_i].max().item())
+
+        # 聚合每个 step 的奖励（只有 <|im_end|> 处非零，其余加 0 无害）
+        step_reward_sum = torch.zeros(max_step + 1, device=combined_advantage.device)
+        step_exists = torch.zeros(max_step + 1, dtype=torch.bool, device=combined_advantage.device)
+        for t in range(seq_len):
+            if valid_mask_i[t]:
+                s = step_ids[i, t].item()
+                step_reward_sum[s] += step_level_rewards[i, t]
+                step_exists[s] = True
+
+        # 只用存在的步骤归一化
+        if step_exists.sum() <= 1:
+            continue  # 只有一步，无法计算组内差异
+
+        step_vals = step_reward_sum[step_exists]
+        std_val = step_vals.std()
+        if std_val < epsilon:
+            continue  # 所有 step 奖励相同，跳过
+
+        mean_val = step_vals.mean()
+        step_norm = torch.zeros(max_step + 1, device=combined_advantage.device)
+        step_norm[step_exists] = (step_reward_sum[step_exists] - mean_val) / (std_val + epsilon)
+
+        # 广播回每个 token
+        for t in range(seq_len):
+            if valid_mask_i[t]:
+                s = step_ids[i, t].item()
+                result[i, t] = result[i, t] + alpha * step_norm[s]
+
+    return result
+
+
 def compute_outcome_advantage_dual_strategy(
     token_level_rewards: torch.Tensor,
     response_mask: torch.Tensor,
@@ -382,6 +442,7 @@ def parse_reward_from_dataproto(data: DataProto, return_dict=False) -> dict | to
     api_tensor = torch.zeros_like(full_seq_shape_tensor, dtype=torch.float32, device=device)
     rep_tensor = torch.zeros_like(full_seq_shape_tensor, dtype=torch.float32, device=device)
     eff_tensor = torch.zeros_like(full_seq_shape_tensor, dtype=torch.float32, device=device)
+    fmt_tensor = torch.zeros_like(full_seq_shape_tensor, dtype=torch.float32, device=device)
 
     reward_extra_info = defaultdict(list)
     prompt_lengths = data.batch["prompts"].shape[-1]
@@ -420,12 +481,15 @@ def parse_reward_from_dataproto(data: DataProto, return_dict=False) -> dict | to
         api_scores_batch = [item.get("step_api_rewards", []) for item in reward_scores_obj]
         rep_scores_batch = [item.get("step_repetition_rewards", []) for item in reward_scores_obj]
 
+        fmt_scores_batch = [item.get("step_format_rewards", []) for item in reward_scores_obj]
+
         for b in range(batch_size):
             if not valid_response_mask[b]: continue
 
             valid_steps = step_ids[b]
             cur_api = api_scores_batch[b]
             cur_rep = rep_scores_batch[b]
+            cur_fmt = fmt_scores_batch[b]
 
             for t in range(seq_len):
                 if t >= response_lengths[b]: break
@@ -444,12 +508,15 @@ def parse_reward_from_dataproto(data: DataProto, return_dict=False) -> dict | to
                             api_tensor[b, write_pos] = cur_api[s_id]
                         if s_id < len(cur_rep):
                             rep_tensor[b, write_pos] = cur_rep[s_id]
+                        if s_id < len(cur_fmt):
+                            fmt_tensor[b, write_pos] = cur_fmt[s_id]
 
     data.batch["outcome_reward_tensor"] = outcome_tensor
     data.batch["api_reward_tensor"] = api_tensor
     data.batch["rep_reward_tensor"] = rep_tensor
     data.batch["eff_reward_tensor"] = eff_tensor
-    total_reward_tensor = outcome_tensor + api_tensor + rep_tensor + eff_tensor
+    data.batch["fmt_reward_tensor"] = fmt_tensor
+    total_reward_tensor = outcome_tensor + api_tensor + rep_tensor + eff_tensor + fmt_tensor
 
     if return_dict:
         return {"reward_tensor": total_reward_tensor, "reward_extra_info": reward_extra_info}
@@ -591,7 +658,8 @@ def compute_advantage(
     norm_adv_by_std_in_grpo=True,
     config=None,
     tokenizer=None,
-    global_steps=0
+    global_steps=0,
+    override_weights: dict = None,
 ):
     """
     [用途]: 统领级优势计算网关。根据选定的训练架构（GAE / GRPO 等）调用对应的计算模块，
@@ -696,7 +764,13 @@ def compute_advantage(
         w_efficiency = 0.0
         w_api = config.get("w_api", 1.0)
         w_rep = config.get("w_rep", 1.0)
+        w_fmt = config.get("w_fmt", 0.0)
         outcome_strategy = config.get("outcome_strategy", "normalize_then_decay")
+        # 应用来自 Trainer 的权重覆盖（用于退火）
+        if override_weights:
+            w_api = override_weights.get("w_api", w_api)
+            w_rep = override_weights.get("w_rep", w_rep)
+            w_fmt = override_weights.get("w_fmt", w_fmt)
 
         # 汇总 Outcome 流奖励
         outcome_tensor = data.batch.get("outcome_reward_tensor", data.batch["token_level_rewards"])
@@ -742,11 +816,50 @@ def compute_advantage(
             component_name="Efficiency Reward"
         )
 
+        adv_fmt = compute_single_component_advantage(
+            data.batch.get("fmt_reward_tensor", torch.zeros_like(data.batch["responses"])),
+            loss_mask, uid_index, norm_adv_by_std_in_grpo,
+            mode=process_mode,
+            tokenizer=tokenizer,
+            input_ids=full_input_ids_tensor,
+            component_name="Format Penalty"
+        ) if "fmt_reward_tensor" in data.batch else torch.zeros_like(adv_out)
+
         # ---------------------------------------------------------
         # 进行奖励叠加汇总 (融合门控系数)
         api_gate = 1.0
         pre_norm_advantages = (w_outcome * adv_out) + (w_efficiency * adv_eff) + \
-                              (w_api * adv_api * api_gate) + (w_rep * adv_rep)
+                              (w_api * adv_api * api_gate) + (w_rep * adv_rep) + \
+                              (w_fmt * adv_fmt)
+
+        # [Step Credit Redistribution] 在 sparse 归一化基础上，按轨迹内步骤奖励重分配信用
+        step_credit_alpha = config.get("step_credit_alpha", 0.0)
+        if not (0.0 <= step_credit_alpha <= 1.0):
+            logger.warning(f"[StepCredit] step_credit_alpha={step_credit_alpha} 超出推荐范围 [0, 1]，已 clamp。")
+            step_credit_alpha = max(0.0, min(1.0, step_credit_alpha))
+        if step_credit_alpha > 0.0 and padded_step_ids is None:
+            logger.debug("[StepCredit] step_credit_alpha > 0 但 padded_step_ids 为 None，跳过步骤信用重分配。")
+        if step_credit_alpha > 0.0 and "api_reward_tensor" not in data.batch:
+            logger.debug("[StepCredit] step_credit_alpha > 0 但 batch 中无 api_reward_tensor，跳过步骤信用重分配。")
+        if step_credit_alpha > 0.0 and padded_step_ids is not None and "api_reward_tensor" in data.batch:
+            # 将 api_reward_tensor 对齐到全序列维度（response 区域填值，prompt 区域为 0）
+            api_rew_aligned = torch.zeros_like(pre_norm_advantages)
+            api_raw = data.batch["api_reward_tensor"]
+            if "prompts" in data.batch:
+                _prompt_len = data.batch["prompts"].shape[1]
+                _valid_len = min(api_raw.shape[1], pre_norm_advantages.shape[1] - _prompt_len)
+                api_rew_aligned[:, _prompt_len:_prompt_len + _valid_len] = api_raw[:, :_valid_len]
+            else:
+                _valid_len = min(api_raw.shape[1], pre_norm_advantages.shape[1])
+                api_rew_aligned[:, -_valid_len:] = api_raw[:, :_valid_len]
+
+            pre_norm_advantages = apply_step_redistribution(
+                combined_advantage=pre_norm_advantages,
+                step_level_rewards=api_rew_aligned,
+                step_ids=padded_step_ids,
+                response_mask=loss_mask,
+                alpha=step_credit_alpha,
+            )
 
         final_advantages = pre_norm_advantages.clone()
         valid_mask = loss_mask.bool()
@@ -1061,6 +1174,10 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
         self._create_dataloader_from_manager(collate_fn, shuffle_trainset)
         self.hindsight_manager = hindsight_manager
 
+        # [Feature] API reward annealing state
+        self._api_converged_count: int = 0
+        self._api_anneal_start_step: Optional[int] = None
+
     def init_workers(self):
         """
         [用途]: 创建并初始化基于 Ray 的各个角色 Worker 组 (如 Actor、Critic、RM)，加载相应模型，并建立环境联通。
@@ -1139,6 +1256,126 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
         self.env_manager = ParallelEnvManager(config=self.config, async_rollout_manager=self.async_rollout_manager, max_parallel=self.config.actor_rollout_ref.rollout.max_env_worker)
         self.thread_pool = ThreadPoolExecutor(max_workers=self.config.thread_pool.max_workers)
         self.exp_manager = ExperienceManager(config=self.config)
+
+    def _compute_api_annealing_weights(self, batch) -> dict:
+        """
+        基于当前 batch 内组内 API reward std 的连续收敛计数，计算退火后的 w_api。
+        返回 override_weights dict（非空时会覆盖 compute_advantage 的默认权重）。
+        """
+        anneal_cfg = self.config.algorithm.get("api_reward_annealing", {})
+        if not anneal_cfg.get("enable", False):
+            return {}
+
+        w_api_base = self.config.algorithm.get("w_api", 0.5)
+        threshold = anneal_cfg.get("convergence_threshold", 0.05)
+        min_count = anneal_cfg.get("min_converged_count", 3)
+        anneal_steps = anneal_cfg.get("anneal_steps", 5)
+
+        api_tensor = batch.batch.get("api_reward_tensor", None)
+        uid_index = batch.non_tensor_batch.get("uid", None)
+
+        if api_tensor is not None and uid_index is not None:
+            api_sums = api_tensor.sum(dim=-1).cpu().float()
+            unique_uids = list(dict.fromkeys(uid_index.tolist() if hasattr(uid_index, "tolist") else uid_index))
+            group_stds = []
+            for uid in unique_uids:
+                indices = [i for i, u in enumerate(uid_index) if u == uid]
+                if len(indices) > 1:
+                    group_stds.append(api_sums[indices].std().item())
+
+            if group_stds:
+                mean_std = sum(group_stds) / len(group_stds)
+                if not hasattr(self, "_api_converged_count"):
+                    self._api_converged_count = 0
+                    self._api_anneal_start_step = None
+
+                if mean_std < threshold:
+                    self._api_converged_count += 1
+                else:
+                    # std 恢复说明 API reward 重新有区分度，重置计数和退火
+                    if self._api_converged_count > 0:
+                        logger.info(f"[APIAnnealing] Step {self.global_steps}: API std recovered ({mean_std:.4f} >= {threshold}), resetting.")
+                    self._api_converged_count = 0
+                    self._api_anneal_start_step = None
+
+                if self._api_converged_count >= min_count:
+                    if self._api_anneal_start_step is None:
+                        self._api_anneal_start_step = self.global_steps
+                        logger.info(
+                            f"[APIAnnealing] Step {self.global_steps}: API reward converged "
+                            f"(std={mean_std:.4f} < {threshold} for {min_count} steps). "
+                            f"Starting annealing over {anneal_steps} steps."
+                        )
+                    elapsed = self.global_steps - self._api_anneal_start_step
+                    alpha = min(1.0, elapsed / max(1, anneal_steps))
+                    w_api_eff = w_api_base * (1.0 - alpha)
+                    logger.debug(f"[APIAnnealing] step={self.global_steps} api_std={mean_std:.4f} alpha={alpha:.3f} w_api={w_api_eff:.3f}")
+                    return {"w_api": w_api_eff}
+        return {}
+
+    def _update_curriculum(self, batch) -> None:
+        """
+        每训练步结束后调用：
+        1. 用当前 batch 中 intra 任务的 outcome 更新滑动窗口。
+        2. 若窗口均值 > threshold，推进 cross_ratio。
+        3. cross_ratio 变化超过 rebuild_delta 时重建 DataLoader。
+        """
+        from collections import deque
+        curriculum_cfg = self.config.algorithm.get("curriculum", {})
+        if not curriculum_cfg.get("enable", False):
+            return
+
+        mixture = getattr(self.train_task_manager, "_mixture_strategy", None)
+        if mixture is None or not hasattr(mixture, "set_cross_ratio"):
+            return
+
+        # 初始化滑动窗口
+        window_size = curriculum_cfg.get("window_size", 3)
+        if not hasattr(self, "_intra_success_window"):
+            self._intra_success_window = deque(maxlen=window_size)
+
+        # 从 batch extras 取 domain_type
+        extras = batch.non_tensor_batch.get("extras", None)
+        outcome_tensor = batch.batch.get("outcome_reward_tensor", None)
+        if extras is None or outcome_tensor is None:
+            return
+
+        intra_indices = [i for i, e in enumerate(extras) if (e or {}).get("domain_type") == "intra"]
+        if not intra_indices:
+            return
+
+        # 每条 trajectory 的 outcome = 该行 tensor 求和（outcome 只在最后一个 token 有值）
+        intra_outcomes = outcome_tensor[intra_indices].sum(dim=-1).tolist()
+        success_rate = sum(1 for r in intra_outcomes if r > 0.6) / len(intra_outcomes)
+        self._intra_success_window.append(success_rate)
+
+        window_mean = sum(self._intra_success_window) / len(self._intra_success_window)
+        threshold = curriculum_cfg.get("intra_success_threshold", 0.5)
+        max_ratio = curriculum_cfg.get("max_cross_ratio", 4.0)
+        ramp = curriculum_cfg.get("ramp_rate_per_step", 0.5)
+
+        logger.debug(
+            f"[Curriculum] step={self.global_steps} intra_success_window={list(self._intra_success_window)} "
+            f"mean={window_mean:.3f} cross_ratio={mixture.current_cross_ratio:.2f}"
+        )
+
+        if window_mean > threshold and mixture.current_cross_ratio < max_ratio:
+            new_ratio = min(max_ratio, mixture.current_cross_ratio + ramp)
+            should_rebuild = mixture.set_cross_ratio(new_ratio)
+            if should_rebuild:
+                main_log(
+                    f"[Curriculum] Step {self.global_steps}: intra_mean={window_mean:.3f} > {threshold}, "
+                    f"cross_ratio → {new_ratio:.2f}. Rebuilding DataLoader..."
+                )
+                self.train_dataset.update()
+                self.train_dataloader = StatefulDataLoader(
+                    dataset=self.train_dataset,
+                    batch_size=self.config.data.get("gen_batch_size", self.config.data.train_batch_size),
+                    num_workers=self.config.data.get("dataloader_num_workers", 8),
+                    drop_last=True,
+                    collate_fn=self._collate_fn,
+                    sampler=create_rl_sampler(self.config.data, self.train_dataset),
+                )
 
     def _create_dataloader_from_manager(self, collate_fn, shuffle_trainset: bool = True):
         """
@@ -1950,6 +2187,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                             norm_adv_by_std_in_grpo = False
 
                         # 【核心逻辑区】：算出最终优势 (Advantage)
+                        override_weights = self._compute_api_annealing_weights(batch)
                         batch = compute_advantage(
                             batch,
                             adv_estimator=self.config.algorithm.adv_estimator,
@@ -1960,7 +2198,8 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                             multi_turn=self.config.actor_rollout_ref.rollout.multi_turn.enable,
                             config=self.config.algorithm,
                             tokenizer=self.tokenizer,
-                            global_steps=self.global_steps
+                            global_steps=self.global_steps,
+                            override_weights=override_weights,
                         )
                         # =====================================================================
                         # 强制对齐 Advantages 和 Returns 的维度 (截取 Response 对应的列)
@@ -1995,19 +2234,27 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                                 else:
                                     task_ids = batch.non_tensor_batch.get('data_id', ["unknown"] * len(prompts))
 
-                                sample_scores = []
+                                # uid 用于按 GRPO 组聚合（同一任务的 n 条 rollout）
+                                _uid_raw = batch.non_tensor_batch.get("uid", None)
+                                uids = _uid_raw.tolist() if hasattr(_uid_raw, "tolist") else (list(_uid_raw) if _uid_raw is not None else None)
+
+                                # outcome score（判断是否成功）
                                 token_rewards = batch.batch['token_level_rewards']
                                 if hasattr(token_rewards, 'cpu'):
                                     token_rewards = token_rewards.cpu()
+                                sample_scores = [1.0 if token_rewards[_idx].sum().item() > 0 else 0.0
+                                                 for _idx in range(len(prompts))]
 
-                                for _idx in range(len(prompts)):
-                                    score = token_rewards[_idx].sum().item()
-                                    sample_scores.append(1.0 if score > 0 else 0.0)
+                                hindsight_success_threshold = getattr(attribution_cfg, "hindsight_success_rate_threshold", 0.5)
 
                                 threading.Thread(
                                     target=self.hindsight_manager.process_failed_batch,
                                     args=(prompts, responses, sample_scores, task_ids),
-                                    kwargs={"threshold": 0.0}
+                                    kwargs={
+                                        "uids": uids,
+                                        "threshold": 0.0,
+                                        "success_rate_threshold": hindsight_success_threshold,
+                                    }
                                 ).start()
 
                             except Exception as e:
@@ -2136,6 +2383,9 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                     is_agent=True
                 )
                 # ==============================================================================
+
+                # [Curriculum] 每步更新 intra 成功率窗口，按需推进 cross 比例
+                self._update_curriculum(batch)
 
                 step_cost = time.time() - step_start_time
                 main_log(f"Step {self.global_steps} Finished. Cost: {step_cost:.2f}s")

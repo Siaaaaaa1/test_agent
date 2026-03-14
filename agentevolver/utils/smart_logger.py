@@ -10,6 +10,10 @@ import numpy as np
 import torch
 from loguru import logger
 
+# 全局单例，供同进程的其他模块（如 task_manager）无侵入地写入结构化日志
+_global_instance: "SmartLogger | None" = None
+
+
 class SmartLogger:
     """
     工业级大模型 RLHF/GRPO 训练智能日志器。
@@ -39,7 +43,43 @@ class SmartLogger:
         
         # 线程锁辅助（在同一进程内双重保障）
         self._thread_lock = threading.Lock()
+
+        # 注册全局单例，供同进程的其他模块（如 task_manager）使用
+        global _global_instance
+        _global_instance = self
+
         logger.info(f"🚀 SmartLogger initialized.\nSteps Tracking: {self.step_log_file}\nReports Tracking: {self.report_log_file}")
+
+    @staticmethod
+    def get_instance() -> "SmartLogger | None":
+        """返回全局单例，未初始化时返回 None（调用方需做空值判断）。"""
+        return _global_instance
+
+    def log_pipeline_event(self, event_type: str, data: dict) -> None:
+        """
+        将数据生成流水线的阶段汇总写入 report_log_file。
+        格式与 run_diagnostics 一致，置顶插入，便于快速查阅最新状态。
+        只写高密度的阶段摘要（PART1_SUMMARY、MERGE_SUMMARY 等），不写逐步日志。
+        """
+        report = {
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "type": "pipeline_event",
+            "event": event_type,
+            **data,
+        }
+        self._safe_write(step_data=None, analysis_report=report)
+
+    def log_pipeline_step(self, data: dict) -> None:
+        """
+        将数据生成流水线的每轮/每批次明细追加写入 step_log_file。
+        用于 Part2 每轮、Post-Filter 每批次等高频但仍需结构化的记录。
+        """
+        record = {
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "type": "pipeline_step",
+            **data,
+        }
+        self._safe_write(step_data=record, analysis_report=None)
 
     def _init_file(self):
         """初始化轻量级报告文件，如果文件不存在则创建。"""

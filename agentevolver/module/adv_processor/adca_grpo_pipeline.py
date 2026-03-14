@@ -68,18 +68,36 @@ def apply_adca_grpo(
     for sample_idx in range(min(3, len(batch.batch["prompts"]))):
         verify_step_content(batch, tokenizer, sample_idx)
 
-    # === (B) Evaluate all steps per sample via API ===
-    flags, stats = evaluate_step_flags_parallel_sync(
-        tokenizer=tokenizer,
-        batch=batch,
-        overall_score_source="token_level_rewards",
-        mask_tensor=batch.batch["response_mask"],
-        save_dir=getattr(attribution_cfg, 'llm_evaluation_log_dir', None),
-        global_step=global_steps,
-        epoch=f"train.{epoch}.{i}",
-        skip_type=getattr(prm_cfg, 'skip_type', "skip_small_adv"),
-        model_name=getattr(prm_cfg, 'model_name', "qwen-max"),
-    )
+    # === (B) Generate per-step flags ===
+    # "rule": use api_reward > 0 as GOOD signal — zero LLM cost, relies on GT API matching
+    # "api":  call LLM judge for each step (expensive but more general)
+    evaluation_type = getattr(attribution_cfg, 'evaluation_type', 'api')
+
+    if evaluation_type == "rule":
+        reward_scores_list = batch.non_tensor_batch.get("reward_scores", None)
+        if reward_scores_list is None:
+            logger.warning("[ADCA] evaluation_type=rule but reward_scores not found in batch; falling back to empty flags.")
+            flags = [[] for _ in range(len(batch.batch["prompts"]))]
+        else:
+            flags = []
+            for item in reward_scores_list:
+                step_api = item.get("step_api_rewards", []) if isinstance(item, dict) else []
+                # GOOD = API reward > 0 means a new GT API was successfully hit
+                flags.append([float(r) > 0 for r in step_api])
+        stats = {}
+        logger.debug(f"[ADCA] rule-based flags generated for {len(flags)} samples.")
+    else:
+        flags, stats = evaluate_step_flags_parallel_sync(
+            tokenizer=tokenizer,
+            batch=batch,
+            overall_score_source="token_level_rewards",
+            mask_tensor=batch.batch["response_mask"],
+            save_dir=getattr(attribution_cfg, 'llm_evaluation_log_dir', None),
+            global_step=global_steps,
+            epoch=f"train.{epoch}.{i}",
+            skip_type=getattr(prm_cfg, 'skip_type', "skip_small_adv"),
+            model_name=getattr(prm_cfg, 'model_name', "qwen-max"),
+        )
 
     # --- PRM evaluation result statistics ---
     if isinstance(stats, dict):

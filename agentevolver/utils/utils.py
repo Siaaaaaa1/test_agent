@@ -18,6 +18,27 @@ def convert_tool_to_user_message(tool_message, format="qwen"):
         }
 
 
+def _trim_to_safe_utf8_boundary(tokens, tokenizer):
+    """
+    裁掉末尾的裸字节 token，直到边界处于完整 UTF-8 字符处。
+
+    Byte-level BPE（如 Qwen）会把多字节字符拆成若干 <0xXX> token。
+    若按 token 数截断时末尾恰好是某个多字节字符的中间字节，
+    tokenizer.decode() 的 Rust 层会因收到残缺 UTF-8 而 panic（无法被 try/except 捕获）。
+    最多退 4 个 token（UTF-8 最大字节数），代价极小。
+    """
+    MAX_TRIM = 4
+    for trim in range(MAX_TRIM + 1):
+        candidate = tokens if trim == 0 else tokens[:-trim]
+        if len(candidate) == 0:
+            break
+        last_token_str = tokenizer.convert_ids_to_tokens([candidate[-1].item()])[0]
+        # 裸字节 token 形如 <0xe4>、<0xb8> 等
+        if not (last_token_str.startswith("<0x") and last_token_str.endswith(">")):
+            return candidate
+    return tokens[:-MAX_TRIM] if len(tokens) > MAX_TRIM else tokens[:1]
+
+
 def clip_state_content_correctly(tokenizer, state_content: str, max_env_len: int) -> str:
     """
     Correctly truncate state_content, ensuring token boundaries are not broken
@@ -32,32 +53,27 @@ def clip_state_content_correctly(tokenizer, state_content: str, max_env_len: int
     """
     # First tokenize to check length
     tokens = tokenizer(state_content, return_tensors="pt", padding=False)["input_ids"][0]
-    
+
     if len(tokens) <= max_env_len:
         return state_content
-    
-    # If too long, truncate to max_env_len length tokens
-    truncated_tokens = tokens[:max_env_len]
 
-    # Safer approach: use tokenizer's built-in methods
-    # Most tokenizers have better processing methods
+    # Truncate to max_env_len, then trim back to a safe UTF-8 character boundary
+    # to prevent byte-level BPE partial-character panic in the Rust tokenizer
+    truncated_tokens = _trim_to_safe_utf8_boundary(tokens[:max_env_len], tokenizer)
+
     if hasattr(tokenizer, 'decode'):
-        # First try to preserve special tokens
         try:
             truncated_content = tokenizer.decode(truncated_tokens, skip_special_tokens=False)
             return truncated_content
         except:
-            # If failed, truncation position may be inappropriate, try removing special tokens
             try:
                 truncated_content = tokenizer.decode(truncated_tokens, skip_special_tokens=True)
                 return truncated_content
             except:
-                # Final fallback: manual processing
                 pass
 
-    # If all decode methods fail, use a more conservative approach
-    # Gradually reduce token count until successful decode
-    for i in range(min(10, max_env_len)):  # Try at most 10 times
+    # Fallback: gradually reduce token count
+    for i in range(min(10, max_env_len)):
         try:
             test_tokens = tokens[:max_env_len - i]
             truncated_content = tokenizer.decode(test_tokens, skip_special_tokens=False)
@@ -66,7 +82,6 @@ def clip_state_content_correctly(tokenizer, state_content: str, max_env_len: int
         except:
             continue
 
-    # Final fallback: use original character truncation method
     logger.error("All token-based truncation methods failed, falling back to character truncation")
     return state_content[:max_env_len]
 

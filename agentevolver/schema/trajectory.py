@@ -26,6 +26,9 @@ class Reward(BaseModel):
 
     # [新增] 每一步的复读惩罚列表
     step_repetition_rewards: List[float] = Field(default_factory=list)
+
+    # [新增] 每一步的格式惩罚列表（检查是否有且仅有一对 ```python...``` 代码块）
+    step_format_rewards: List[float] = Field(default_factory=list)
     
     # 结果描述，默认为 "Outcome 1 denotes success, and 0 denotes failure."
     description: str = Field(default="Outcome 1 denotes success, and 0 denotes failure.")

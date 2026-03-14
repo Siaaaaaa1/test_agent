@@ -56,6 +56,7 @@ def to_rl_dataset(
                 "new_query": task.query,
                 "evaluator": task.evaluator,
                 "ground_truth": task_obj.ground_truth, # for some graders, such as LLM Judge w/ GT
+                "domain_type": task.metadata.get("domain_type", "unknown") if task.metadata else "unknown",
             },
         }
 

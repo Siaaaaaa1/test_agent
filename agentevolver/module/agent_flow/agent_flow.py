@@ -161,6 +161,7 @@ class AgentFlow(BaseAgentFlow):
 
             step_api_reward = 0.0
             step_repetition_penalty = 0.0
+            step_format_penalty = 0.0
             step_total_reward = 0.0
 
             try:
@@ -180,6 +181,7 @@ class AgentFlow(BaseAgentFlow):
                     elif isinstance(reward_info, dict):
                         step_api_reward = reward_info.get("api_reward", 0.0)
                         step_repetition_penalty = reward_info.get("repetition_penalty", 0.0)
+                        step_format_penalty = reward_info.get("format_penalty", 0.0)
                         step_total_reward = reward_info.get("total_score", 0.0)
                     
                     current_val = env_output.get('reward', 0.0) or 0.0
@@ -199,7 +201,8 @@ class AgentFlow(BaseAgentFlow):
             
             self.cmt.save_env_output(
                 state, input_msg_ref=step_input_message_arr, add_nothink=add_nothink,
-                api_reward=step_api_reward, repetition_penalty=step_repetition_penalty
+                api_reward=step_api_reward, repetition_penalty=step_repetition_penalty,
+                format_penalty=step_format_penalty
             )
 
             self.cmt.is_terminated = env_output["is_terminated"]

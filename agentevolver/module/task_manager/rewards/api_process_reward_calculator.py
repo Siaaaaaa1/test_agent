@@ -126,16 +126,17 @@ class APIProcessRewardCalculator(RewardCalculator):
     2. 结果级：语义打分 (Outcome) + 效率分 (Efficiency，仅供参考，不计入总分)。
     """
     def __init__(self, task: Task, model_name='qwen3.5-plus',
-                 reward_mode='outcome_continuous', 
-                 degeneration_mode='ngram', 
-                 degeneration_char_limit=100, 
+                 reward_mode='outcome_continuous',
+                 degeneration_mode='ngram',
+                 degeneration_char_limit=100,
                  zlib_threshold=0.1,
                  ngram_n=3,
                  ngram_threshold=0.1,
                  repetition_penalty=-1.0,
-                 efficiency_lambda: float = 0.05,     
-                 api_cost_weight: float = 2.0         
-                 ): 
+                 format_penalty=-1.0,
+                 efficiency_lambda: float = 0.05,
+                 api_cost_weight: float = 2.0
+                 ):
         super().__init__(task)
         self.model_name = model_name
         self.reward_mode = reward_mode
@@ -148,7 +149,8 @@ class APIProcessRewardCalculator(RewardCalculator):
         self.ngram_n = ngram_n
         self.ngram_thresh = ngram_threshold
         self.repetition_penalty = repetition_penalty
-        
+        self.format_penalty = format_penalty
+
         # 效率计算参数
         self.efficiency_lambda = efficiency_lambda
         self.api_cost_weight = api_cost_weight
@@ -276,17 +278,30 @@ class APIProcessRewardCalculator(RewardCalculator):
 
         return 0.6
 
+    def _check_format(self, content: str) -> float:
+        """
+        检查每步输出是否有且仅有一对 ```python...``` 代码块。
+        缺少或超出 1 对时返回 format_penalty，否则返回 0.0。
+        """
+        matches = re.findall(r'```python[\s\S]*?```', content)
+        if len(matches) == 1:
+            return 0.0
+        reason = "missing code block" if len(matches) == 0 else f"found {len(matches)} code blocks (expected 1)"
+        log_reward(f"[Format Check] Penalty applied: {reason}")
+        return self.format_penalty
+
     def calculate_step_reward(self, step_code: str, observation: str = "") -> Dict[str, float]:
         """
         计算单步奖励，引入四象限平滑惩罚逻辑。
+        包含：API 命中奖励、复读惩罚、格式惩罚。
         """
         is_error = self._check_execution_error(observation)
         step_apis = self._extract_apis(step_code)
         matched_apis = step_apis.intersection(self.gt_apis)
-        
+
         api_reward = 0.0
         api_valid = 0
-        
+
         if matched_apis:
             if not is_error:
                 newly_covered = matched_apis - self.visited_apis
@@ -296,27 +311,30 @@ class APIProcessRewardCalculator(RewardCalculator):
                     api_valid = 1
                     self.visited_apis.update(newly_covered)
             else:
-                api_reward = -0.1 
+                api_reward = -0.1
         else:
             if not is_error:
                 api_reward = 0.0
             else:
-                api_reward = -0.3 
+                api_reward = -0.3
 
         repetition_pen = 0.0
         is_bad, reason = self._check_step_degeneration(step_code)
         if is_bad:
-            repetition_pen = self.repetition_penalty 
+            repetition_pen = self.repetition_penalty
             log_reward(f"[Step Degeneration] Detected: {reason}")
-            
-        total_score = api_reward + repetition_pen
+
+        format_pen = self._check_format(step_code)
+
+        total_score = api_reward + repetition_pen + format_pen
         if total_score != 0:
-             self.total_process_reward += total_score
+            self.total_process_reward += total_score
 
         return {
             "api_reward": api_reward,
             "api_valid": api_valid,
             "repetition_penalty": repetition_pen,
+            "format_penalty": format_pen,
             "total_score": total_score
         }
 

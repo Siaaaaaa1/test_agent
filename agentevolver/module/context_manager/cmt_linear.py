@@ -66,6 +66,7 @@ class Linear_CMT(Trajectory, ContextManagerBase):
         # [新增] 用于存储每一步的详细过程奖励
         self.step_api_rewards: List[float] = []
         self.step_repetition_rewards: List[float] = []
+        self.step_format_rewards: List[float] = []
         
         # self.experiences = []
 
@@ -165,6 +166,7 @@ class Linear_CMT(Trajectory, ContextManagerBase):
                 if len(self.step_api_rewards) > 0 and len(self.step_api_rewards) == (len(self.full_context) // 2) + 1:
                      self.step_api_rewards.pop(-1)
                      self.step_repetition_rewards.pop(-1)
+                     self.step_format_rewards.pop(-1)
 
     def remove_last_non_llm_msg(self, ext_msg_list:List[ExtendedMessage]):
         """
@@ -367,7 +369,7 @@ class Linear_CMT(Trajectory, ContextManagerBase):
         return Linear_CMT.save_llm_output(self, llm_output, input_msg_ref, auto_register_full_context=False)  # ⭐ 调用保存方法但不注册
 
 
-    def save_env_output(self, env_output:dict, input_msg_ref:List[dict]=None, add_nothink=False, api_reward:float=0.0, repetition_penalty:float=0.0):
+    def save_env_output(self, env_output:dict, input_msg_ref:List[dict]=None, add_nothink=False, api_reward:float=0.0, repetition_penalty:float=0.0, format_penalty:float=0.0):
         """
         保存并处理环境输出到上下文中。
 
@@ -404,6 +406,7 @@ class Linear_CMT(Trajectory, ContextManagerBase):
         # [新增] 存储每一步的过程奖励
         self.step_api_rewards.append(api_reward)
         self.step_repetition_rewards.append(repetition_penalty)
+        self.step_format_rewards.append(format_penalty)
         return
 
     def to_role_content(self, ext_msg_array: List[ExtendedMessage]) -> List[dict]:
@@ -471,6 +474,7 @@ class Linear_CMT(Trajectory, ContextManagerBase):
         if self.reward:
             self.reward.step_api_rewards = self.step_api_rewards
             self.reward.step_repetition_rewards = self.step_repetition_rewards
+            self.reward.step_format_rewards = self.step_format_rewards
 
         # 创建 Sample 对象
         sample = Sample(

@@ -12,7 +12,7 @@ from agentevolver.utils.utils import seed_everything
 # 引入 AgentEvolver 特有的模块
 from agentevolver.client.llm_client import DashScopeClient
 from agentevolver.module.task_manager.base import NaiveTaskObjectiveRetrieval
-from agentevolver.module.task_manager.data_mixture import OriginalOnlyStrategy, UnifiedMixtureStrategy
+from agentevolver.module.task_manager.data_mixture import OriginalOnlyStrategy, UnifiedMixtureStrategy, CurriculumMixtureStrategy
 from agentevolver.module.task_manager.strategies.random import LlmRandomSamplingExploreStrategy
 from agentevolver.module.task_manager.task_manager import TaskManager
 from agentevolver.module.task_manager.env_profiles import EnvProfile
@@ -290,6 +290,25 @@ class TaskRunner:
         # 9. 初始化 TaskManager
         llm_client = DashScopeClient(model_name=config.task_manager.llm_client)
         
+        # 构建混合策略：是否启用课程学习
+        _base_mixture = UnifiedMixtureStrategy(
+            use_original=config.task_manager.mixture.use_original_tasks,
+            synthetic_ratio=config.task_manager.mixture.synthetic_data_ratio,
+            shuffle=config.task_manager.mixture.shuffle,
+            seed=seed,
+        )
+        _curriculum_cfg = config.algorithm.get("curriculum", {})
+        if _curriculum_cfg.get("enable", False):
+            _mixture_strategy = CurriculumMixtureStrategy(
+                base_strategy=_base_mixture,
+                max_cross_ratio=_curriculum_cfg.get("max_cross_ratio", 4.0),
+                rebuild_delta=_curriculum_cfg.get("rebuild_delta", 0.5),
+                shuffle=config.task_manager.mixture.shuffle,
+            )
+            print(f"[Main] Curriculum learning enabled: max_cross_ratio={_curriculum_cfg.get('max_cross_ratio', 4.0)}")
+        else:
+            _mixture_strategy = _base_mixture
+
         train_task_manager = TaskManager(
             config=config,
             exploration_strategy=config.task_manager.strategy,
@@ -297,12 +316,7 @@ class TaskRunner:
             exploration_strategy_args=config.task_manager.exploration_strategy_args,
             llm_client=llm_client,
             old_retrival=NaiveTaskObjectiveRetrieval(),
-            mixture_strategy=UnifiedMixtureStrategy(
-                use_original=config.task_manager.mixture.use_original_tasks,
-                synthetic_ratio=config.task_manager.mixture.synthetic_data_ratio,
-                shuffle=config.task_manager.mixture.shuffle,
-                seed=seed,
-            ),
+            mixture_strategy=_mixture_strategy,
             reward_config=config.task_manager.grader,
             tokenizer=tokenizer,
             env_service_url=config.env_service.env_url,
@@ -331,12 +345,30 @@ class TaskRunner:
         if attribution_cfg.get("enable_hindsight", False):
             print("[Main] Initializing HindsightManager for AgentEvolver...")
             try:
+                from agentevolver.module.task_manager.filters.llm_filter import LlmFilter
                 save_path = attribution_cfg.get("hindsight_save_path", "tasks_explored/hindsight_supplement.jsonl")
+
+                # 可选：使用 LlmFilter 在真实环境中验证生成任务的可解性
+                llm_filter = None
+                if attribution_cfg.get("hindsight_use_llm_filter", False):
+                    try:
+                        llm_filter = LlmFilter(
+                            env_url=config.env_service.env_url,
+                            llm_client=llm_client,
+                            num_threads=min(4, config.task_manager.get("num_explore_threads", 4)),
+                            tokenizer=tokenizer,
+                            config=config.task_manager.get("strategy_args", {}),
+                        )
+                        print("[Main] LlmFilter initialized for Hindsight quality verification.")
+                    except Exception as e:
+                        print(f"[Warning] Failed to init LlmFilter for Hindsight: {e}. Using lightweight validator.")
+
                 hindsight_manager = HindsightManager(
                     llm_client=llm_client,
-                    tokenizer=tokenizer,  # [保留] 直接传入 tokenizer
+                    tokenizer=tokenizer,
                     save_path=save_path,
-                    num_threads=config.task_manager.get("num_explore_threads", 4)
+                    num_threads=config.task_manager.get("num_explore_threads", 4),
+                    llm_filter=llm_filter,
                 )
             except Exception as e:
                 print(f"[Warning] Failed to initialize HindsightManager in main_ppo: {e}")

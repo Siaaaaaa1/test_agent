@@ -3,10 +3,12 @@
 
 import json
 import os
+import random
 import re
 import threading
 import copy
 import time
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Any, Sequence, Optional, Tuple, Callable
 
@@ -17,6 +19,7 @@ from agentevolver.schema.trajectory import Trajectory, Reward
 from agentevolver.schema.task import Task, TaskObjective
 from agentevolver.module.task_manager.base import LlmClient
 from agentevolver.module.task_manager.env_profiles import EnvProfile
+from agentevolver.module.task_manager.filters.filters import NaiveTaskPostFilter
 from agentevolver.utils.step_parser import parse_response_ids_to_steps
 
 # =============================================================================
@@ -324,101 +327,161 @@ class TrajectoryEvaluator:
 # =============================================================================
 
 class HindsightManager:
-    def __init__(self, 
-                 llm_client: LlmClient, 
-                 tokenizer, 
+    def __init__(self,
+                 llm_client: LlmClient,
+                 tokenizer,
                  save_path: str = "tasks_explored/hindsight_supplement.jsonl",
-                 num_threads: int = 4):
-        
+                 num_threads: int = 4,
+                 llm_filter=None):
+        """
+        Args:
+            llm_filter: 可选的 LlmFilter 实例，用于在真实环境中验证生成任务的可解性。
+                        传入 None 则跳过环境验证，仅使用 NaiveTaskPostFilter。
+        """
         self._llm_client = llm_client
         self._tokenizer = tokenizer
         self.save_path = save_path
         self._num_threads = num_threads
-        
-        os.makedirs(os.path.dirname(self.save_path), exist_ok=True)
+        self._llm_filter = llm_filter
+
+        os.makedirs(os.path.dirname(self.save_path) or ".", exist_ok=True)
         self._lock = threading.Lock()
-        
+
         # 内置验证器
         self._validator = TrajectoryEvaluator(llm_client)
 
-    def process_failed_batch(self, 
-                             prompts: List[List[int]], 
-                             responses: List[List[int]], 
-                             scores: List[float], 
+    def process_failed_batch(self,
+                             prompts: List[List[int]],
+                             responses: List[List[int]],
+                             scores: List[float],
                              task_ids: List[str],
-                             threshold: float = 0.0):
+                             uids: List[str] = None,
+                             threshold: float = 0.0,
+                             success_rate_threshold: float = 0.5):
         """
-        入口函数：处理训练中的失败 Batch
+        入口函数：按 GRPO 组选择性触发后见之明任务重构。
+
+        策略：
+        1. 按 uid 分组（每组对应同一个任务的 n 条 rollout）。
+        2. 组内成功率 < success_rate_threshold 才触发 hindsight（避免对已掌握的任务浪费资源）。
+        3. 每组仅选 1 条轨迹：优先选 api_reward 最高的失败轨迹（进展最丰富，含最多部分正确的 API 调用）。
+        4. 后台并发生成、过滤、验证，结果写入 save_path 供下个 epoch 加载。
         """
-        failed_tasks_data = []
+        n = len(scores)
+        uid_list = uids if uids is not None else task_ids
 
-        # 1. 筛选
-        for i, score in enumerate(scores):
-            if score <= threshold:
-                traj = self._reconstruct_trajectory(prompts[i], responses[i], task_ids[i])
-                if traj and len(traj.steps) > 0:
-                    failed_tasks_data.append((traj, task_ids[i]))
+        # --- 按 uid 分组 ---
+        groups: Dict[str, List[int]] = defaultdict(list)
+        for i in range(n):
+            groups[uid_list[i]].append(i)
 
-        if not failed_tasks_data:
+        total_groups = len(groups)
+        triggered_groups = 0
+        skipped_groups = 0
+        selected: List[Tuple[Trajectory, str]] = []
+
+        for uid, indices in groups.items():
+            group_scores = [scores[i] for i in indices]
+            success_count = sum(1 for s in group_scores if s > threshold)
+            success_rate = success_count / len(indices)
+
+            if success_rate >= success_rate_threshold:
+                skipped_groups += 1
+                continue  # 组内已有足够成功，无需 hindsight
+
+            triggered_groups += 1
+
+            # 失败轨迹索引
+            failed_indices = [i for i in indices if scores[i] <= threshold]
+            if not failed_indices:
+                continue
+
+            # 随机选一条失败轨迹
+            best_idx = random.choice(failed_indices)
+
+            traj = self._reconstruct_trajectory(prompts[best_idx], responses[best_idx], task_ids[best_idx])
+            if traj and len(traj.steps) > 0:
+                selected.append((traj, task_ids[best_idx]))
+
+        logger.info(
+            f"[Hindsight] Batch scan: groups={total_groups}, "
+            f"triggered={triggered_groups} (success_rate<{success_rate_threshold}), "
+            f"skipped={skipped_groups}, selected={len(selected)} trajectories for processing"
+        )
+
+        if not selected:
             return
 
-        logger.info(f"[Hindsight] Found {len(failed_tasks_data)} failed trajectories. Starting processing...")
-
-        # 2. 并发处理 (Thread Pool)
+        # --- 并发处理 ---
         with ThreadPoolExecutor(max_workers=self._num_threads) as executor:
-            for traj, original_tid in failed_tasks_data:
+            for traj, original_tid in selected:
                 executor.submit(self._execute_hindsight_strategy, traj, original_tid)
 
     def _execute_hindsight_strategy(self, traj: Trajectory, original_task_id: str):
         """
         单条 Trajectory 的核心处理流程：
-        Generate -> Validate -> Rewrite GT -> Save
+        Generate → NaiveFilter → LlmFilter(env验证) → Save
         """
         try:
             # --- 1. Generate Candidates ---
-            # 构造 dummy task 用于 old_objectives (Hindsight 不依赖旧目标，所以传空)
-            dummy_old_obj = [] 
-            
             sys_prompt, user_prompt = get_task_summarize_prompt(
-                trajectories=[traj], 
-                old_objectives=dummy_old_obj, 
-                profile=None  # Hindsight 往往不需要特定 Profile，或者你可以传入全局 Profile
+                trajectories=[traj],
+                old_objectives=[],
+                profile=None,
             )
-            
             messages = [{"role": "system", "content": sys_prompt}, {"role": "user", "content": user_prompt}]
-            
-            # 调用 LLM 生成建议 (Higher temp for diversity)
             resp_dict = self._get_llm_chat_fn()(messages, custom_sampling_params={"temperature": 0.7})
             response_content = resp_dict["content"]
 
-            # 创建基础 Task 模板 (只需要 ID 等基本信息)
             base_task = Task(dataset="hindsight", id=original_task_id, query="")
-            
-            # 解析出 TaskObjective 列表
             candidate_tasks = parse_tasks_from_response(base_task, response_content)
-            
-            valid_tasks = []
-            
-            # --- 2. Validate Loop ---
-            for task_obj in candidate_tasks:
-                # 复用 _validate
-                is_valid = self._validate(task_obj, traj)
-                
-                if is_valid:
-                    # --- 3. Rewrite GT ---
-                    # 复用 _rewrite_new_gt (它会调用 LLM 清洗 action_sequence)
-                    final_task_obj = self._rewrite_new_gt(task_obj, traj)
-                    
-                    # 补全 ID 信息，防止重复
+            raw_count = len(candidate_tasks)
+
+            if not candidate_tasks:
+                logger.debug(f"[Hindsight] {original_task_id}: LLM generated 0 candidate tasks, skipping.")
+                return
+
+            # --- 2. NaiveTaskPostFilter: 置信度排序 + IoU 去重 + ground_truth 非空 ---
+            candidate_tasks = NaiveTaskPostFilter().filter(candidate_tasks)
+            naive_count = len(candidate_tasks)
+            logger.info(
+                f"[Hindsight] {original_task_id}: raw={raw_count} → after NaiveFilter={naive_count}"
+            )
+
+            if not candidate_tasks:
+                return
+
+            # --- 3. LlmFilter: 在真实环境中验证可解性（若已配置）---
+            if self._llm_filter is not None:
+                candidate_tasks = self._llm_filter.filter(candidate_tasks)
+                llm_count = len(candidate_tasks)
+                logger.info(
+                    f"[Hindsight] {original_task_id}: after LlmFilter(env)={llm_count}"
+                )
+                if not candidate_tasks:
+                    return
+            else:
+                # 未配置 LlmFilter 时，回退到轻量 LLM 验证：检查该轨迹是否完成了任务
+                candidate_tasks_validated = []
+                for task_obj in candidate_tasks:
                     unique_suffix = os.urandom(4).hex()
-                    final_task_obj.task.id = f"hindsight_{original_task_id}_{unique_suffix}"
-                    
-                    valid_tasks.append(final_task_obj)
-                    logger.debug(f"[Hindsight] Captured Valid Task: {final_task_obj.objective[:30]}...")
+                    task_obj.task.id = f"hindsight_{original_task_id}_{unique_suffix}"
+                    if self._validate(task_obj, traj):
+                        task_obj = self._rewrite_new_gt(task_obj, traj)
+                        candidate_tasks_validated.append(task_obj)
+                        logger.debug(f"[Hindsight] Validated: {task_obj.objective[:60]}")
+                    else:
+                        logger.debug(f"[Hindsight] Rejected by validator: {task_obj.objective[:60]}")
+                candidate_tasks = candidate_tasks_validated
 
             # --- 4. Save ---
-            if valid_tasks:
-                self._save_tasks(valid_tasks)
+            if candidate_tasks:
+                self._save_tasks(candidate_tasks)
+                logger.info(
+                    f"[Hindsight] {original_task_id}: saved {len(candidate_tasks)} new tasks → {self.save_path}"
+                )
+            else:
+                logger.debug(f"[Hindsight] {original_task_id}: no tasks passed all filters.")
 
         except Exception as e:
             logger.exception(f"[Hindsight] Strategy execution failed for {original_task_id}: {e}")
