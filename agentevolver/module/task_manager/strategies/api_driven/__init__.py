@@ -842,9 +842,26 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             except Exception as e:
                 logger.warning(f"[ApiDriven] Failed to read {path}: {e}")
 
+        # 最终兜底：扫描 data/tasks/ 目录（path 旁边或常见位置）
+        candidate_tasks_dirs = [
+            os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(path)), "..", "tasks")),
+            os.path.join(os.getcwd(), "env_service", "environments", "appworld", "data", "tasks"),
+        ]
+        for tasks_dir in candidate_tasks_dirs:
+            if os.path.isdir(tasks_dir):
+                scanned = sorted([
+                    d for d in os.listdir(tasks_dir)
+                    if os.path.isdir(os.path.join(tasks_dir, d)) and not d.startswith(".")
+                ])
+                if scanned:
+                    logger.warning(
+                        f"[ApiDriven] Falling back to {len(scanned)} IDs scanned from {tasks_dir}."
+                    )
+                    return scanned
+
         logger.error(
-            "[ApiDriven] Cannot load any sandbox IDs. "
-            "Check appworld installation and task_labels_path config."
+            f"[ApiDriven] Cannot load any sandbox IDs. path={path} not found. "
+            "Check task_labels_path in config (should be ./env_service/environments/appworld/data/datasets/train.txt)."
         )
         return []
 
