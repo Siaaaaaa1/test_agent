@@ -798,11 +798,16 @@ async def handle_fetch_db_data(request: FetchDBRequest):
     try:
         # 此时服务运行在 appworld conda 环境中，可以直接安全导入
         from appworld.environment import AppWorld
-        
+
+        import time as _time
+        _t0 = _time.time()
+        print(f"[EnvService/fetch_db_data] ← 收到请求: sandbox_id={request.sandbox_id} | app_tables={dict(request.app_tables)}")
+
         fetched_data = {}
-        
+
         # 挂载指定的沙盒数据库快照
         with AppWorld(task_id=request.sandbox_id) as world:
+            print(f"[EnvService/fetch_db_data] 沙盒已挂载: sandbox_id={request.sandbox_id} | elapsed={_time.time()-_t0:.2f}s")
             for app_name, table_names in request.app_tables.items():
                 table_names = table_names[:2]
 
@@ -851,9 +856,14 @@ async def handle_fetch_db_data(request: FetchDBRequest):
                             
                 if app_data:
                     fetched_data[app_name] = app_data
-                    
+                    print(f"[EnvService/fetch_db_data]   ✅ {app_name}: tables={list(app_data.keys())}, records={ {t: len(r) for t, r in app_data.items()} }")
+                else:
+                    print(f"[EnvService/fetch_db_data]   ⚠️ {app_name}: 未提取到任何表数据")
+
+        total_records = sum(len(rows) for app_data in fetched_data.values() for rows in app_data.values())
+        print(f"[EnvService/fetch_db_data] → 返回: sandbox_id={request.sandbox_id} | apps={list(fetched_data.keys())} | total_records={total_records} | elapsed={_time.time()-_t0:.2f}s")
         return {"success": True, "data": fetched_data}
-        
+
     except ImportError:
         raise HTTPException(status_code=500, detail="The 'appworld' module is missing in the EnvService conda environment.")
     except Exception as e:

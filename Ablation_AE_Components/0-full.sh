@@ -212,9 +212,11 @@ python3 -m agentevolver.main_ppo \
     task_manager.strategy=api_driven \
     task_manager.exploration_strategy_args.active_apps="['amazon','gmail','spotify','venmo','simple_note','todoist','splitwise','phone','file_system']" \
     task_manager.exploration_strategy_args.task_labels_path="./env_service/environments/appworld/data/datasets/train.txt" \
+    task_manager.exploration_strategy_args.target_intra_count=300 \
+    task_manager.exploration_strategy_args.target_cross_count=1200 \
     task_manager.llm_client="qwen3.5-plus" \
     task_manager.grader.synthetic_grader=api_process_llm_judge \
     task_manager.env_profile=./cookbook/env_profiles/appworld.json \
-    thread_pool.max_workers=12 \
+    thread_pool.max_workers=20 \
     task_manager.generate_task_only=false \
     2>&1 | tee "$log_file"

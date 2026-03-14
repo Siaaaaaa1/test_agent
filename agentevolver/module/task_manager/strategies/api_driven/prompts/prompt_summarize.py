@@ -208,10 +208,11 @@ def parse_tasks_from_response(seed_task: Task, response: str) -> list[TaskObject
     try:
         # 使用正则提取 <task> 标签内的内容
         task_matches = re.findall(r"<task>(.*?)</task>", response, re.DOTALL)
-        
-        # 兼容性处理：如果没有标签，尝试直接找 JSON 对象
+
+        # 兼容性处理：如果没有标签，尝试直接找最外层 JSON 对象
+        # 使用贪婪匹配 \{.*\} 而非 \{.*?\}，避免 action_sequence 中的 {} 导致提前截断
         if not task_matches:
-             task_matches = re.findall(r"\{.*?\}", response, re.DOTALL)
+            task_matches = re.findall(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", response, re.DOTALL)
 
         for task_content in task_matches:
             try:

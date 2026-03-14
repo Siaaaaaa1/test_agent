@@ -350,8 +350,10 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         results = []
         if phase == "intra":
             results = self.summarize_intra(task, trajectory)
-        elif phase == "extra":
+        elif phase == "cross":
             results = self.summarize_cross(task, trajectory)
+        else:
+            logger.warning(f"[Summarize] Unknown phase '{phase}' for task {getattr(task, 'task_id', '?')}, skipping.")
         
         return results if results else []
 
@@ -417,41 +419,77 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
     def _fetch_real_table_data(self, sandbox_id: str, app_tables: Dict[str, List[str]]) -> str:
         """核心数据桥梁探针：通过 API 请求远端 AppWorld 服务，动态探测并提取底层真实状态。"""
         fetched_data = {}
+        env_url = self.config.get("env_service", {}).get("env_url", "http://localhost:8080")
+        target_endpoint = f"{env_url}/fetch_db_data"
+
+        total_tables = sum(len(v) for v in app_tables.values()) if app_tables else 0
+        logger.info(
+            f"[EnvProbe] → sandbox_id={sandbox_id} | endpoint={target_endpoint} | "
+            f"apps={list(app_tables.keys())} | tables_per_app={ {k: v for k, v in app_tables.items()} } | "
+            f"total_tables={total_tables}"
+        )
+
         try:
-            env_url = self.config.get("env_service", {}).get("env_url", "http://localhost:8080")
-            target_endpoint = f"{env_url}/fetch_db_data"
-            
             payload = {
                 "sandbox_id": sandbox_id,
                 "app_tables": app_tables
             }
-            
+
+            t0 = time.time()
             response = requests.post(target_endpoint, json=payload, timeout=15.0)
-            
+            elapsed = time.time() - t0
+
+            logger.info(f"[EnvProbe] ← status={response.status_code} | elapsed={elapsed:.2f}s")
+
             if response.status_code == 200:
                 result = response.json()
                 if result.get("success"):
                     fetched_data = result.get("data", {})
+                    total_records = sum(
+                        len(rows) for app_data in fetched_data.values()
+                        for rows in (app_data.values() if isinstance(app_data, dict) else [])
+                    )
+                    logger.info(
+                        f"[EnvProbe] ✅ 成功获取数据: apps_returned={list(fetched_data.keys())} | "
+                        f"total_records={total_records}"
+                    )
+                    for app_name, app_data in fetched_data.items():
+                        if isinstance(app_data, dict):
+                            for tbl, rows in app_data.items():
+                                logger.debug(f"[EnvProbe]   {app_name}.{tbl}: {len(rows)} 条记录")
                 else:
-                    logger.warning(f"[Data Fetch] 远端服务返回错误: {result.get('error')}")
+                    logger.warning(f"[EnvProbe] ⚠️ 远端服务返回业务错误: {result.get('error')} | sandbox_id={sandbox_id}")
             else:
-                logger.warning(f"[Data Fetch] API 请求失败，状态码: {response.status_code}")
-                
+                logger.warning(
+                    f"[EnvProbe] ⚠️ HTTP 请求失败: status={response.status_code} | "
+                    f"body={response.text[:200]} | sandbox_id={sandbox_id}"
+                )
+
+        except requests.exceptions.Timeout:
+            logger.error(f"[EnvProbe] ❌ 请求超时 (15s): endpoint={target_endpoint} | sandbox_id={sandbox_id}")
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"[EnvProbe] ❌ 无法连接到 AppWorld 服务: {e} | endpoint={target_endpoint}")
         except Exception as e:
-            logger.error(f"[Data Fetch] 无法连接到 AppWorld 远端服务打捞数据: {e}")
-            
+            logger.error(f"[EnvProbe] ❌ 未知异常: {e} | sandbox_id={sandbox_id}")
+
+        if not fetched_data:
+            logger.warning(f"[EnvProbe] ⚠️ 未获取到任何表数据，生成器将使用空 DB context。sandbox_id={sandbox_id} | app_tables={app_tables}")
+
         return json.dumps(fetched_data, indent=2, ensure_ascii=False) if fetched_data else "{}"
 
     def generate_intra_task(self, app_name: str, task: Task = None) -> List[Task]:
         """同领域 (Intra-domain) 任务生成，经历评委筛选与生成器构建双阶段。"""
+        logger.info(f"[IntraGen] 开始生成: app={app_name}")
         generated_tasks = []
         app_data = self.api_knowledge.get(app_name, {})
         all_apis = list(app_data.get("apis", {}).keys())
-        
-        if len(all_apis) < 2: 
+
+        if len(all_apis) < 2:
+            logger.warning(f"[IntraGen] 跳过 app={app_name}，API 数量不足 ({len(all_apis)} < 2)")
             return []
 
         real_sandbox_id = self.get_next_sandbox_id()
+        logger.info(f"[IntraGen] app={app_name} | sandbox_id={real_sandbox_id} | available_apis={len(all_apis)}")
 
         candidate_groups = []
         for _ in range(3):
@@ -461,7 +499,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         groups_str = "\n".join([f"Group {i+1}: {g}" for i, g in enumerate(candidate_groups)])
         all_apps_info, target_app_apis_info, _ = self._get_enhanced_context(app_name, [])
 
-        db_schema_overview = get_intra_schema([app_name]) 
+        db_schema_overview = get_intra_schema([app_name])
 
         selector_prompt = INTRA_DOMAIN_SELECTOR_PROMPT.format(
             CANDIDATE_COUNT=3,
@@ -469,19 +507,28 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             ALL_APPS_DESC=all_apps_info,
             TARGET_APP_API_DESCS=target_app_apis_info,
             CANDIDATE_GROUPS_STR=groups_str,
-            DB_SCHEMA_OVERVIEW=db_schema_overview 
+            DB_SCHEMA_OVERVIEW=db_schema_overview
         )
-        
+
+        logger.debug(f"[IntraGen] [Step 1/3] 调用 Selector LLM: app={app_name} | candidate_groups={candidate_groups}")
         sel_response = self._chat_with_retry(messages=[{"role": "user", "content": selector_prompt}])
-        if not sel_response: return []
-        
+        if not sel_response:
+            logger.warning(f"[IntraGen] Selector LLM 无响应，放弃: app={app_name}")
+            return []
+
         selection_data = parse_intra_selector(sel_response.content)
-        if not selection_data or "selected_apis" not in selection_data: return []
+        if not selection_data or "selected_apis" not in selection_data:
+            logger.warning(f"[IntraGen] Selector 解析失败，放弃: app={app_name} | raw_response={sel_response.content[:200]}")
+            return []
 
         selected_apis = selection_data["selected_apis"]
         required_tables = selection_data.get("required_tables", [])
+        logger.info(f"[IntraGen] [Step 1/3] Selector 完成: app={app_name} | selected_apis={selected_apis} | required_tables={required_tables}")
 
+        logger.info(f"[IntraGen] [Step 2/3] 探测环境数据: app={app_name} | sandbox_id={real_sandbox_id} | tables={required_tables}")
         db_content = self._fetch_real_table_data(real_sandbox_id, {app_name: required_tables})
+        db_content_len = len(db_content)
+        logger.info(f"[IntraGen] [Step 2/3] 环境探测完成: app={app_name} | db_content_chars={db_content_len} | has_data={db_content != '{}'}")
         _, _, anchor_apis_detailed_info = self._get_enhanced_context(app_name, selected_apis)
 
         generator_prompt = INTRA_DOMAIN_GENERATOR_PROMPT.format(
@@ -492,17 +539,22 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             DB_CONTENT=db_content
         )
 
+        logger.debug(f"[IntraGen] [Step 3/3] 调用 Generator LLM: app={app_name} | selected_apis={selected_apis}")
         gen_response = self._chat_with_retry(messages=[{"role": "user", "content": generator_prompt}])
-        if not gen_response: return []
+        if not gen_response:
+            logger.warning(f"[IntraGen] Generator LLM 无响应，放弃: app={app_name}")
+            return []
 
         parsed_scenarios = parse_intra_generator(gen_response.content)
-        
+        logger.info(f"[IntraGen] [Step 3/3] 生成完成: app={app_name} | parsed_scenarios={len(parsed_scenarios)}")
+
         for scenario in parsed_scenarios:
             new_task = copy.deepcopy(task) if task else Task()
             new_task.query = scenario.get("user_query", "")
+            logger.debug(f"[IntraGen] 生成任务: app={app_name} | query={new_task.query[:80]!r}")
             new_task.metadata = {
                 "phase": "intra",
-                "env_sandbox_id": real_sandbox_id, 
+                "env_sandbox_id": real_sandbox_id,
                 "target_app": app_name,
                 "target_api": scenario.get("target_api", ""),
                 "selected_apis_context": selected_apis,
@@ -511,23 +563,26 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             }
             generated_tasks.append(new_task)
 
+        logger.info(f"[IntraGen] ✅ 完成: app={app_name} | sandbox_id={real_sandbox_id} | tasks_generated={len(generated_tasks)}")
         return generated_tasks
 
     def generate_cross_task(self, target_apps: List[str], task: Task = None) -> List[Task]:
         """跨领域 (Cross-domain) 任务生成，自动计算不同 App 的 API 比例分配。"""
+        logger.info(f"[CrossGen] 开始生成: target_apps={target_apps}")
         ordered_apps = self._get_valid_app_chain(target_apps)
         if not ordered_apps:
-            logger.debug(f"[Cross-Gen] 拦截并丢弃不合理的跨域组合/顺序: {target_apps}")
+            logger.debug(f"[CrossGen] 拦截并丢弃不合理的跨域组合/顺序: {target_apps}")
             return []
-            
-        target_apps = ordered_apps 
+
+        target_apps = ordered_apps
         generated_tasks = []
-        
+
         total_apis = random.choices([2, 3, 4, 5], weights=[0.4, 0.3, 0.2, 0.1])[0]
         total_apis = max(total_apis, len(target_apps))
         num_candidates = 3 if total_apis in [2, 3] else 5
 
         real_sandbox_id = self.get_next_sandbox_id()
+        logger.info(f"[CrossGen] apps={target_apps} | sandbox_id={real_sandbox_id} | total_apis={total_apis} | num_candidates={num_candidates}")
 
         candidate_groups = []
         apps_info_lines = []
@@ -564,27 +619,36 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             DB_SCHEMA_OVERVIEW=db_schema_overview 
         )
 
+        logger.debug(f"[CrossGen] [Step 1/3] 调用 Selector LLM: apps={target_apps}")
         sel_response = self._chat_with_retry(messages=[{"role": "user", "content": selector_prompt}])
-        if not sel_response: return []
+        if not sel_response:
+            logger.warning(f"[CrossGen] Selector LLM 无响应，放弃: apps={target_apps}")
+            return []
 
         selection_data = parse_cross_selector(sel_response.content)
-        if not selection_data or "selected_apis" not in selection_data: return []
+        if not selection_data or "selected_apis" not in selection_data:
+            logger.warning(f"[CrossGen] Selector 解析失败，放弃: apps={target_apps} | raw_response={sel_response.content[:200]}")
+            return []
 
         selected_apis = selection_data["selected_apis"]
         required_tables = selection_data.get("required_tables", {})
+        logger.info(f"[CrossGen] [Step 1/3] Selector 完成: apps={target_apps} | selected_apis={selected_apis} | required_tables={required_tables}")
 
+        logger.info(f"[CrossGen] [Step 2/3] 探测环境数据: apps={target_apps} | sandbox_id={real_sandbox_id} | tables={required_tables}")
         db_content = self._fetch_real_table_data(real_sandbox_id, required_tables)
-        
+        db_content_len = len(db_content)
+        logger.info(f"[CrossGen] [Step 2/3] 环境探测完成: apps={target_apps} | db_content_chars={db_content_len} | has_data={db_content != '{}'}")
+
         anchor_details_combined = []
         for app, apis in selected_apis.items():
             _, _, anchor_detail = self._get_enhanced_context(app, apis)
             anchor_details_combined.append(f"[{app} Details]\n{anchor_detail}")
-        
+
         all_apis_brief_combined = []
         for app in target_apps:
             _, app_apis_info, _ = self._get_enhanced_context(app, [])
             all_apis_brief_combined.append(f"[{app} APIs]\n{app_apis_info}")
-        
+
         generator_prompt = CROSS_DOMAIN_GENERATOR_PROMPT.format(
             APPS_NAMES=", ".join(target_apps),
             SELECTED_APIS_JSON=json.dumps(selected_apis),
@@ -593,17 +657,22 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             DB_CONTENT=db_content
         )
 
+        logger.debug(f"[CrossGen] [Step 3/3] 调用 Generator LLM: apps={target_apps} | selected_apis={selected_apis}")
         gen_response = self._chat_with_retry(messages=[{"role": "user", "content": generator_prompt}])
-        if not gen_response: return []
+        if not gen_response:
+            logger.warning(f"[CrossGen] Generator LLM 无响应，放弃: apps={target_apps}")
+            return []
 
         parsed_scenarios = parse_cross_generator(gen_response.content)
+        logger.info(f"[CrossGen] [Step 3/3] 生成完成: apps={target_apps} | parsed_scenarios={len(parsed_scenarios)}")
 
         for scenario in parsed_scenarios:
             new_task = copy.deepcopy(task) if task else Task()
             new_task.query = scenario.get("user_query", "")
+            logger.debug(f"[CrossGen] 生成任务: apps={target_apps} | query={new_task.query[:80]!r}")
             new_task.metadata = {
-                "phase": "extra",
-                "env_sandbox_id": real_sandbox_id, 
+                "phase": "cross",
+                "env_sandbox_id": real_sandbox_id,
                 "target_apps": target_apps,
                 "source_api": scenario.get("source_info_api", ""),
                 "target_api": scenario.get("target_action_api", ""),
@@ -614,6 +683,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             }
             generated_tasks.append(new_task)
 
+        logger.info(f"[CrossGen] ✅ 完成: apps={target_apps} | sandbox_id={real_sandbox_id} | tasks_generated={len(generated_tasks)}")
         return generated_tasks
 
     def summarize_intra(self, task: Task, trajectory: Trajectory) -> List[TaskObjective]:
@@ -667,12 +737,13 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         for task_obj in tasks:
             if task_obj.task.metadata is None:
                 task_obj.task.metadata = {}
-            
+
             task_obj.task.origin_query = task.query
             task_obj.task.metadata["summary_analysis_process"] = llm_output
             task_obj.task.metadata["execution_reward"] = reward_info
             task_obj.task.metadata["source_data_id"] = task.metadata.get("data_id")
             task_obj.task.metadata["generation_type"] = "evolved"
+            task_obj.task.metadata["domain_type"] = "intra"
 
         return tasks
 
@@ -727,13 +798,14 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         for task_obj in tasks:
             if task_obj.task.metadata is None:
                 task_obj.task.metadata = {}
-            
+
             task_obj.task.origin_query = task.query
             task_obj.task.metadata["summary_analysis_process"] = llm_output
             task_obj.task.metadata["execution_reward"] = reward_info
             task_obj.task.metadata["source_data_id"] = task.metadata.get("data_id")
             task_obj.task.metadata["generation_type"] = "evolved"
-            
+            task_obj.task.metadata["domain_type"] = "cross"
+
         return tasks
 
     def verify_direct_gt(self, task: Task, trajectory: Trajectory) -> Optional[TaskObjective]:
@@ -774,6 +846,9 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             new_task.metadata["verification_reason"] = result.get("reason")
             new_task.metadata["verification_confidence"] = result.get("confidence")
             new_task.metadata["data_pair_type"] = "direct_verified"
+            # 从原始 task 的 phase 推断 domain_type，供下游统计和过滤使用
+            _phase = task.metadata.get("phase", "") if task.metadata else ""
+            new_task.metadata["domain_type"] = "intra" if _phase == "intra" else "cross"
             
             return TaskObjective(
                 task=new_task,

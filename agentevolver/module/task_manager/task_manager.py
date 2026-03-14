@@ -143,9 +143,11 @@ class ApiDrivenPipeline:
         self.mem_lock = threading.Lock() 
         
         self.strategy_args = manager._config.task_manager.get('exploration_strategy_args', {})
-        self.a = self.strategy_args.get('a', 1) 
-        self.b = self.strategy_args.get('b', 1) 
-        self.debug_mode = False 
+        self.a = self.strategy_args.get('a', 1)
+        self.b = self.strategy_args.get('b', 1)
+        self.debug_mode = False
+        self.target_intra_count = int(self.strategy_args.get('target_intra_count', 0))
+        self.target_cross_count = int(self.strategy_args.get('target_cross_count', 0)) 
         
         logger.info(f"[API-Driven] Strategy Args: a={self.a}, b={self.b}, debug_log={self.debug_mode}")
         if self.debug_mode:
@@ -289,7 +291,7 @@ class ApiDrivenPipeline:
         try:
             data_id = task.metadata.get("data_id", f"unknown_{random.randint(0,1000)}")
             trajectories = self.manager._exploration_strategy.explore(task, data_id, data_id)
-            success_traj = trajectories[0] if (trajectories and trajectories[0].reward and trajectories[0].reward.outcome >= 0.9) else None
+            success_traj = trajectories[0] if (trajectories and trajectories[0].reward and trajectories[0].reward.outcome >= 0.8) else None
             if not success_traj: return []
 
             reward_val = success_traj.reward.outcome
@@ -338,7 +340,7 @@ class ApiDrivenPipeline:
         try:
             data_id = task.metadata.get("data_id", f"unknown_{random.randint(0,1000)}")
             trajectories = self.manager._exploration_strategy.explore(task, data_id, data_id)
-            success_traj = trajectories[0] if (trajectories and trajectories[0].reward and trajectories[0].reward.outcome >= 0.9) else None
+            success_traj = trajectories[0] if (trajectories and trajectories[0].reward and trajectories[0].reward.outcome >= 0.8) else None
             if not success_traj: return []
 
             reward_val = success_traj.reward.outcome
@@ -442,12 +444,57 @@ class ApiDrivenPipeline:
                 "pass_rate_pct": round(pass_rate_p1, 1),
             })
 
-            # === PART 2: CROSS-DOMAIN ===
-            logger.info("=== Starting PART 2: Cross-Domain Generation & Filtering ===")
+            # === PART 2: INTRA-DOMAIN EXPLORE ===
+            logger.info("=== Starting PART 2: Intra-Domain Exploration ===")
+            intra_res = []
+            explored_ids_intra = set()
+            if os.path.exists(self.intra_final_path):
+                with open(self.intra_final_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        if not line.strip(): continue
+                        try:
+                            data = json.loads(line)
+                            intra_res.append(data)
+                            did = data.get("task", {}).get("metadata", {}).get("data_id")
+                            if did:
+                                explored_ids_intra.add(did)
+                            else:
+                                logger.warning(f"[PART 2 Resume] Missing data_id in {self.intra_final_path}, task will be re-explored.")
+                        except Exception as e:
+                            logger.warning(f"[PART 2 Resume] Failed to parse line in {self.intra_final_path}: {e}")
+
+            if len(filtered_intra_tasks) > 0 and (len(intra_res) / len(filtered_intra_tasks) > 0.5):
+                logger.info(f"[PART 2 Skip] 已完成 > 50%，使用缓存: {len(intra_res)}/{len(filtered_intra_tasks)}")
+            else:
+                pending_explore_intra = [t for t in filtered_intra_tasks if t.metadata.get("data_id") not in explored_ids_intra]
+                p2_direct_before = self._count_jsonl_lines(self.intra_direct_path)
+                p2_evolved_before = self._count_jsonl_lines(self.intra_evolved_path)
+                logger.info(f"[PART 2] source={len(filtered_intra_tasks)} | pending={len(pending_explore_intra)} | already_explored={len(explored_ids_intra)}")
+                if pending_explore_intra:
+                    with ThreadPoolExecutor(max_workers=1 if self.debug_mode else self.manager._num_exploration_threads) as pool:
+                        futures = {pool.submit(self._worker_explore_intra, t): i for i, t in enumerate(pending_explore_intra)}
+                        for future in tqdm(as_completed(futures), total=len(futures), desc="Intra Explore", disable=not self.show_progress):
+                            result = future.result()
+                            if result:
+                                self._thread_safe_append(self.intra_final_path, result)
+                                with self.mem_lock: intra_res.extend(result)
+                p2_direct_new = self._count_jsonl_lines(self.intra_direct_path) - p2_direct_before
+                p2_evolved_new = self._count_jsonl_lines(self.intra_evolved_path) - p2_evolved_before
+                logger.info(f"[PART 2 Summary] pending={len(pending_explore_intra)} | direct_verified={p2_direct_new} | evolved_pre_filter_passed={p2_evolved_new} | total_new_data={p2_direct_new + p2_evolved_new}")
+                self._report_event("PART2_SUMMARY", {
+                    "source": len(filtered_intra_tasks),
+                    "pending": len(pending_explore_intra),
+                    "direct_verified": p2_direct_new,
+                    "evolved_pre_filter_passed": p2_evolved_new,
+                    "total_new_data": p2_direct_new + p2_evolved_new,
+                })
+
+            # === PART 3: CROSS-DOMAIN GENERATION & FILTERING ===
+            logger.info("=== Starting PART 3: Cross-Domain Generation & Filtering ===")
             valid_apps_cross = [app for app in sorted(self.active_apps_set) if self.api_knowledge.get(app, {}).get("apis")]
             valid_apps_set = set(valid_apps_cross)
             valid_candidate_tasks = [t for t in self.tasks if getattr(t, 'app', None) in valid_apps_set or getattr(t, 'app_name', None) in valid_apps_set] or self.tasks
-            
+
             target_valid_count = 1 if self.debug_mode else int(len(self.tasks) * self.b)
             generated_cross_tasks = self._load_intermediate_tasks(self.cross_gen_path) or []
             filtered_cross_tasks = self._load_intermediate_tasks(self.cross_filtered_path) or []
@@ -456,9 +503,9 @@ class ApiDrivenPipeline:
             loop_idx = 0
             consecutive_empty = 0
             MAX_CONSECUTIVE_EMPTY = 3
-            p2_total_generated = len(generated_cross_tasks)
+            p3_total_generated = len(generated_cross_tasks)
 
-            logger.info(f"[PART 2] target_valid={target_valid_count} | cached_valid={current_valid_count} | cached_generated={global_gen_idx}")
+            logger.info(f"[PART 3] target_valid={target_valid_count} | cached_valid={current_valid_count} | cached_generated={global_gen_idx}")
 
             while current_valid_count < target_valid_count:
                 loop_idx += 1
@@ -483,14 +530,14 @@ class ApiDrivenPipeline:
                             with self.mem_lock: newly_generated.extend(res_list)
 
                 global_gen_idx += batch_size
-                p2_total_generated += len(newly_generated)
+                p3_total_generated += len(newly_generated)
                 with self.mem_lock: generated_cross_tasks.extend(newly_generated)
 
                 if not newly_generated:
                     consecutive_empty += 1
-                    logger.warning(f"[PART 2 Round {loop_idx}] Generated 0 tasks ({consecutive_empty}/{MAX_CONSECUTIVE_EMPTY} consecutive empty rounds).")
+                    logger.warning(f"[PART 3 Round {loop_idx}] Generated 0 tasks ({consecutive_empty}/{MAX_CONSECUTIVE_EMPTY} consecutive empty rounds).")
                     if consecutive_empty >= MAX_CONSECUTIVE_EMPTY:
-                        logger.error(f"[PART 2] Aborting: {MAX_CONSECUTIVE_EMPTY} consecutive rounds produced no valid tasks. Check LLM API / generation config.")
+                        logger.error(f"[PART 3] Aborting: {MAX_CONSECUTIVE_EMPTY} consecutive rounds produced no valid tasks. Check LLM API / generation config.")
                         break
                     continue
 
@@ -499,9 +546,9 @@ class ApiDrivenPipeline:
                 # 生成了任务但全被过滤同样视为无效轮次，防止低质量无限循环
                 if not newly_filtered:
                     consecutive_empty += 1
-                    logger.warning(f"[PART 2 Round {loop_idx}] Generated {len(newly_generated)} tasks but all filtered out ({consecutive_empty}/{MAX_CONSECUTIVE_EMPTY}).")
+                    logger.warning(f"[PART 3 Round {loop_idx}] Generated {len(newly_generated)} tasks but all filtered out ({consecutive_empty}/{MAX_CONSECUTIVE_EMPTY}).")
                     if consecutive_empty >= MAX_CONSECUTIVE_EMPTY:
-                        logger.error(f"[PART 2] Aborting: {MAX_CONSECUTIVE_EMPTY} consecutive rounds produced no valid tasks after filtering.")
+                        logger.error(f"[PART 3] Aborting: {MAX_CONSECUTIVE_EMPTY} consecutive rounds produced no valid tasks after filtering.")
                         break
                     continue
                 consecutive_empty = 0
@@ -510,9 +557,9 @@ class ApiDrivenPipeline:
                     with self.mem_lock: filtered_cross_tasks.extend(newly_filtered)
                 current_valid_count = len(filtered_cross_tasks)
                 round_pass_rate = (len(newly_filtered) / len(newly_generated) * 100) if newly_generated else 0
-                logger.info(f"[PART 2 Round {loop_idx}] batch={batch_size} | generated={len(newly_generated)} | pre_filter_passed={len(newly_filtered)} | pass_rate={round_pass_rate:.1f}% | cumulative_valid={current_valid_count}/{target_valid_count}")
+                logger.info(f"[PART 3 Round {loop_idx}] batch={batch_size} | generated={len(newly_generated)} | pre_filter_passed={len(newly_filtered)} | pass_rate={round_pass_rate:.1f}% | cumulative_valid={current_valid_count}/{target_valid_count}")
                 self._report_step({
-                    "event": "PART2_ROUND",
+                    "event": "PART3_ROUND",
                     "round": loop_idx,
                     "batch_size": batch_size,
                     "generated": len(newly_generated),
@@ -522,60 +569,15 @@ class ApiDrivenPipeline:
                     "target_valid": target_valid_count,
                 })
 
-            p2_total_pass_rate = (len(filtered_cross_tasks) / p2_total_generated * 100) if p2_total_generated else 0
-            logger.info(f"[PART 2 Summary] rounds={loop_idx} | total_generated={p2_total_generated} | total_valid={len(filtered_cross_tasks)} | target={target_valid_count} | overall_pass_rate={p2_total_pass_rate:.1f}%")
-            self._report_event("PART2_SUMMARY", {
+            p3_total_pass_rate = (len(filtered_cross_tasks) / p3_total_generated * 100) if p3_total_generated else 0
+            logger.info(f"[PART 3 Summary] rounds={loop_idx} | total_generated={p3_total_generated} | total_valid={len(filtered_cross_tasks)} | target={target_valid_count} | overall_pass_rate={p3_total_pass_rate:.1f}%")
+            self._report_event("PART3_SUMMARY", {
                 "rounds": loop_idx,
-                "total_generated": p2_total_generated,
+                "total_generated": p3_total_generated,
                 "total_valid": len(filtered_cross_tasks),
                 "target": target_valid_count,
-                "overall_pass_rate_pct": round(p2_total_pass_rate, 1),
+                "overall_pass_rate_pct": round(p3_total_pass_rate, 1),
             })
-
-            # === PART 3: INTRA-DOMAIN EXPLORE ===
-            logger.info("=== Starting PART 3: Intra-Domain Exploration ===")
-            intra_res = []
-            explored_ids_intra = set()
-            if os.path.exists(self.intra_final_path):
-                with open(self.intra_final_path, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        if not line.strip(): continue
-                        try:
-                            data = json.loads(line)
-                            intra_res.append(data)
-                            did = data.get("task", {}).get("metadata", {}).get("data_id")
-                            if did:
-                                explored_ids_intra.add(did)
-                            else:
-                                logger.warning(f"[PART 3 Resume] Missing data_id in {self.intra_final_path}, task will be re-explored.")
-                        except Exception as e:
-                            logger.warning(f"[PART 3 Resume] Failed to parse line in {self.intra_final_path}: {e}")
-
-            if len(filtered_intra_tasks) > 0 and (len(intra_res) / len(filtered_intra_tasks) > 0.5):
-                logger.info(f"[PART 3 Skip] 已完成 > 50%，使用缓存: {len(intra_res)}/{len(filtered_intra_tasks)}")
-            else:
-                pending_explore_intra = [t for t in filtered_intra_tasks if t.metadata.get("data_id") not in explored_ids_intra]
-                p3_direct_before = self._count_jsonl_lines(self.intra_direct_path)
-                p3_evolved_before = self._count_jsonl_lines(self.intra_evolved_path)
-                logger.info(f"[PART 3] source={len(filtered_intra_tasks)} | pending={len(pending_explore_intra)} | already_explored={len(explored_ids_intra)}")
-                if pending_explore_intra:
-                    with ThreadPoolExecutor(max_workers=1 if self.debug_mode else self.manager._num_exploration_threads) as pool:
-                        futures = {pool.submit(self._worker_explore_intra, t): i for i, t in enumerate(pending_explore_intra)}
-                        for future in tqdm(as_completed(futures), total=len(futures), desc="Intra Explore", disable=not self.show_progress):
-                            result = future.result()
-                            if result:
-                                self._thread_safe_append(self.intra_final_path, result)
-                                with self.mem_lock: intra_res.extend(result)
-                p3_direct_new = self._count_jsonl_lines(self.intra_direct_path) - p3_direct_before
-                p3_evolved_new = self._count_jsonl_lines(self.intra_evolved_path) - p3_evolved_before
-                logger.info(f"[PART 3 Summary] pending={len(pending_explore_intra)} | direct_verified={p3_direct_new} | evolved_pre_filter_passed={p3_evolved_new} | total_new_data={p3_direct_new + p3_evolved_new}")
-                self._report_event("PART3_SUMMARY", {
-                    "source": len(filtered_intra_tasks),
-                    "pending": len(pending_explore_intra),
-                    "direct_verified": p3_direct_new,
-                    "evolved_pre_filter_passed": p3_evolved_new,
-                    "total_new_data": p3_direct_new + p3_evolved_new,
-                })
 
             # === PART 4: CROSS-DOMAIN EXPLORE ===
             logger.info("=== Starting PART 4: Cross-Domain Exploration ===")
@@ -724,6 +726,101 @@ class ApiDrivenPipeline:
             "passed": len(final_survivors),
             "pass_rate_pct": round(post_pass_rate, 1),
         })
+
+        # === 后过滤后补充：确保最终数据集达到 target_intra_count / target_cross_count ===
+        if self.target_intra_count > 0 or self.target_cross_count > 0:
+            _supp_valid_apps = [app for app in sorted(self.active_apps_set) if self.api_knowledge.get(app, {}).get("apis")]
+            _supp_intra_pool = (list(copy.copy(self.tasks)) * int(self.a + 1))[:int(len(self.tasks) * self.a)] or list(self.tasks)
+            _supp_valid_candidates = (
+                [t for t in self.tasks if getattr(t, 'app', None) in set(_supp_valid_apps)
+                 or getattr(t, 'app_name', None) in set(_supp_valid_apps)]
+                or list(self.tasks)
+            )
+            _supp_offset = 700000
+            MAX_SUPP = 5
+
+            for _supp_round in range(MAX_SUPP):
+                _intra_count = sum(1 for s in final_survivors
+                                   if s.task.metadata and s.task.metadata.get("domain_type") == "intra")
+                _cross_count = sum(1 for s in final_survivors
+                                   if s.task.metadata and s.task.metadata.get("domain_type") == "cross")
+                _intra_deficit = max(0, self.target_intra_count - _intra_count) if self.target_intra_count > 0 else 0
+                _cross_deficit  = max(0, self.target_cross_count  - _cross_count)  if self.target_cross_count  > 0 else 0
+
+                if _intra_deficit == 0 and _cross_deficit == 0:
+                    logger.info(f"✅ [Supplement] 最终数据集已达目标: intra={_intra_count}/{self.target_intra_count}, cross={_cross_count}/{self.target_cross_count}")
+                    break
+
+                logger.info(f"[Supplement Round {_supp_round+1}/{MAX_SUPP}] 最终集: intra={_intra_count}/{self.target_intra_count} (缺口={_intra_deficit}), cross={_cross_count}/{self.target_cross_count} (缺口={_cross_deficit})")
+                _new_candidates: List[TaskObjective] = []
+
+                # -- Intra 补充 --
+                if _intra_deficit > 0 and _supp_valid_apps and _supp_intra_pool:
+                    _n_gen = _intra_deficit * 3
+                    _supp_gen: List[Task] = []
+                    with ThreadPoolExecutor(max_workers=1 if self.debug_mode else self.manager._num_exploration_threads) as pool:
+                        futures = []
+                        for _i in range(_n_gen):
+                            _idx = _supp_offset + _i
+                            _app = _supp_valid_apps[_idx % len(_supp_valid_apps)]
+                            _seed = _supp_intra_pool[_idx % len(_supp_intra_pool)]
+                            futures.append(pool.submit(self._worker_generate_intra, _idx, _app, _seed))
+                        for f in tqdm(as_completed(futures), total=len(futures), desc=f"Supp Intra Gen R{_supp_round+1}", disable=not self.show_progress):
+                            res = f.result()
+                            if res:
+                                for t in res:
+                                    t.metadata["data_id"] = f"supp_intra_{_supp_round}_{_supp_offset + len(_supp_gen)}"
+                                _supp_gen.extend(res)
+                    _supp_offset += _n_gen
+                    _filtered = self.manager._apply_filters_with_report(_supp_gen, self.manager.api_llm_pre_filter, f"Supp-Intra-PreFilter-R{_supp_round+1}")
+                    if _filtered:
+                        with ThreadPoolExecutor(max_workers=1 if self.debug_mode else self.manager._num_exploration_threads) as pool:
+                            futures2 = {pool.submit(self._worker_explore_intra, t): t for t in _filtered}
+                            for future in tqdm(as_completed(futures2), total=len(futures2), desc=f"Supp Intra Explore R{_supp_round+1}", disable=not self.show_progress):
+                                result = future.result()
+                                if result:
+                                    _new_candidates.extend(result)
+
+                # -- Cross 补充 --
+                if _cross_deficit > 0 and _supp_valid_apps and _supp_valid_candidates:
+                    _n_gen = _cross_deficit * 3
+                    _supp_gen = []
+                    with ThreadPoolExecutor(max_workers=1 if self.debug_mode else self.manager._num_exploration_threads) as pool:
+                        futures = []
+                        for _i in range(_n_gen):
+                            _idx = _supp_offset + _i
+                            _app_count = min(random.choices([2, 3], weights=[0.8, 0.2])[0], len(_supp_valid_apps))
+                            _target_apps = random.sample(_supp_valid_apps, _app_count)
+                            _seed = _supp_valid_candidates[_i % len(_supp_valid_candidates)]
+                            futures.append(pool.submit(self._worker_generate_cross, _idx, _target_apps, _seed))
+                        for f in tqdm(as_completed(futures), total=len(futures), desc=f"Supp Cross Gen R{_supp_round+1}", disable=not self.show_progress):
+                            res = f.result()
+                            if res:
+                                _supp_gen.extend(res)
+                    _supp_offset += _n_gen
+                    _filtered = self.manager._apply_filters_with_report(_supp_gen, self.manager.api_llm_pre_filter, f"Supp-Cross-PreFilter-R{_supp_round+1}")
+                    if _filtered:
+                        with ThreadPoolExecutor(max_workers=1 if self.debug_mode else self.manager._num_exploration_threads) as pool:
+                            futures2 = {pool.submit(self._worker_explore_cross, t): t for t in _filtered}
+                            for future in tqdm(as_completed(futures2), total=len(futures2), desc=f"Supp Cross Explore R{_supp_round+1}", disable=not self.show_progress):
+                                result = future.result()
+                                if result:
+                                    _new_candidates.extend(result)
+
+                # -- 对新候选进行后过滤，通过则加入最终集 --
+                if _new_candidates:
+                    _new_survived = self.manager._apply_filters_with_report(
+                        _new_candidates, self.manager._post_filter, f"Supp-PostFilter-R{_supp_round+1}"
+                    )
+                    final_survivors.extend(_new_survived)
+                    logger.info(f"[Supplement Round {_supp_round+1}] 新候选={len(_new_candidates)} | 后过滤通过={len(_new_survived)} | 累计总量={len(final_survivors)}")
+                else:
+                    logger.warning(f"[Supplement Round {_supp_round+1}] 未产生新候选，终止补充。")
+                    break
+            else:
+                _fc = sum(1 for s in final_survivors if s.task.metadata and s.task.metadata.get("domain_type") == "intra")
+                _cc = sum(1 for s in final_survivors if s.task.metadata and s.task.metadata.get("domain_type") == "cross")
+                logger.warning(f"[Supplement] 已达最大补充轮次({MAX_SUPP})，最终: intra={_fc}/{self.target_intra_count}, cross={_cc}/{self.target_cross_count}")
 
         # 统一在全量汇总后 shuffle，避免按批次 shuffle 导致批间顺序固定
         random.shuffle(final_survivors)

@@ -407,7 +407,7 @@ class APIProcessRewardCalculator(RewardCalculator):
             if reward_match:
                 score_val = float(reward_match.group(1))
                 if use_binary:
-                    score = 1.0 if score_val >= 0.9 else 0.0
+                    score = 1.0 if score_val >= 0.8 else 0.0
                 else:
                     score = max(0.0, min(100.0, score_val)) / 100.0
         return score, response

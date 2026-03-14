@@ -89,63 +89,26 @@ class LlmQualityPreFilter:
         is_good = self._parse_response(response_content)
         
         # --- 数据准备 ---
-        # 基础信息 (用于原有的 json)
-        simple_task_info = {
-            "query": task.query,
-            "data_id": task.metadata.get('data_id', 'unknown') if task.metadata else 'unknown'
-        }
-
-        # 详细信息 (用于新的 json，增加了大模型实际输出的内容 response_content)
         detailed_task_info = {
             "query": task.query,
             "data_id": task.metadata.get('data_id', 'unknown') if task.metadata else 'unknown',
             "response_content": response_content  
         }
 
-        # --- 保存逻辑 ---
+        # --- 保存逻辑（JSONL 追加，O(1) per write，避免大规模任务时的 O(n²) 读写瓶颈）---
         try:
             base_dir = "./tmp"
-            if not os.path.exists(base_dir):
-                os.makedirs(base_dir, exist_ok=True)
+            os.makedirs(base_dir, exist_ok=True)
 
-            # 根据好坏分配到不同的流式日志文件中
             if is_good:
-                file_name_std = "tasks_keep_pre_filter.json"
-                file_name_detail = "tasks_keep_pre_filter_with_response.json"
+                file_name_detail = "tasks_keep_pre_filter.jsonl"
             else:
-                file_name_std = "tasks_drop_pre_filter.json"
-                file_name_detail = "tasks_drop_pre_filter_with_response.json"
+                file_name_detail = "tasks_drop_pre_filter.jsonl"
 
-            # 内部闭包函数：安全的线程锁写入
-            def _append_to_json_locked(filename, data_dict):
-                full_path = os.path.join(base_dir, filename)
-                # [修复] 使用线程锁替代 fcntl
-                with self._file_lock:
-                    try:
-                        data_list = []
-                        if os.path.exists(full_path):
-                            with open(full_path, 'r', encoding='utf-8') as f:
-                                content = f.read()
-                                if content:
-                                    try:
-                                        data_list = json.loads(content)
-                                    except json.JSONDecodeError:
-                                        data_list = []
-                        
-                        # 追加新数据
-                        data_list.append(data_dict)
-                        
-                        # 覆写文件
-                        with open(full_path, 'w', encoding='utf-8') as f:
-                            json.dump(data_list, f, ensure_ascii=False, indent=4)
-                            
-                    except Exception as file_e:
-                        logger.error(f"[PreFilter] File write error for {filename}: {file_e}")
-
-            # 4.1 保存原有格式 (仅 query, data_id)
-            _append_to_json_locked(file_name_std, simple_task_info)
-            # 4.2 保存新格式 (包含 response_content)
-            _append_to_json_locked(file_name_detail, detailed_task_info)
+            full_path = os.path.join(base_dir, file_name_detail)
+            with self._file_lock:
+                with open(full_path, 'a', encoding='utf-8') as f:
+                    f.write(json.dumps(detailed_task_info, ensure_ascii=False) + "\n")
 
         except Exception as e:
             logger.error(f"[PreFilter] Failed to save task logs: {e}")
