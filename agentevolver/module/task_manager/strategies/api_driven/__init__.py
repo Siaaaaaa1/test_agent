@@ -357,11 +357,14 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
 
     def get_next_sandbox_id(self) -> str:
         """从预设的沙盒池中循环安全地获取下一个可用的沙盒 ID，使用锁保护并发迭代。"""
-        with self._lock:  # [修改] 保护迭代器
+        with self._lock:
             try:
                 return next(self.sandbox_id_iterator)
             except StopIteration:
-                return "train_001"
+                logger.error("[ApiDriven] sandbox_ids_pool is empty! Cannot get a valid sandbox ID.")
+                raise RuntimeError(
+                    "sandbox_ids_pool is empty. Check task_labels_path or data/tasks/ directory."
+                )
     
     def _get_enhanced_context(self, app_name: str, anchor_api_names: List[str]) -> Tuple[str, str, str]:
         """将 JSON 格式的 API 知识库转化为大模型更容易阅读和理解的格式化纯文本。"""
@@ -802,15 +805,63 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         return None
 
     def _load_sandbox_task_ids(self, path: str) -> List[str]:
-        """从预处理的文件中导入系统中所有合格的沙盒环境标识 ID 列表。"""
-        if not os.path.exists(path):
-            return ["train_001"]
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            return [item["TaskID"] for item in data if "TaskID" in item]
-        except:
-            return ["train_001"]
+        """
+        从文件中加载沙盒 ID 列表，支持三种格式（自动检测）：
+          - 纯文本：每行一个 ID（如 82e2fac_1）
+          - JSONL：每行一个 JSON 对象，含 task_id / TaskID 字段
+          - JSON 数组：整体为 list of dict，含 task_id / TaskID 字段
+        文件不可用时，自动扫描 data/tasks/ 目录作为兜底。
+        """
+        ids = []
+        if os.path.exists(path):
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    content = f.read().strip()
+                lines = [l.strip() for l in content.splitlines() if l.strip()]
+
+                first = lines[0] if lines else ""
+                if first.startswith('[') or first.startswith('{'):
+                    # JSON 数组 or JSONL
+                    if first.startswith('['):
+                        data = json.loads(content)
+                    else:
+                        data = [json.loads(l) for l in lines]
+                    for item in data:
+                        tid = item.get("task_id") or item.get("TaskID")
+                        if tid:
+                            ids.append(str(tid))
+                else:
+                    # 纯文本：每行一个 ID
+                    ids = lines
+            except Exception as e:
+                logger.warning(f"[ApiDriven] Failed to load sandbox IDs from {path}: {e}")
+
+        if ids:
+            logger.info(f"[ApiDriven] Loaded {len(ids)} sandbox IDs from {path}.")
+            return ids
+
+        # Fallback：从 data/tasks/ 目录扫描真实存在的 sandbox ID
+        tasks_dir = os.path.normpath(os.path.join(
+            os.path.dirname(os.path.abspath(path)), "..", "tasks"
+        ))
+        if os.path.isdir(tasks_dir):
+            scanned = sorted([
+                d for d in os.listdir(tasks_dir)
+                if os.path.isdir(os.path.join(tasks_dir, d)) and not d.startswith(".")
+            ])
+            if scanned:
+                logger.warning(
+                    f"[ApiDriven] task_labels_path not usable ({path}). "
+                    f"Falling back to {len(scanned)} IDs scanned from {tasks_dir}."
+                )
+                return scanned
+
+        logger.error(
+            f"[ApiDriven] Cannot find any valid sandbox IDs. "
+            f"task_labels_path={path}, tasks_dir={tasks_dir}. "
+            "Please check your configuration."
+        )
+        return []
 
     def _check_api_called(self, trajectory: Trajectory, api_name: str) -> bool:
         """检查特定 API 是否被 Agent 召唤过，自适应对象和字典属性。"""
