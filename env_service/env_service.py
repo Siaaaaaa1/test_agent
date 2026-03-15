@@ -790,28 +790,24 @@ async def handle_release(request: ServiceRequest):
         tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
         raise HTTPException(status_code=500, detail=tb) from e
 
-# AppWorld 不支持多线程并发（全局文件/DB 状态），用锁保证同一时刻只有一个实例运行。
-# run_in_executor 使 asyncio 事件循环不被阻塞，锁只让线程池 worker 之间互相等待。
-import threading
-_appworld_lock = threading.Lock()
+# AppWorld 的 SQLite 连接是线程绑定的（check_same_thread=True）。
+# 使用 max_workers=1 的专用单线程 executor，保证所有 AppWorld 调用永远在同一个线程执行。
+# asyncio event loop 不被阻塞；多个并发请求在 executor 队列里串行等待。
+import concurrent.futures
+_appworld_executor = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="appworld_db_fetcher"
+)
 
 
 def _fetch_db_data_sync(sandbox_id: str, app_tables: dict) -> dict:
-    """在线程池中执行的同步版本，避免阻塞 asyncio 事件循环。"""
-    # 线程池 worker 默认无事件循环；AppWorld 内部可能调用 asyncio.get_event_loop()，
-    # 在 Python 3.10+ 会抛 RuntimeError。为线程预先设置新的事件循环以兼容。
-    try:
-        asyncio.get_event_loop()
-    except RuntimeError:
-        asyncio.set_event_loop(asyncio.new_event_loop())
-
+    """在专用单线程 executor 中执行，确保 SQLite 连接始终在同一线程使用。"""
     from appworld.environment import AppWorld
     import time as _time
 
     _t0 = _time.time()
     fetched_data = {}
 
-    with _appworld_lock, AppWorld(task_id=sandbox_id) as world:
+    with AppWorld(task_id=sandbox_id) as world:
         print(f"[EnvService/fetch_db_data] 沙盒已挂载: sandbox_id={sandbox_id} | elapsed={_time.time()-_t0:.2f}s", flush=True)
         for app_name, table_names in app_tables.items():
             table_names = table_names[:2]
@@ -878,7 +874,7 @@ async def handle_fetch_db_data(request: FetchDBRequest):
 
         loop = asyncio.get_running_loop()
         fetched_data = await loop.run_in_executor(
-            None, _fetch_db_data_sync, request.sandbox_id, dict(request.app_tables)
+            _appworld_executor, _fetch_db_data_sync, request.sandbox_id, dict(request.app_tables)
         )
 
         total_records = sum(len(rows) for app_data in fetched_data.values() for rows in app_data.values())
