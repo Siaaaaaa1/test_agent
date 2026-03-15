@@ -790,78 +790,86 @@ async def handle_release(request: ServiceRequest):
         tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
         raise HTTPException(status_code=500, detail=tb) from e
 
+def _fetch_db_data_sync(sandbox_id: str, app_tables: dict) -> dict:
+    """在线程池中执行的同步版本，避免阻塞 asyncio 事件循环。"""
+    from appworld.environment import AppWorld
+    import time as _time
+
+    _t0 = _time.time()
+    fetched_data = {}
+
+    with AppWorld(task_id=sandbox_id) as world:
+        print(f"[EnvService/fetch_db_data] 沙盒已挂载: sandbox_id={sandbox_id} | elapsed={_time.time()-_t0:.2f}s", flush=True)
+        for app_name, table_names in app_tables.items():
+            table_names = table_names[:2]
+
+            if not hasattr(world.models, app_name):
+                print(f"⚠️ [Data Fetch] 环境中不存在 App: {app_name}", flush=True)
+                continue
+
+            app_models = getattr(world.models, app_name)
+            app_data = {}
+
+            for table_name in table_names:
+                table_lower = table_name.lower()
+                singular_name = table_lower[:-1] if table_lower.endswith('s') else table_lower
+
+                matched_cls = None
+                for attr_name in dir(app_models):
+                    attr_lower = attr_name.lower()
+                    if attr_lower == table_lower or attr_lower == singular_name:
+                        matched_cls = getattr(app_models, attr_name)
+                        break
+
+                if matched_cls and hasattr(matched_cls, "all") and callable(matched_cls.all):
+                    try:
+                        records = matched_cls.all()
+                        if not records:
+                            continue
+
+                        parsed_records = []
+                        for r in records[:2]:
+                            record_dict = {}
+                            for k, v in r.__dict__.items():
+                                if k.startswith("_") or "password" in k.lower() or "token" in k.lower():
+                                    continue
+                                if isinstance(v, str) and len(v) > 60:
+                                    v = v[:57] + "..."
+                                record_dict[k] = v
+                            parsed_records.append(record_dict)
+
+                        app_data[table_name] = parsed_records
+                    except Exception as e:
+                        print(f"⚠️ [Data Fetch] 提取表数据失败 {app_name}.{table_name}: {e}", flush=True)
+
+            if app_data:
+                fetched_data[app_name] = app_data
+                print(f"[EnvService/fetch_db_data]   ✅ {app_name}: tables={list(app_data.keys())}, records={ {t: len(r) for t, r in app_data.items()} }", flush=True)
+            else:
+                print(f"[EnvService/fetch_db_data]   ⚠️ {app_name}: 未提取到任何表数据", flush=True)
+
+    return fetched_data
+
+
 @app.post("/fetch_db_data")
 async def handle_fetch_db_data(request: FetchDBRequest):
     """
     供主训练进程远程调用的接口：动态打捞沙盒底层的真实 SQLite 数据。
+    AppWorld 加载是同步阻塞操作，通过 run_in_executor 放到线程池执行，
+    避免阻塞 asyncio 事件循环导致并发请求排队超时。
     """
     try:
-        # 此时服务运行在 appworld conda 环境中，可以直接安全导入
-        from appworld.environment import AppWorld
-
         import time as _time
         _t0 = _time.time()
-        print(f"[EnvService/fetch_db_data] ← 收到请求: sandbox_id={request.sandbox_id} | app_tables={dict(request.app_tables)}")
+        print(f"[EnvService/fetch_db_data] ← 收到请求: sandbox_id={request.sandbox_id} | app_tables={dict(request.app_tables)}", flush=True)
 
-        fetched_data = {}
-
-        # 挂载指定的沙盒数据库快照
-        with AppWorld(task_id=request.sandbox_id) as world:
-            print(f"[EnvService/fetch_db_data] 沙盒已挂载: sandbox_id={request.sandbox_id} | elapsed={_time.time()-_t0:.2f}s")
-            for app_name, table_names in request.app_tables.items():
-                table_names = table_names[:2]
-
-                if not hasattr(world.models, app_name):
-                    print(f"⚠️ [Data Fetch] 环境中不存在 App: {app_name}")
-                    continue
-                
-                app_models = getattr(world.models, app_name)
-                app_data = {}
-                
-                for table_name in table_names:
-                    # 模糊匹配表名（处理单复数、大小写差异）
-                    table_lower = table_name.lower()
-                    singular_name = table_lower[:-1] if table_lower.endswith('s') else table_lower
-                    
-                    matched_cls = None
-                    for attr_name in dir(app_models):
-                        attr_lower = attr_name.lower()
-                        if attr_lower == table_lower or attr_lower == singular_name:
-                            matched_cls = getattr(app_models, attr_name)
-                            break
-                    
-                    if matched_cls and hasattr(matched_cls, "all") and callable(matched_cls.all):
-                        try:
-                            records = matched_cls.all()
-                            if not records:
-                                continue
-                            
-                            parsed_records = []
-                            # 限制最多取2条，防止大模型 Context 爆炸
-                            for r in records[:2]:  
-                                record_dict = {}
-                                for k, v in r.__dict__.items():
-                                    # 脱敏：过滤掉私密凭证或系统字段
-                                    if k.startswith("_") or "password" in k.lower() or "token" in k.lower():
-                                        continue
-                                    # 截断过长的文本
-                                    if isinstance(v, str) and len(v) > 60:
-                                        v = v[:57] + "..."
-                                    record_dict[k] = v
-                                parsed_records.append(record_dict)
-                                
-                            app_data[table_name] = parsed_records
-                        except Exception as e:
-                            print(f"⚠️ [Data Fetch] 提取表数据失败 {app_name}.{table_name}: {e}")
-                            
-                if app_data:
-                    fetched_data[app_name] = app_data
-                    print(f"[EnvService/fetch_db_data]   ✅ {app_name}: tables={list(app_data.keys())}, records={ {t: len(r) for t, r in app_data.items()} }")
-                else:
-                    print(f"[EnvService/fetch_db_data]   ⚠️ {app_name}: 未提取到任何表数据")
+        loop = asyncio.get_event_loop()
+        fetched_data = await loop.run_in_executor(
+            None, _fetch_db_data_sync, request.sandbox_id, dict(request.app_tables)
+        )
 
         total_records = sum(len(rows) for app_data in fetched_data.values() for rows in app_data.values())
-        print(f"[EnvService/fetch_db_data] → 返回: sandbox_id={request.sandbox_id} | apps={list(fetched_data.keys())} | total_records={total_records} | elapsed={_time.time()-_t0:.2f}s")
+        print(f"[EnvService/fetch_db_data] → 返回: sandbox_id={request.sandbox_id} | apps={list(fetched_data.keys())} | total_records={total_records} | elapsed={_time.time()-_t0:.2f}s", flush=True)
         return {"success": True, "data": fetched_data}
 
     except ImportError:
@@ -869,7 +877,7 @@ async def handle_fetch_db_data(request: FetchDBRequest):
     except Exception as e:
         import traceback
         tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
-        print(f"❌ [Data Fetch] 无法加载 AppWorld 沙盒 {request.sandbox_id}: {e}")
+        print(f"❌ [Data Fetch] 无法加载 AppWorld 沙盒 {request.sandbox_id}: {e}", flush=True)
         raise HTTPException(status_code=500, detail=tb) from e
 
 @app.get("/list_task_ids")
