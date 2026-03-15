@@ -475,7 +475,64 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
         if not fetched_data:
             logger.warning(f"[EnvProbe] ⚠️ 未获取到任何表数据，生成器将使用空 DB context。sandbox_id={sandbox_id} | app_tables={app_tables}")
 
-        return json.dumps(fetched_data, indent=2, ensure_ascii=False) if fetched_data else "{}"
+        return self._truncate_db_content(fetched_data) if fetched_data else "{}"
+
+    _DB_CONTENT_MAX_CHARS = 8000
+
+    def _truncate_db_content(self, fetched_data: dict, max_chars: int = _DB_CONTENT_MAX_CHARS) -> str:
+        """将 fetched_data 序列化为 JSON，若超过 max_chars 则逐表削减行数直至满足限制。
+
+        策略：先尝试完整序列化；若超限，则对每张表按比例保留前 N 行，并在截断的表中
+        追加 `"__truncated__": "shown X of Y rows"` 提示，保证输出始终是合法 JSON。
+        """
+        full_json = json.dumps(fetched_data, indent=2, ensure_ascii=False)
+        if len(full_json) <= max_chars:
+            return full_json
+
+        # 深拷贝后逐步削减
+        import copy as _copy
+        truncated = _copy.deepcopy(fetched_data)
+
+        # 收集所有 (app, table, rows) 引用，按行数降序处理
+        table_refs = []
+        for app_name, app_data in truncated.items():
+            if isinstance(app_data, dict):
+                for tbl, rows in app_data.items():
+                    if isinstance(rows, list):
+                        table_refs.append((app_name, tbl, rows))
+
+        # 每轮将最大的表削减一半，直到满足限制或每表只剩 1 行
+        for _ in range(20):  # 最多迭代 20 轮，防止死循环
+            candidate = json.dumps(truncated, indent=2, ensure_ascii=False)
+            if len(candidate) <= max_chars:
+                break
+            # 找当前行数最多的表
+            table_refs_live = []
+            for app_name, app_data in truncated.items():
+                if isinstance(app_data, dict):
+                    for tbl, rows in app_data.items():
+                        if isinstance(rows, list) and len(rows) > 1:
+                            table_refs_live.append((app_name, tbl, rows))
+            if not table_refs_live:
+                break
+            table_refs_live.sort(key=lambda x: len(x[2]), reverse=True)
+            app_name, tbl, rows = table_refs_live[0]
+            original_count = len(rows)
+            keep = max(1, original_count // 2)
+            truncated[app_name][tbl] = rows[:keep]
+            truncated[app_name][tbl].append({
+                "__truncated__": f"showing {keep} of {original_count} rows"
+            })
+
+        result = json.dumps(truncated, indent=2, ensure_ascii=False)
+        if len(result) > max_chars:
+            # 兜底：强制字符截断并关闭 JSON（极少发生）
+            result = result[:max_chars - 20] + '\n  "...truncated"\n}'
+            logger.warning(f"[EnvProbe] ⚠️ DB content 经行级截断后仍超限，已强制截断至 {max_chars} chars")
+
+        original_len = len(json.dumps(fetched_data, indent=2, ensure_ascii=False))
+        logger.info(f"[EnvProbe] ✂️ DB content 截断: {original_len} → {len(result)} chars (limit={max_chars})")
+        return result
 
     def generate_intra_task(self, app_name: str, task: Task = None) -> List[Task]:
         """同领域 (Intra-domain) 任务生成，经历评委筛选与生成器构建双阶段。"""
