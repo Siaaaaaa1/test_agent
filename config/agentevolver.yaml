@@ -220,6 +220,8 @@ task_manager:
     task_labels_path: "./env_service/environments/appworld/data/datasets/train.txt"
     api_knowledge_path: "./agentevolver/preprocess/output/appworld_tool_manual.json"
     hindsight_data_path: "./tasks_explored/hindsight_supplement.jsonl"
+    target_intra_count: 0
+    target_cross_count: 0
 
 exp_manager:
   # rollout mode on dev/test set: ["mixed", "all", "woexp"]
