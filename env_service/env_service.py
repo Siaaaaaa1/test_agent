@@ -790,6 +790,12 @@ async def handle_release(request: ServiceRequest):
         tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
         raise HTTPException(status_code=500, detail=tb) from e
 
+# AppWorld 不支持多线程并发（全局文件/DB 状态），用锁保证同一时刻只有一个实例运行。
+# run_in_executor 使 asyncio 事件循环不被阻塞，锁只让线程池 worker 之间互相等待。
+import threading
+_appworld_lock = threading.Lock()
+
+
 def _fetch_db_data_sync(sandbox_id: str, app_tables: dict) -> dict:
     """在线程池中执行的同步版本，避免阻塞 asyncio 事件循环。"""
     # 线程池 worker 默认无事件循环；AppWorld 内部可能调用 asyncio.get_event_loop()，
@@ -805,7 +811,7 @@ def _fetch_db_data_sync(sandbox_id: str, app_tables: dict) -> dict:
     _t0 = _time.time()
     fetched_data = {}
 
-    with AppWorld(task_id=sandbox_id) as world:
+    with _appworld_lock, AppWorld(task_id=sandbox_id) as world:
         print(f"[EnvService/fetch_db_data] 沙盒已挂载: sandbox_id={sandbox_id} | elapsed={_time.time()-_t0:.2f}s", flush=True)
         for app_name, table_names in app_tables.items():
             table_names = table_names[:2]

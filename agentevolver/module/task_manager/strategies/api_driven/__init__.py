@@ -462,7 +462,7 @@ class ApiDrivenExploreStrategy(TaskExploreStrategy):
             else:
                 logger.warning(
                     f"[EnvProbe] ⚠️ HTTP 请求失败: status={response.status_code} | "
-                    f"body={response.text[:200]} | sandbox_id={sandbox_id}"
+                    f"body={response.text[:1000]} | sandbox_id={sandbox_id}"
                 )
 
         except requests.exceptions.Timeout:
