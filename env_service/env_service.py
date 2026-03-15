@@ -792,6 +792,13 @@ async def handle_release(request: ServiceRequest):
 
 def _fetch_db_data_sync(sandbox_id: str, app_tables: dict) -> dict:
     """在线程池中执行的同步版本，避免阻塞 asyncio 事件循环。"""
+    # 线程池 worker 默认无事件循环；AppWorld 内部可能调用 asyncio.get_event_loop()，
+    # 在 Python 3.10+ 会抛 RuntimeError。为线程预先设置新的事件循环以兼容。
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
     from appworld.environment import AppWorld
     import time as _time
 
@@ -863,7 +870,7 @@ async def handle_fetch_db_data(request: FetchDBRequest):
         _t0 = _time.time()
         print(f"[EnvService/fetch_db_data] ← 收到请求: sandbox_id={request.sandbox_id} | app_tables={dict(request.app_tables)}", flush=True)
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         fetched_data = await loop.run_in_executor(
             None, _fetch_db_data_sync, request.sandbox_id, dict(request.app_tables)
         )
