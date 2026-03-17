@@ -761,7 +761,6 @@ def compute_advantage(
 
         process_mode = config.get("process_reward_mode", "dense")
         w_outcome = config.get("w_outcome", 1.0)
-        w_efficiency = 0.0
         w_api = config.get("w_api", 1.0)
         w_rep = config.get("w_rep", 1.0)
         w_fmt = config.get("w_fmt", 0.0)
@@ -807,15 +806,6 @@ def compute_advantage(
             component_name="Repetition Penalty"
         ) if "rep_reward_tensor" in data.batch else torch.zeros_like(adv_out)
 
-        adv_eff = compute_single_component_advantage(
-            data.batch.get("eff_reward_tensor", torch.zeros_like(data.batch["responses"])),
-            loss_mask, uid_index, norm_adv_by_std_in_grpo,
-            mode="sparse",
-            tokenizer=tokenizer,
-            input_ids=full_input_ids_tensor,
-            component_name="Efficiency Reward"
-        )
-
         adv_fmt = compute_single_component_advantage(
             data.batch.get("fmt_reward_tensor", torch.zeros_like(data.batch["responses"])),
             loss_mask, uid_index, norm_adv_by_std_in_grpo,
@@ -828,7 +818,7 @@ def compute_advantage(
         # ---------------------------------------------------------
         # 进行奖励叠加汇总 (融合门控系数)
         api_gate = 1.0
-        pre_norm_advantages = (w_outcome * adv_out) + (w_efficiency * adv_eff) + \
+        pre_norm_advantages = (w_outcome * adv_out) + \
                               (w_api * adv_api * api_gate) + (w_rep * adv_rep) + \
                               (w_fmt * adv_fmt)
 
@@ -886,7 +876,7 @@ def compute_advantage(
             valid_advs = torch.nan_to_num(valid_advs, nan=0.0, posinf=10.0, neginf=-10.0)
             # 限制最终 Advantage 绝对值，防止梯度爆炸
             # 多路奖励叠加（outcome+api+rep）极端情况下峰值可能超过 ±5，设为 ±10 避免信号被截断
-            clipped_cnt = ((valid_advs.abs() > 10.0) | (valid_advs.abs() > 10.0)).sum().item()
+            clipped_cnt = (valid_advs.abs() > 10.0).sum().item()
             valid_advs = torch.clamp(valid_advs, min=-10.0, max=10.0)
             if clipped_cnt > 0:
                 write_anomaly_log(
@@ -901,7 +891,7 @@ def compute_advantage(
         # # ---------------------------------------------------------
         # # BATCH归一化—————进行奖励叠加汇总 (融合门控系数)
         # api_gate = 1.0
-        # pre_norm_advantages = (w_outcome * adv_out) + (w_efficiency * adv_eff) + \
+        # pre_norm_advantages = (w_outcome * adv_out) + \
         #                       (w_api * adv_api * api_gate) + (w_rep * adv_rep)
 
         # # 🚀 [新增修复] Batch 级别 Advantage 全局归一化
@@ -937,7 +927,8 @@ def compute_advantage(
         data.batch["advantages"] = final_advantages
         data.batch["returns"] = outcome_tensor + \
                                 data.batch.get("api_reward_tensor", 0) + \
-                                data.batch.get("rep_reward_tensor", 0)
+                                data.batch.get("rep_reward_tensor", 0) + \
+                                data.batch.get("fmt_reward_tensor", 0)
 
         # -------------------------------------------------------
         # 异常检测：Batch 级别 outcome reward 全为 0
@@ -1993,6 +1984,9 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                     # 【核心交互区】：与环境 Rollout 以产生新的状态轨迹
                     with _timer("gen", timing_raw):
                         trajectories: List[Trajectory] = []
+                        tasks = []
+                        num_term_traj = 0
+                        num_not_none_traj = 0
                         if not self.async_rollout_mode:
                             main_log(f"Step {self.global_steps}: Generating sequences (Sync)...")
                             gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
@@ -2055,7 +2049,12 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
                     # 将生成的结果（Gen DataProto）再插拔回原始的 Batch 结构里
                     batch.non_tensor_batch["uid"] = np.array([str(uuid.uuid4()) for _ in range(len(batch.batch))], dtype=object)
                     batch.non_tensor_batch['original_extras']=batch_extras
-                    batch = union_gen_batch_via_task_id(tasks, batch, gen_batch_output)
+                    if self.async_rollout_mode:
+                        # async 模式：按 task_id 对齐轨迹与 batch
+                        batch = union_gen_batch_via_task_id(tasks, batch, gen_batch_output)
+                    else:
+                        # sync 模式：generate_sequences 输出已与 batch 对齐，直接 union
+                        batch = batch.union(gen_batch_output)
 
                     # 生成用于过滤不计算梯度的掩码（只更新 Response 部分，不更新 Prompt）
                     prompt_length = batch.batch['prompts'].shape[1]
@@ -2166,7 +2165,6 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
 
                     with _timer("adv", timing_raw):
                         main_log(f"Step {self.global_steps}: Computing Advantages...")
-                        reward_extra_infos_dict: dict[str, list]
                         if self.config.reward_model.launch_reward_fn_async:
                             reward_tensor, reward_extra_infos_dict = ray.get(future_reward)
                         batch.batch["token_level_scores"] = reward_tensor
@@ -2259,6 +2257,20 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
 
                             except Exception as e:
                                 print(f"[Warning] Hindsight logic encountered an error: {e}")
+
+                        # ==================== 开始 ADCA GRPO (如果开启) ====================
+                        # # 在api_driven模式下不要开启adca，因为adca是老代码中的，不要开启。
+                        # if getattr(attribution_cfg, 'enable', False):
+                        #     batch, adca_metrics = apply_adca_grpo(
+                        #         batch=batch,
+                        #         attribution_cfg=attribution_cfg,
+                        #         tokenizer=self.tokenizer,
+                        #         global_steps=self.global_steps,
+                        #         epoch=epoch,
+                        #         i=i,
+                        #         llm_client=self.llm_client,
+                        #     )
+                        #     metrics.update(adca_metrics)
 
                     # ==================== 开始模型更新 ====================
                     if self.use_critic:

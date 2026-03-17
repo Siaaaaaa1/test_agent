@@ -139,12 +139,12 @@ python3 -m agentevolver.main_ppo \
     task_manager.mixture.synthetic_data_ratio=2.0 \
     task_manager.mixture.use_original_tasks=False \
     task_manager.train_data_path=./tasks_explored/tasks_explored.train.json \
-    task_manager.val_data_path=.tasks_explored/tasks_explored.val.json \
+    task_manager.val_data_path=./tasks_explored/tasks_explored.val.json \
     task_manager.exploration_strategy_args.a=1 \
     task_manager.exploration_strategy_args.b=4 \
     task_manager.strategy=api_driven \
     task_manager.exploration_strategy_args.active_apps="['amazon','gmail','spotify','venmo','simple_note','todoist','splitwise','phone','file_system']" \
-    task_manager.exploration_strategy_args.task_labels_path="./environments/appworld/data/datasets/train.jsonl" \
+    task_manager.exploration_strategy_args.task_labels_path="./env_service/environments/appworld/data/datasets/train.txt" \
     task_manager.llm_client="qwen3.5-plus" \
     task_manager.grader.synthetic_grader=api_process_llm_judge \
     ray_init.num_cpus=64 \

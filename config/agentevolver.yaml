@@ -3,7 +3,6 @@
 #   adv_estimator: grpo
 #   use_kl_in_reward: false
 #   w_outcome: 1.0
-#   w_efficiency: 1.0
 #   w_api: 0.5        # 根据需要调整过程奖励的重要性
 #   w_rep: 1.0 # 保持为正数，因为内部数值已经是负数
 algorithm:
@@ -11,12 +10,11 @@ algorithm:
   use_kl_in_reward: false
   outcome_strategy: "normalize_then_decay" ## "strict_consistency"  # 全对全错即丢弃，"discount_first"      # 强制引入效率方差
   process_reward_mode: "dense" # 或 "sparse"
-  norm_adv_by_std_in_grpo: True
+  norm_adv_by_std_in_grpo: true
   gamma: 0.99
   w_outcome: 1.0       # 结果流权重 (主导)
   w_api: 0.5           # API流权重 (辅助，引导规范性)
   w_rep: 1.0          # 复读惩罚流权重 (轻微惩罚)
-  w_efficiency: 0.0    # 显式效率分权重 (如果用了 discount_first，这里通常设为 0，因为 gamma 已经隐式包含了效率)
   step_credit_alpha: 0.0  # 轨迹内步骤级信用重分配强度；0.0=禁用，退化为纯 sparse；建议范围 0.3~1.0
   w_fmt: 0.5               # 格式惩罚流权重（对应每步 ```python...``` 格式不合规的惩罚）
 

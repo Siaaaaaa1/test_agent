@@ -396,7 +396,7 @@ class HindsightManager:
             if not failed_indices:
                 continue
 
-            # 随机选一条失败轨迹
+            # 随机选一条失败轨迹（随机选择是设计意图，避免偏向特定失败模式）
             best_idx = random.choice(failed_indices)
 
             traj = self._reconstruct_trajectory(prompts[best_idx], responses[best_idx], task_ids[best_idx])

@@ -145,7 +145,7 @@ python3 -m agentevolver.main_ppo \
     task_manager.exploration_strategy_args.a=3 \
     task_manager.exploration_strategy_args.b=8 \
     task_manager.exploration_strategy_args.active_apps="['amazon','gmail','spotify','venmo','simple_note','todoist','splitwise','phone','file_system']" \
-    task_manager.exploration_strategy_args.task_labels_path="${PROJECT_ROOT}/environments/appworld/data/datasets/train.jsonl" \
+    task_manager.exploration_strategy_args.task_labels_path="${PROJECT_ROOT}/env_service/environments/appworld/data/datasets/train.txt" \
     task_manager.llm_client="qwen3-max" \
     task_manager.grader.synthetic_grader=api_process_llm_judge \
     task_manager.env_profile=${PROJECT_ROOT}/cookbook/env_profiles/appworld.json \
